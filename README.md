@@ -77,17 +77,19 @@ Purchase-Guardrail-Agent/
 
 ## Getting Started
 
-### Prerequisites
+### Tools and Services
 
-The following tools and services will be required for this project:
-
-- Python 3.9+
-- Docker and Docker Compose (for local development)
+- Python 3.12+
+- GitHub Actions
+- Docker
 - Apache Airflow (for data pipeline orchestration)
+- MLFlow
+- LLM Models - GPT , Llama, HuggingFace transformer
 - DVC (Data Version Control) for data versioning
-- PostgreSQL (for data storage)
-- Google Cloud Platform (GCP) account
-- GCP SDK (gcloud CLI)
+- PineCone for serverless DB and FaissDB or ChromeDB
+- Google Cloud Platform (GCP):
+      Buckets, Cloudrun, CloudSQL, Cloud Log Monitoring and Artifact Registry
+- LangFuse/Grafana for Monitoring and Dashboard
 
 ### Installation Instructions
 
@@ -95,7 +97,7 @@ Installation instructions and setup guides will be added as the project developm
 
 - Python dependencies (requirements.txt)
 - Environment configuration files
-- Docker setup for local development
+- Docker Image and compose files
 - GCP deployment configurations
 - Data pipeline setup with Airflow
 - Model development environment setup
@@ -206,12 +208,12 @@ Configuration files will be added as the project develops:
 | Data Versioning | DVC (Data Version Control) with GCP Cloud Storage backend |
 | Model Tracking | MLflow |
 | Model Registry | GCP Artifact Registry / Vertex AI Model Registry |
-| Machine Learning | Scikit-learn, XGBoost |
-| LLM Services | OpenAI GPT (for explanations) |
-| Database | PostgreSQL (Cloud SQL for production) |
-| Containerization | Docker |
+| Machine Learning | Scikit-learn, XGBoost, Pytorch |
+| LLM Services | OpenAI, Llama, Qwen (for explanations) |
+| Database | PineCone, FaissDB |
+| Containerization | Docker, MCP |
 | CI/CD | GitHub Actions with GCP Cloud Build integration |
-| Monitoring | GCP Cloud Monitoring, Prometheus, Grafana |
+| Monitoring | GCP Cloud Monitoring, Prometheus, Grafana, LangFuse |
 
 ## Planned Features
 

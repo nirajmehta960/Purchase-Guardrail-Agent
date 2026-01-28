@@ -83,13 +83,15 @@ Purchase-Guardrail-Agent/
 - GitHub Actions
 - Docker
 - Apache Airflow (for data pipeline orchestration)
-- MLFlow
-- LLM Models - GPT , Llama, HuggingFace transformer
+- MLflow
+- LLM Models - GPT 4.1, Claude 4.5, Gemini 3
 - DVC (Data Version Control) for data versioning
-- PineCone for serverless DB and FaissDB or ChromeDB
+- PostgreSQL with pgvector extension or Vertex AI Vector Search
 - Google Cloud Platform (GCP):
-      Buckets, Cloudrun, CloudSQL, Cloud Log Monitoring and Artifact Registry
-- LangFuse/Grafana for Monitoring and Dashboard
+      Cloud Run, Cloud Storage, BigQuery, Vertex AI, Cloud Build, Cloud Monitoring, Cloud Logging, GCP Billing & Quotas
+- Great Expectations for Data Quality Monitoring
+- Evidently AI for Model Drift Monitoring
+- Prometheus/Grafana for Latency & Throughput Monitoring
 
 ### Installation Instructions
 
@@ -186,7 +188,7 @@ The system will include monitoring for:
 Monitoring will use:
 - MLflow for experiment tracking
 - GCP Cloud Monitoring for production monitoring
-- Prometheus/Grafana for local development (optional)
+- Prometheus/Grafana for latency and throughput monitoring
 
 ## Configuration
 
@@ -201,19 +203,25 @@ Configuration files will be added as the project develops:
 
 | Category | Tools Used |
 |----------|-----------|
-| Cloud Platform | Google Cloud Platform (GCP) - Cloud Run, Cloud Storage, BigQuery, Vertex AI, Cloud Build |
+| Cloud Platform | Google Cloud Platform (GCP) - Cloud Run, Cloud Storage, BigQuery, Vertex AI, Cloud Build, Cloud Monitoring, Cloud Logging, GCP Billing & Quotas |
 | Backend Framework | FastAPI (Python) |
-| Frontend Interface | Streamlit |
+| Frontend Interface | Streamlit (Web Application) |
 | Data Orchestration | Apache Airflow |
 | Data Versioning | DVC (Data Version Control) with GCP Cloud Storage backend |
+| Decision Engine | Python (Deterministic rule-based financial logic) |
+| Machine Learning Models | Scikit-learn (Logistic Regression), XGBoost |
+| LLM Models | GPT 4.1, Claude 4.5, Gemini 3 |
+| Safety & Guardrails | Vertex AI Safety Filters, NVIDIA NeMo Guardrails |
+| Database (Relational) | PostgreSQL |
+| Database (Vector) | pgvector (extension for PostgreSQL) or Vertex AI Vector Search |
 | Model Tracking | MLflow |
-| Model Registry | GCP Artifact Registry / Vertex AI Model Registry |
-| Machine Learning | Scikit-learn, XGBoost, Pytorch |
-| LLM Services | OpenAI, Llama, Qwen (for explanations) |
-| Database | PineCone, FaissDB |
-| Containerization | Docker, MCP |
-| CI/CD | GitHub Actions with GCP Cloud Build integration |
-| Monitoring | GCP Cloud Monitoring, Prometheus, Grafana, LangFuse |
+| Model Registry | GCP Artifact Registry, Vertex AI Model Registry |
+| Data Quality Monitoring | Great Expectations (triggered via Airflow) |
+| Model Drift Monitoring | Evidently AI (Open Source), Vertex AI Model Monitoring |
+| Latency & Throughput Monitoring | Prometheus, Grafana, GCP Cloud Monitoring |
+| Logging & Containerization | Cloud Logging, Docker |
+| CI/CD | GitHub Actions |
+| Deployment | Cloud Run (Serverless Containers) |
 
 ## Planned Features
 

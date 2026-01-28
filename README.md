@@ -110,23 +110,19 @@ Installation instructions and setup guides will be added as the project developm
 
 PGA relies on two primary categories of data:
 
-1. **Financial Data**: User's financial health snapshot including:
-   - Monthly income
-   - Recurring expenses (rent, bills, subscriptions)
-   - Savings balance
-   - Debt obligations
+   1. For the scope of this project, data will be sourced as follows: 
+Financial Data: User financial data is sourced from the Personal Finance ML Dataset (Kaggle), which contains synthetic records of income, expenses, savings, and financial behavior. This dataset is used to simulate different financial situations and affordability scenarios.
 
-2. **Product Data**: Product information including:
-   - Product name, category, price
-   - Specifications
-   - Basic usage constraints
+   2. Product Data: Product data is sourced from the Amazon Products Dataset (Kaggle), which includes product names, categories, prices, and basic descriptions. This dataset is used to represent realistic product choices during purchase evaluation.
+
 
 ### Data Sources
 
-- **Financial Data**: Mock Plaid-style API & synthetic JSON files simulating bank account summaries
-- **Product Data**: Publicly available product listings or curated sample datasets
+- **Financial Data**: https://www.kaggle.com/datasets/miadul/personal-finance-ml-dataset
+- **Product Data**: https://www.kaggle.com/datasets/lokeshparab/amazon-products-dataset
 
-**Note**: All data used in this project is synthetic, mocked, or publicly available. No real user financial information is accessed.
+**Note**: All datasets are publicly available, read-only, and used strictly for academic experimentation and evaluation
+
 
 ### Data Privacy
 

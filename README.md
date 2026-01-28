@@ -77,17 +77,21 @@ Purchase-Guardrail-Agent/
 
 ## Getting Started
 
-### Prerequisites
+### Tools and Services
 
-The following tools and services will be required for this project:
-
-- Python 3.9+
-- Docker and Docker Compose (for local development)
+- Python 3.12+
+- GitHub Actions
+- Docker
 - Apache Airflow (for data pipeline orchestration)
+- MLflow
+- LLM Models - GPT 4.1, Claude 4.5, Gemini 3
 - DVC (Data Version Control) for data versioning
-- PostgreSQL (for data storage)
-- Google Cloud Platform (GCP) account
-- GCP SDK (gcloud CLI)
+- PostgreSQL with pgvector extension or Vertex AI Vector Search
+- Google Cloud Platform (GCP):
+      Cloud Run, Cloud Storage, BigQuery, Vertex AI, Cloud Build, Cloud Monitoring, Cloud Logging, GCP Billing & Quotas
+- Great Expectations for Data Quality Monitoring
+- Evidently AI for Model Drift Monitoring
+- Prometheus/Grafana for Latency & Throughput Monitoring
 
 ### Installation Instructions
 
@@ -95,7 +99,7 @@ Installation instructions and setup guides will be added as the project developm
 
 - Python dependencies (requirements.txt)
 - Environment configuration files
-- Docker setup for local development
+- Docker Image and compose files
 - GCP deployment configurations
 - Data pipeline setup with Airflow
 - Model development environment setup
@@ -106,23 +110,19 @@ Installation instructions and setup guides will be added as the project developm
 
 PGA relies on two primary categories of data:
 
-1. **Financial Data**: User's financial health snapshot including:
-   - Monthly income
-   - Recurring expenses (rent, bills, subscriptions)
-   - Savings balance
-   - Debt obligations
+   1. For the scope of this project, data will be sourced as follows: 
+Financial Data: User financial data is sourced from the Personal Finance ML Dataset (Kaggle), which contains synthetic records of income, expenses, savings, and financial behavior. This dataset is used to simulate different financial situations and affordability scenarios.
 
-2. **Product Data**: Product information including:
-   - Product name, category, price
-   - Specifications
-   - Basic usage constraints
+   2. Product Data: Product data is sourced from the Amazon Products Dataset (Kaggle), which includes product names, categories, prices, and basic descriptions. This dataset is used to represent realistic product choices during purchase evaluation.
+
 
 ### Data Sources
 
-- **Financial Data**: Mock Plaid-style API & synthetic JSON files simulating bank account summaries
-- **Product Data**: Publicly available product listings or curated sample datasets
+- **Financial Data**: https://www.kaggle.com/datasets/miadul/personal-finance-ml-dataset
+- **Product Data**: https://www.kaggle.com/datasets/lokeshparab/amazon-products-dataset
 
-**Note**: All data used in this project is synthetic, mocked, or publicly available. No real user financial information is accessed.
+**Note**: All datasets are publicly available, read-only, and used strictly for academic experimentation and evaluation
+
 
 ### Data Privacy
 
@@ -184,7 +184,7 @@ The system will include monitoring for:
 Monitoring will use:
 - MLflow for experiment tracking
 - GCP Cloud Monitoring for production monitoring
-- Prometheus/Grafana for local development (optional)
+- Prometheus/Grafana for latency and throughput monitoring
 
 ## Configuration
 
@@ -199,19 +199,25 @@ Configuration files will be added as the project develops:
 
 | Category | Tools Used |
 |----------|-----------|
-| Cloud Platform | Google Cloud Platform (GCP) - Cloud Run, Cloud Storage, BigQuery, Vertex AI, Cloud Build |
+| Cloud Platform | Google Cloud Platform (GCP) - Cloud Run, Cloud Storage, BigQuery, Vertex AI, Cloud Build, Cloud Monitoring, Cloud Logging, GCP Billing & Quotas |
 | Backend Framework | FastAPI (Python) |
-| Frontend Interface | Streamlit |
+| Frontend Interface | Streamlit (Web Application) |
 | Data Orchestration | Apache Airflow |
 | Data Versioning | DVC (Data Version Control) with GCP Cloud Storage backend |
+| Decision Engine | Python (Deterministic rule-based financial logic) |
+| Machine Learning Models | Scikit-learn (Logistic Regression), XGBoost |
+| LLM Models | GPT 4.1, Claude 4.5, Gemini 3 |
+| Safety & Guardrails | Vertex AI Safety Filters, NVIDIA NeMo Guardrails |
+| Database (Relational) | PostgreSQL |
+| Database (Vector) | pgvector (extension for PostgreSQL) or Vertex AI Vector Search |
 | Model Tracking | MLflow |
-| Model Registry | GCP Artifact Registry / Vertex AI Model Registry |
-| Machine Learning | Scikit-learn, XGBoost |
-| LLM Services | OpenAI GPT (for explanations) |
-| Database | PostgreSQL (Cloud SQL for production) |
-| Containerization | Docker |
-| CI/CD | GitHub Actions with GCP Cloud Build integration |
-| Monitoring | GCP Cloud Monitoring, Prometheus, Grafana |
+| Model Registry | GCP Artifact Registry, Vertex AI Model Registry |
+| Data Quality Monitoring | Great Expectations (triggered via Airflow) |
+| Model Drift Monitoring | Evidently AI (Open Source), Vertex AI Model Monitoring |
+| Latency & Throughput Monitoring | Prometheus, Grafana, GCP Cloud Monitoring |
+| Logging & Containerization | Cloud Logging, Docker |
+| CI/CD | GitHub Actions |
+| Deployment | Cloud Run (Serverless Containers) |
 
 ## Planned Features
 

@@ -1,10 +1,10 @@
-# Purchase Guardrail Agent (PGA)
+# SavVio
 
-An AI-driven financial advocacy tool designed to bridge the gap between e-commerce and personal finance. PGA serves as a "Financial Fiduciary" that evaluates whether a user should make a purchase based on their real-time financial health and the product's actual utility.
+An AI-driven financial advocacy tool designed to bridge the gap between e-commerce and personal finance. SavVio serves as a "Financial Fiduciary" that evaluates whether a user should make a purchase based on their real-time financial health and the product's actual utility.
 
 ## Project Overview
 
-The Purchase Guardrail Agent (PGA) is an MLOps project that will integrate real-time product data with sensitive financial streams to provide responsible, conversational shopping guidance. Unlike traditional shopping assistants that focus on maximizing conversion, PGA will evaluate purchases based on:
+The SavVio is an MLOps project that will integrate real-time product data with sensitive financial streams to provide responsible, conversational shopping guidance. Unlike traditional shopping assistants that focus on maximizing conversion, SavVio will evaluate purchases based on:
 
 - **Financial Health**: User's income, expenses, savings, and debt obligations
 - **Product Utility**: Analysis of product specifications and real-world usefulness
@@ -26,7 +26,7 @@ The system will provide **Green/Yellow/Red** light recommendations before users 
 ## Project Structure
 
 ```
-Purchase-Guardrail-Agent/
+SavVio/
 │
 ├── data-pipeline/              # Data ingestion and preprocessing pipeline
 │   ├── dags/                   # Airflow DAG definitions
@@ -108,7 +108,7 @@ Installation instructions and setup guides will be added as the project developm
 
 ### Dataset Overview
 
-PGA relies on two primary categories of data:
+SavVio relies on two primary categories of data:
 
    1. For the scope of this project, data will be sourced as follows: 
 Financial Data: User financial data is sourced from the Personal Finance ML Dataset (Kaggle), which contains synthetic records of income, expenses, savings, and financial behavior. This dataset is used to simulate different financial situations and affordability scenarios.

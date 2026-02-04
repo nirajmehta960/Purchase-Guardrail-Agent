@@ -4,15 +4,19 @@ This directory contains the data ingestion, preprocessing, validation, and versi
 
 ## Structure
 
-- `dags/` - Apache Airflow DAG definitions for orchestrating data pipeline tasks
-- `data/` - Data storage directories (versioned with DVC)
-  - `raw/` - Raw data from sources (APIs, files, etc.)
-  - `processed/` - Cleaned and transformed data
-  - `validated/` - Validated data ready for model training
-- `scripts/` - Data processing scripts (data acquisition, preprocessing, feature engineering)
-- `tests/` - Unit tests for data pipeline components
-- `logs/` - Pipeline execution logs
-- `config/` - Pipeline configuration files
+SavVio/
+   ├── data-pipeline/
+   │   ├── dags/              # Airflow DAG definitions
+   │   ├── data/
+   │   │   ├── raw/           # Raw financial & product data
+   │   │   ├── processed/     # Cleaned data
+   │   │   └── validated/     # Data ready for model use
+   │   ├── scripts/           # Data processing scripts
+   │   ├── tests/             # Unit tests
+   │   ├── logs/              # Pipeline execution logs
+   │   ├── config/            # Configuration files
+   │   ├── dvc.yaml           # DVC pipeline definition
+   │   └── README.md          # Pipeline documentation
 
 ## Key Components
 

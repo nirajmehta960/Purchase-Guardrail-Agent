@@ -1,0 +1,83 @@
+# Data Pipeline
+
+This directory contains the data ingestion, preprocessing, validation, and versioning pipeline for the Purchase Guardrail Agent.
+
+## Structure
+
+- `dags/` - Apache Airflow DAG definitions for orchestrating data pipeline tasks
+- `data/` - Data storage directories (versioned with DVC)
+  - `raw/` - Raw data from sources (APIs, files, etc.)
+  - `processed/` - Cleaned and transformed data
+  - `validated/` - Validated data ready for model training
+- `scripts/` - Data processing scripts (data acquisition, preprocessing, feature engineering)
+- `tests/` - Unit tests for data pipeline components
+- `logs/` - Pipeline execution logs
+- `config/` - Pipeline configuration files
+
+## Key Components
+
+### Data Acquisition
+- Fetch financial data from mock Plaid-style API
+- Load product data from static files or APIs
+- Handle data source failures gracefully
+
+### Data Preprocessing
+- Clean financial data (handle missing values, standardize categories)
+- Identify and categorize recurring expenses
+- Standardize product data formats
+- Convert all financial values to monthly format
+
+### Data Validation
+- Schema validation using Great Expectations or TFDV
+- Anomaly detection (missing values, outliers, invalid formats)
+- Data quality checks
+- Generate data statistics and schema documentation
+
+### Data Versioning
+- Track data versions using DVC with GCP Cloud Storage as remote backend
+- Maintain data lineage
+- Enable reproducibility
+- Store versioned data in GCP Cloud Storage buckets
+
+### Bias Detection
+- Data slicing across demographic groups
+- Performance analysis across slices
+- Bias mitigation strategies
+
+## Running the Pipeline
+
+### Local Development
+
+1. **Start Airflow services** (if using Docker Compose):
+   ```bash
+   docker-compose up airflow-webserver airflow-scheduler
+   ```
+
+2. **Access Airflow UI**: http://localhost:8080
+
+3. **Trigger DAGs** from the Airflow UI or via CLI:
+   ```bash
+   airflow dags trigger <dag_id>
+   ```
+
+### Production on GCP
+
+For production, Airflow can be deployed on GCP Composer (managed Airflow):
+- DAGs are automatically synced from Cloud Storage
+- Managed infrastructure with automatic scaling
+- Integrated with other GCP services (BigQuery, Cloud Storage, etc.)
+
+## Testing
+
+Run data pipeline tests:
+```bash
+pytest tests/
+```
+
+## Configuration
+
+Edit `config/pipeline_config.yaml` to configure:
+- Data sources
+- Preprocessing steps
+- Validation rules
+- Alert thresholds

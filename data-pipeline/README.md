@@ -260,13 +260,14 @@ Download data from external sources and load it into the pipeline system in a co
 
 1. **Create modular ingestion package structure**
    ```
-   scripts/
+      scripts/
    ├── ingest/
    │   ├── __init__.py
-   │   ├── financial.py      # Financial data ingestion
-   │   ├── product.py        # Product data ingestion
-   │   └── utils.py          # Shared utilities
-   └── run_ingestion.py      # Main entry point
+   │   ├── gcs_loader.py         # Handles ALL GCS bucket operations
+   │   ├── api_loader.py         # Handles ALL API endpoint operations  
+   │   ├── config.py             # Environment-based config
+   │   └── utils.py              # Shared: logging, validation
+   └── run_ingestion.py          # Reads env config, routes to GCS or API
    ```
 
 2. **Implement shared utilities** (`ingest/utils.py`)

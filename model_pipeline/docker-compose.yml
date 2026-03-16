@@ -146,7 +146,7 @@ services:
   # ML Trainer — Compute environment for model training
   # ============================================================
 
-  #TODO : export report
+  # TODO : export report
   ml-trainer:
     build:
       context: .
@@ -166,6 +166,12 @@ services:
       - ./pyproject.toml:/app/pyproject.toml
     environment:
       MLFLOW_TRACKING_URI: http://mlflow-server:${MLFLOW_PORT}
+    command:
+      - bash
+      - -c
+      - |
+        pip install -e /app/savviocore && pip install -e /app
+        cd /app/src && python run_pipeline.py
     ports:
       - "8888:8888"
     # ----------------------------------------------------------

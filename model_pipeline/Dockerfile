@@ -33,5 +33,5 @@ RUN pip install --upgrade pip && \
 # Copy pyproject.toml so pip recognizes this as a package
 COPY pyproject.toml .
 
-# Install savviocore and this package, then run the pipeline automatically
-CMD pip install -e /app/savviocore && pip install -e /app && cd /app/src && python run_pipeline.py
+# Default: open a shell (runtime command is defined in docker-compose.yml)
+CMD ["bash"]

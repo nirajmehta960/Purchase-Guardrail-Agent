@@ -17,6 +17,7 @@ import logging
 import joblib
 import pandas as pd
 import numpy as np
+from datetime import datetime
 
 import mlflow
 from sklearn.model_selection import train_test_split
@@ -31,6 +32,52 @@ from core_models.evaluate import evaluate_model
 from core_models.optuna_tuner import tune_best_candidate
 
 logger = logging.getLogger(__name__)
+
+
+def write_evaluation_summary_md(candidates, best, final_metrics, output_path):
+    """Write a simple markdown summary for 3 baseline models + champion."""
+    baseline_names = {"xgboost", "lightgbm", "xgb_linear"}
+    baseline_rows = [c for c in candidates if c.get("name") in baseline_names]
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    lines = [
+        "# Evaluation Summary",
+        "",
+        f"Generated at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
+        "",
+        "## Baseline Models (Validation Metrics)",
+        "",
+    ]
+
+    if not baseline_rows:
+        lines.append("No baseline model metrics found.")
+        lines.append("")
+    else:
+        for row in baseline_rows:
+            lines.append(f"### {row['name']}")
+            lines.append(f"- run_id: {row['run_id']}")
+            for metric_name, metric_value in row["metrics"].items():
+                lines.append(f"- {metric_name}: {metric_value}")
+            lines.append("")
+
+    lines.extend([
+        "## Champion Model (Final Test Metrics)",
+        "",
+    ])
+
+    if best is None or final_metrics is None:
+        lines.append("Champion metrics are unavailable (model not selected or final evaluation failed).")
+    else:
+        lines.append(f"- model_name: {best['name']}")
+        lines.append(f"- source_run_id: {best['run_id']}")
+        for metric_name, metric_value in final_metrics.items():
+            lines.append(f"- {metric_name}: {metric_value}")
+
+    with open(output_path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+    logger.info("Saved evaluation summary markdown: %s", output_path)
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +306,7 @@ def tune_candidate(candidates, data):
                 })
         except Exception as e:
             logger.error("Tuned model training failed: %s", e, exc_info=True)
-            
+
     return candidates
 
 # ---------------------------------------------------------------------------
@@ -344,29 +391,6 @@ def save_best_model_local(best, label_encoder):
     logger.info("Saved champion model locally at %s and encoder at %s", downloaded_model_path, Config.ENCODER_SAVE_DIR)
 
 # ---------------------------------------------------------------------------
-# LLM Wrapper Demo — placeholder until module is complete.
-# ---------------------------------------------------------------------------
-
-def run_llm_demo(best, X_test, sens_test):
-    """
-    Optional: demonstrate LLM wrapping on a sample prediction.
-    Called separately from training — this is a serving concern, not a training concern.
-    """
-    if not LLM_AVAILABLE or best is None:
-        return
-
-    try:
-        sample_pred = best["model"].predict(X_test[:1])[0]
-        sample_context = {}
-        if sens_test is not None:
-            sample_context = sens_test.iloc[0].to_dict()
-        apply_llm_guardrails(sample_pred, sample_context, 0.95)
-        logger.info("LLM demo completed.")
-    except Exception as e:
-        logger.warning("LLM demo failed (non-blocking): %s", e)
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -423,6 +447,10 @@ def main():
 
     # 6. Save best model and label encoder locally under artifacts and preprocessing.
     save_best_model_local(best, data["label_encoder"])
+
+    # 7. Save a simple markdown summary for 3 baseline models + champion final metrics.
+    report_path = os.path.join(Config.BASE_DIR, "reports", "evaluation_summary.md")
+    write_evaluation_summary_md(candidates, best, final_metrics, report_path)
 
     # Summary.
     if best:

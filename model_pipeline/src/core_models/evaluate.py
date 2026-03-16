@@ -182,7 +182,7 @@ def evaluate_model(model, X_test, y_test, label_names=None):
     if label_names is None:
         label_names = [str(i) for i in range(n_classes)]
 
-    # ── Aggregate metrics ────────────────────────────────────────────────
+    # -- Aggregate metrics --
 
     acc = accuracy_score(y_test, y_pred)
     f1 = f1_score(y_test, y_pred, average="weighted")
@@ -221,11 +221,11 @@ def evaluate_model(model, X_test, y_test, label_names=None):
         print(f"  - {k}: {v}")
     mlflow.log_metrics(metrics)
 
-    # ── Per-class metrics ────────────────────────────────────────────────
+    # -- Per-class metrics --
 
     _log_per_class_metrics(y_test, y_pred, label_names)
 
-    # ── Visualizations ───────────────────────────────────────────────────
+    # -- Visualizations --
     # All plots go to a temp directory, are logged to MLflow, then cleaned up.
 
     with tempfile.TemporaryDirectory() as tmp_dir:

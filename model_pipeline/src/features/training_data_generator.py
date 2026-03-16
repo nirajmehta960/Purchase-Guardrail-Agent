@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # Bracket definitions
 # ---------------------------------------------------------------------------
 
-INCOME_BINS: List[float] = [0, 3_000, 5_000, float("inf")]
+INCOME_BINS: List[float] = [0, 3_000, 7_000, float("inf")]
 INCOME_LABELS: List[str] = ["low", "mid", "high"]
 
 PRICE_BINS: List[float] = [100, 500, 1_500, float("inf")]
@@ -176,11 +176,11 @@ def _sample_graduated(
     rng: np.random.Generator,
 ) -> Tuple[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """
-    Graduated price-tier sampling: one product per tier per user.
+    Graduated price-tier sampling with Stratified User Selection.
 
-    Each user is assigned exactly one budget, one mid, and one premium
-    product.  The returned ``tier_products`` dict maps each price label
-    to a DataFrame aligned row-by-row with the users DataFrame.
+    Each user session is selected from a specific income bracket (Low, Mid, High)
+    to ensure equal representation, and then assigned exactly one product 
+    from each price tier (Budget, Mid, Premium).
 
     Args:
         financial_profiles: DataFrame with user financial profiles.
@@ -189,9 +189,39 @@ def _sample_graduated(
         rng: NumPy random generator for reproducibility.
 
     Returns:
-        (users_df, tier_products) where tier_products maps each
+        (users_df, tier_products) where tier_products maps each 
         PRICE_LABEL to a DataFrame of length n_users.
     """
+    # 1. Stratify Users by Income Bracket
+    income_bracket_series = pd.cut(
+        financial_profiles["monthly_income"],
+        bins=INCOME_BINS, labels=INCOME_LABELS, include_lowest=True,
+    )
+    
+    user_groups = {
+        label: financial_profiles[income_bracket_series == label]
+        for label in INCOME_LABELS
+    }
+    
+    # Identify non-empty income bins.
+    valid_income_labels = [l for l in INCOME_LABELS if len(user_groups[l]) > 0]
+    if not valid_income_labels:
+        raise ValueError("No users found in any income bracket — check INCOME_BINS.")
+
+    # Distribute users evenly across brackets.
+    base, remainder = divmod(n_users, len(valid_income_labels))
+    
+    user_chunks: List[pd.DataFrame] = []
+    for i, label in enumerate(valid_income_labels):
+        count = base + (1 if i < remainder else 0)
+        seed = int(rng.integers(0, 2**31))
+        # Sample users for this bracket.
+        chunk = user_groups[label].sample(n=count, replace=True, random_state=seed)
+        user_chunks.append(chunk)
+
+    users = pd.concat(user_chunks, ignore_index=True)
+
+    # 2. Assign tiered products for each user.
     price_bracket = pd.cut(
         products["price"],
         bins=PRICE_BINS,
@@ -210,14 +240,11 @@ def _sample_graduated(
         idx = rng.integers(0, len(tier_pool), size=n_users)
         tier_products[label] = tier_pool.iloc[idx].reset_index(drop=True)
 
-    user_idx = rng.integers(0, len(financial_profiles), size=n_users)
-    users = financial_profiles.iloc[user_idx].reset_index(drop=True)
-
     logger.info(
-        "Graduated sampling: %d users × %d tiers, tier pool sizes: %s",
+        "Stratified-Graduated sampling: %d users total (%s balanced), %d tiers per session.",
         n_users,
+        ", ".join(valid_income_labels),
         len(PRICE_LABELS),
-        {l: len(products[price_bracket == l]) for l in PRICE_LABELS},
     )
     return users, tier_products
 

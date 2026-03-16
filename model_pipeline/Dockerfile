@@ -33,5 +33,5 @@ RUN pip install --upgrade pip && \
 # Copy pyproject.toml so pip recognizes this as a package
 COPY pyproject.toml .
 
-# Install savviocore as a dependency, then install this package in editable mode
-CMD pip install -e /app/savviocore && pip install -e /app && tail -f /dev/null
+# Install savviocore and this package, then run the pipeline automatically
+CMD pip install -e /app/savviocore && pip install -e /app && cd /app/src && python run_pipeline.py

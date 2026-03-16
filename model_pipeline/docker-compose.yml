@@ -82,6 +82,7 @@ services:
       S3_BUCKET: ${S3_BUCKET}
     restart: "no"
 
+  # TODO: stop when finished for prod
   mlflow:
     image: ghcr.io/mlflow/mlflow:${MLFLOW_VERSION}
     container_name: mlflow-server
@@ -144,6 +145,8 @@ services:
   # ============================================================
   # ML Trainer — Compute environment for model training
   # ============================================================
+
+  #TODO : export report
   ml-trainer:
     build:
       context: .
@@ -152,8 +155,9 @@ services:
     depends_on:
       mlflow:
         condition: service_healthy
-    tty: true
-    stdin_open: true
+    # tty: true
+    # stdin_open: true
+    restart: "no"
     volumes:
       - ./src:/app/src
       - ./models:/app/models

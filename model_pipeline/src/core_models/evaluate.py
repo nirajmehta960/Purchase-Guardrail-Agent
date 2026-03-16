@@ -46,7 +46,7 @@ from sklearn.preprocessing import label_binarize
 
 logger = logging.getLogger(__name__)
 
-
+# TODO - Add fairness matrix
 # ---------------------------------------------------------------------------
 # Visualization helpers
 # ---------------------------------------------------------------------------

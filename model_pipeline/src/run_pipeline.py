@@ -46,18 +46,6 @@ except ImportError:
 # Temporarily force-disable bias checks until bias module contract is finalized.
 BIAS_AVAILABLE = False
 
-
-# ---------------------------------------------------------------------------
-# LLM wrapper — placeholder until module is complete.
-# ---------------------------------------------------------------------------
-try:
-    from llm.prompt_engin import apply_llm_guardrails
-    LLM_AVAILABLE = True
-except ImportError:
-    logger.warning("LLM wrapper module not available — skipping LLM demo.")
-    LLM_AVAILABLE = False
-
-
 # ---------------------------------------------------------------------------
 # 1. Initialization
 # ---------------------------------------------------------------------------
@@ -435,11 +423,6 @@ def main():
 
     # 6. Save best model and label encoder locally under artifacts and preprocessing.
     save_best_model_local(best, data["label_encoder"])
-
-    # Optional: LLM wrapper demo (serving concern, not training).
-    print("[Optional] Running LLM wrapper demo...")
-    run_llm_demo(best, data["X_test"], data["sens_test"])
-    print("[Optional] LLM wrapper demo complete.")
 
     # Summary.
     if best:

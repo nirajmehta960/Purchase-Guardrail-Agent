@@ -109,7 +109,7 @@ class Config:
     # ---------------------------------------------------------------------------
     # Model Registry
     # ---------------------------------------------------------------------------
-    REGISTERED_MODEL_NAME = "SavVio_Purchase_Guardrail"
+    REGISTERED_MODEL_NAME = "SavVio_Predictor"
 
     # ---------------------------------------------------------------------------
     # Validation Gates

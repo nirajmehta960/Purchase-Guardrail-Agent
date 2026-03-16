@@ -22,6 +22,7 @@ import mlflow
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from mlflow.models.signature import infer_signature
+from mlflow.tracking import MlflowClient
 
 from config import Config
 # from features.feature_engineering import build_feature_matrix
@@ -156,7 +157,6 @@ def train_candidates(X_train, y_train, X_val, y_val, sens_val, label_encoder):
         {"name": "xgboost",     "params": {"max_depth": 3, "learning_rate": 0.1, "n_estimators": 100}},
         {"name": "lightgbm",    "params": {"max_depth": 3, "learning_rate": 0.1, "n_estimators": 100}},
         {"name": "xgb_linear",  "params": {"learning_rate": 0.1, "n_estimators": 100}},
-        {"name": "logistic_regression", "params": {"max_iter": 1000, "solver": "lbfgs"}},
     ]
 
     candidates = []
@@ -330,22 +330,30 @@ def final_evaluation(best, X_test, y_test, label_encoder):
 
         logger.info("Final test metrics: %s", metrics)
 
-        # ── Model registration placeholder ──
-        model_uri = f"runs:/{best['run_id']}/model"
-        mlflow.register_model(model_uri, Config.REGISTERED_MODEL_NAME)
+        # Register best run model, then tag it as champion via alias.
+        best_model_uri = f"runs:/{best['run_id']}/model"
+        registered_model_version = mlflow.register_model(best_model_uri, Config.REGISTERED_MODEL_NAME)
+        mlflow_client = MlflowClient(tracking_uri=Config.MLFLOW_TRACKING_URI)
+        mlflow_client.set_registered_model_alias(
+            name=Config.REGISTERED_MODEL_NAME,
+            alias="champion",
+            version=registered_model_version.version,
+        )
 
     return metrics
 
 
 def save_best_model_local(best, label_encoder):
-    """Persist best model under artifacts and label encoder under preprocessing."""
+    """Download champion model from MLflow to local artifacts and save label encoder."""
     if not best: return
-    joblib.dump(best["model"], os.path.join(Config.MODEL_SAVE_DIR, "best_model.joblib"))
-    joblib.dump(label_encoder, os.path.join(Config.ENCODER_SAVE_DIR, "label_encoder.joblib"))
-    metadata_path = os.path.join(Config.MODEL_SAVE_DIR, "best_model_metadata.txt")
-    with open(metadata_path, "w") as f: f.write(f"name={best['name']}\nrun_id={best['run_id']}\nval_f1={best['metrics']['f1_score']:.6f}\n")
-    logger.info("Saved best model and encoder locally.")
 
+    champion_model_uri = f"models:/{Config.REGISTERED_MODEL_NAME}@champion"
+    downloaded_model_path = mlflow.artifacts.download_artifacts(
+        artifact_uri=champion_model_uri,
+        dst_path=Config.MODEL_SAVE_DIR,
+    )
+    joblib.dump(label_encoder, f"{Config.ENCODER_SAVE_DIR}/label_encoder.pkl")
+    logger.info("Saved champion model locally at %s and encoder at %s", downloaded_model_path, Config.ENCODER_SAVE_DIR)
 
 # ---------------------------------------------------------------------------
 # LLM Wrapper Demo — placeholder until module is complete.

@@ -26,6 +26,7 @@ import logging
 from typing import Any, Dict, Optional, Tuple
 
 import optuna
+import mlflow
 from optuna.integration import MLflowCallback
 from sklearn.metrics import f1_score
 from xgboost import XGBClassifier
@@ -195,6 +196,7 @@ def tune_model(
         tracking_uri=Config.MLFLOW_TRACKING_URI,
         metric_name="val_f1_weighted",
         create_experiment=False,
+        nested=True,
     )
 
     study = optuna.create_study(
@@ -209,13 +211,14 @@ def tune_model(
         model_type, n_trials, timeout,
     )
 
-    study.optimize(
-        objective,
-        n_trials=n_trials,
-        timeout=timeout,
-        callbacks=[mlflow_cb],
-        show_progress_bar=True,
-    )
+    with mlflow.start_run(run_name=f"{model_type}_tuning"):
+        study.optimize(
+            objective,
+            n_trials=n_trials,
+            timeout=timeout,
+            callbacks=[mlflow_cb],
+            show_progress_bar=True,
+        )
 
     logger.info(
         "Optuna study complete for %s — best F1: %.4f in trial %d",

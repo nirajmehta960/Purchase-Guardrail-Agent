@@ -2,13 +2,12 @@
 Model Training Module.
 
 Trains a model of the specified type using provided hyperparameters.
-Supports: xgboost, lightgbm, xgb_linear, logistic_regression.
+Supports: xgboost, lightgbm, xgb_linear.
 
 Changes from v1:
     - Parameter filtering per model type (invalid params are dropped with a warning).
     - eval_set + early stopping support (pass X_val/y_val to prevent overfitting).
     - Verbose suppression for LightGBM and XGBoost.
-    - Logistic Regression support for sanity-check baseline.
     - Random state sourced from Config instead of hardcoded.
 """
 
@@ -22,7 +21,6 @@ import pandas as pd
 from typing import Any, Dict, Optional, Set
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
-from sklearn.linear_model import LogisticRegression
 
 from config import Config
 
@@ -46,9 +44,6 @@ VALID_PARAMS: Dict[str, Set[str]] = {
         "max_depth", "learning_rate", "n_estimators", "num_leaves",
         "subsample", "colsample_bytree", "reg_alpha", "reg_lambda",
         "min_child_samples",
-    },
-    "logistic_regression": {
-        "max_iter", "solver", "multi_class", "C", "penalty",
     },
 }
 
@@ -81,7 +76,7 @@ def train_model(
     Train a model of the specified type.
 
     Args:
-        model_type:   One of 'xgboost', 'lightgbm', 'xgb_linear', 'logistic_regression'.
+        model_type:   One of 'xgboost', 'lightgbm', 'xgb_linear'.
         X_train:      Training features.
         y_train:      Training labels.
         params:       Hyperparameters (invalid ones are filtered automatically).
@@ -143,14 +138,6 @@ def train_model(
             ]
         model.fit(X_train, y_train, **fit_kwargs)
 
-    elif model_type == "logistic_regression":
-        model = LogisticRegression(
-            **filtered,
-            random_state=random_state,
-        )
-        # No eval_set or early stopping — LogReg converges in one shot.
-        model.fit(X_train, y_train)
-
     else:
         raise ValueError(f"Unsupported model_type: {model_type}")
 
@@ -168,8 +155,6 @@ def log_model_to_mlflow(model, model_type: str, signature):
             mlflow.xgboost.log_model(model, "model", signature=signature)
         elif model_type == "lightgbm":
             mlflow.lightgbm.log_model(model, "model", signature=signature)
-        elif model_type == "logistic_regression":
-            mlflow.sklearn.log_model(model, "model", signature=signature)
         else:
             mlflow.sklearn.log_model(model, "model", signature=signature)
         logger.info("Model logged to MLflow: %s", model_type)

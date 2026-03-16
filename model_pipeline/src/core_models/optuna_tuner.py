@@ -4,7 +4,7 @@ Hyperparameter Tuning with Optuna.
 Bayesian optimization for XGBoost, LightGBM, and XGB-Linear using
 Optuna's TPE sampler with MedianPruner for early trial termination.
 
-Each trial is logged as an MLflow child run via Optuna's native callback.
+Each trial is logged as an MLflow nested child run.
 The best hyperparameters are returned for final model training.
 
 Integration with run_pipeline.py:
@@ -27,7 +27,6 @@ from typing import Any, Dict, Optional, Tuple
 
 import optuna
 import mlflow
-from optuna.integration import MLflowCallback
 from sklearn.metrics import f1_score
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
@@ -159,7 +158,7 @@ def tune_model(
 
     Creates a study with TPE sampler (Bayesian) and MedianPruner
     (kills trials performing below the median of completed trials).
-    Each trial is logged to MLflow via the native callback.
+    Each trial is logged to MLflow as a nested run under a tuning parent run.
 
     Args:
         model_type: One of 'xgboost', 'lightgbm', 'xgb_linear'.
@@ -188,16 +187,18 @@ def tune_model(
     objective_fn = _OBJECTIVES[model_type]
 
     # Wrap the objective so Optuna can call it with just (trial).
+    # We explicitly create nested MLflow runs here (parent run around the
+    # study, child run per trial) instead of relying on callback internals.
     def objective(trial):
-        return objective_fn(trial, X_train, y_train, X_val, y_val)
-
-    # MLflow callback — logs every trial as a nested run automatically.
-    mlflow_cb = MLflowCallback(
-        tracking_uri=Config.MLFLOW_TRACKING_URI,
-        metric_name="val_f1_weighted",
-        create_experiment=False,
-        nested=True,
-    )
+        with mlflow.start_run(
+            run_name=f"{model_type}_trial_{trial.number:03d}", nested=True,
+        ):
+            mlflow.log_param("model_type", model_type)
+            score = objective_fn(trial, X_train, y_train, X_val, y_val)
+            mlflow.log_params(trial.params)
+            mlflow.log_metric("val_f1_weighted", score)
+            mlflow.set_tag("optuna_trial_number", trial.number)
+            return score
 
     study = optuna.create_study(
         study_name=f"{model_type}_tuning",
@@ -216,9 +217,14 @@ def tune_model(
             objective,
             n_trials=n_trials,
             timeout=timeout,
-            callbacks=[mlflow_cb],
             show_progress_bar=True,
         )
+
+        mlflow.log_param("study_name", study.study_name)
+        mlflow.log_param("n_trials_requested", n_trials)
+        mlflow.log_param("timeout_seconds", timeout)
+        mlflow.log_metric("best_val_f1_weighted", study.best_value)
+        mlflow.log_params({f"best_{k}": v for k, v in study.best_params.items()})
 
     logger.info(
         "Optuna study complete for %s — best F1: %.4f in trial %d",
@@ -238,7 +244,7 @@ def tune_best_candidate(
     Identify the best baseline candidate that supports tuning,
     then optimize its hyperparameters.
 
-    Skips candidates that don't support tuning (e.g., logistic_regression).
+    Skips candidates that don't support tuning.
 
     Args:
         candidates: List of candidate dicts from train_candidates()

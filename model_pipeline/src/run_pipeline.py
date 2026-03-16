@@ -157,7 +157,6 @@ def train_candidates(X_train, y_train, X_val, y_val, sens_val, label_encoder):
         {"name": "xgboost",     "params": {"max_depth": 3, "learning_rate": 0.1, "n_estimators": 100}},
         {"name": "lightgbm",    "params": {"max_depth": 3, "learning_rate": 0.1, "n_estimators": 100}},
         {"name": "xgb_linear",  "params": {"learning_rate": 0.1, "n_estimators": 100}},
-        {"name": "logistic_regression", "params": {"max_iter": 1000, "solver": "lbfgs"}},
     ]
 
     candidates = []

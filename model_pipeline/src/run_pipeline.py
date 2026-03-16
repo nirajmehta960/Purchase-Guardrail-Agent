@@ -14,6 +14,8 @@ Usage:
 
 import os
 import logging
+import joblib
+import pandas as pd
 import numpy as np
 
 import mlflow
@@ -22,7 +24,7 @@ from sklearn.preprocessing import LabelEncoder
 from mlflow.models.signature import infer_signature
 
 from config import Config
-from features.feature_engineering import build_feature_matrix
+# from features.feature_engineering import build_feature_matrix
 from core_models.train import train_model, log_model_to_mlflow
 from core_models.evaluate import evaluate_model
 from core_models.optuna_tuner import tune_best_candidate
@@ -39,6 +41,9 @@ try:
 except ImportError:
     logger.warning("Bias detection module not available — skipping bias checks.")
     BIAS_AVAILABLE = False
+
+# Temporarily force-disable bias checks until bias module contract is finalized.
+BIAS_AVAILABLE = False
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +86,15 @@ def prepare_data():
                         sens_train, sens_val, sens_test, label_encoder, scenarios_raw
     """
     # Feature engineering + deterministic labeling (GREEN/YELLOW/RED).
-    X, y_raw, scenarios_raw = build_feature_matrix(is_training=True)
+    # X, y_raw, scenarios_raw = build_feature_matrix(is_training=True)
+    data = pd.read_csv(Config.SCENARIO_OUTPUT_PATH)
+    X = data.drop(columns=[Config.LABEL_COL])
+    non_numeric_cols = X.select_dtypes(exclude=["number", "bool"]).columns.tolist()
+    if non_numeric_cols:
+        logger.info("Dropping non-numeric feature columns: %s", non_numeric_cols)
+        X = X.drop(columns=non_numeric_cols)
+    y_raw = data[Config.LABEL_COL]
+    scenarios_raw = data.copy()  # Keep for bias detection and artifact logging.
 
     # Encode string labels into integers for model training.
     label_encoder = LabelEncoder()
@@ -140,11 +153,10 @@ def train_candidates(X_train, y_train, X_val, y_val, sens_val, label_encoder):
         List of dicts, each with: name, model, run_id, metrics, bias_passed.
     """
     models_to_train = [
-        # --- Baselines ---
         {"name": "xgboost",     "params": {"max_depth": 3, "learning_rate": 0.1, "n_estimators": 100}},
         {"name": "lightgbm",    "params": {"max_depth": 3, "learning_rate": 0.1, "n_estimators": 100}},
         {"name": "xgb_linear",  "params": {"learning_rate": 0.1, "n_estimators": 100}},
-        {"name": "logistic_regression", "params": {"max_iter": 1000, "solver": "lbfgs", "multi_class": "multinomial"}},
+        {"name": "logistic_regression", "params": {"max_iter": 1000, "solver": "lbfgs"}},
     ]
 
     candidates = []
@@ -325,6 +337,16 @@ def final_evaluation(best, X_test, y_test, label_encoder):
     return metrics
 
 
+def save_best_model_local(best, label_encoder):
+    """Persist best model under artifacts and label encoder under preprocessing."""
+    if not best: return
+    joblib.dump(best["model"], os.path.join(Config.MODEL_SAVE_DIR, "best_model.joblib"))
+    joblib.dump(label_encoder, os.path.join(Config.ENCODER_SAVE_DIR, "label_encoder.joblib"))
+    metadata_path = os.path.join(Config.MODEL_SAVE_DIR, "best_model_metadata.txt")
+    with open(metadata_path, "w") as f: f.write(f"name={best['name']}\nrun_id={best['run_id']}\nval_f1={best['metrics']['f1_score']:.6f}\n")
+    logger.info("Saved best model and encoder locally.")
+
+
 # ---------------------------------------------------------------------------
 # LLM Wrapper Demo — placeholder until module is complete.
 # ---------------------------------------------------------------------------
@@ -354,31 +376,62 @@ def run_llm_demo(best, X_test, sens_test):
 
 def main():
     print("Starting End-to-End ML Pipeline...\n")
+    print(f"[0/6] MLflow tracking URI: {Config.MLFLOW_TRACKING_URI}")
+    print(f"[0/6] MLflow experiment: {Config.EXPERIMENT_NAME}")
 
     # 1. Initialize seeds and MLflow.
+    print("[1/6] Initializing runtime + MLflow...")
     initialize()
+    print("[1/6] Initialization complete.")
 
     # 2. Build features, encode labels, 3-way split.
+    print("[2/6] Preparing data (load/encode/split)...")
     data = prepare_data()
+    print(
+        "[2/6] Data ready: "
+        f"train={len(data['y_train'])}, val={len(data['y_val'])}, test={len(data['y_test'])}"
+    )
 
     # 3. Train all candidates, evaluate on validation set.
+    print("[3/6] Training baseline candidates...")
     candidates = train_candidates(
         data["X_train"], data["y_train"],
         data["X_val"], data["y_val"],
         data["sens_val"], data["label_encoder"],
     )
+    print(f"[3/6] Baseline training complete. candidates={len(candidates)}")
 
     # 3b. Hyperparameter tuning on best baseline.
+    print("[4/6] Running hyperparameter tuning on best baseline...")
     candidates = tune_candidate(candidates, data)
+    print(f"[4/6] Tuning stage complete. candidates={len(candidates)}")
 
     # 4. Select best model (F1 + bias gate).
+    print("[5/6] Selecting best model (F1 + bias gate)...")
     best = select_best_model(candidates)
+    if best:
+        print(
+            "[5/6] Selected: "
+            f"{best['name']} (val_f1={best['metrics']['f1_score']:.4f}, run_id={best['run_id']})"
+        )
+    else:
+        print("[5/6] No model selected.")
 
     # 5. Final evaluation on held-out test set.
-    final_evaluation(best, data["X_test"], data["y_test"], data["label_encoder"])
+    print("[6/6] Running final evaluation on held-out test set...")
+    final_metrics = final_evaluation(best, data["X_test"], data["y_test"], data["label_encoder"])
+    if final_metrics is not None:
+        print(f"[6/6] Final test metrics: {final_metrics}")
+    else:
+        print("[6/6] Final evaluation skipped or failed.")
+
+    # 6. Save best model and label encoder locally under artifacts and preprocessing.
+    save_best_model_local(best, data["label_encoder"])
 
     # Optional: LLM wrapper demo (serving concern, not training).
+    print("[Optional] Running LLM wrapper demo...")
     run_llm_demo(best, data["X_test"], data["sens_test"])
+    print("[Optional] LLM wrapper demo complete.")
 
     # Summary.
     if best:

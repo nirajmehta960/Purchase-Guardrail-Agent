@@ -15,7 +15,8 @@ class Config:
     # Paths
     # ---------------------------------------------------------------------------
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    MODEL_SAVE_DIR = os.path.join(BASE_DIR, "models")
+    MODEL_SAVE_DIR = os.path.join(BASE_DIR, "models", "artifacts")
+    ENCODER_SAVE_DIR = os.path.join(BASE_DIR, "models", "preprocessing")
     SCENARIO_OUTPUT_PATH = os.path.join(BASE_DIR, "data", "training_scenarios.csv")
 
     # ---------------------------------------------------------------------------

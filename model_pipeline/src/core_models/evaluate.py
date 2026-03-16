@@ -40,8 +40,8 @@ from sklearn.metrics import (
     ConfusionMatrixDisplay,
     RocCurveDisplay,
     PrecisionRecallDisplay,
-    CalibrationDisplay,
 )
+from sklearn.calibration import CalibrationDisplay
 from sklearn.preprocessing import label_binarize
 
 logger = logging.getLogger(__name__)

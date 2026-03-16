@@ -164,6 +164,7 @@ services:
       - ./data:/app/data
       - ../savviocore:/app/savviocore
       - ./pyproject.toml:/app/pyproject.toml
+      - ./reports:/app/reports
     environment:
       MLFLOW_TRACKING_URI: http://mlflow-server:${MLFLOW_PORT}
     command:

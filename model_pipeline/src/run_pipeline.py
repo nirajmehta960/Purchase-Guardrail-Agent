@@ -43,7 +43,7 @@ def write_evaluation_summary_md(candidates, best, final_metrics, output_path):
     lines = [
         "# Evaluation Summary",
         "",
-        f"Generated at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
+        f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "",
         "## Baseline Models (Validation Metrics)",
         "",

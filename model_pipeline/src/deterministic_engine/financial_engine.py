@@ -159,7 +159,7 @@ class DecisionEngine:
     def _evaluate_yellow_rules(self, affordability, pir, rus, spr, nwi, credit, dti, stir, efm, meb) -> Optional[DecisionResult]:
         """
         Evaluate YELLOW rules: Genuine concern — user should pause and think.
-        YELLOW triggers when >= 2 rules trigger.
+        YELLOW now triggers when >= 1 rule triggers.
         """
         yellow_triggers = []
         explanations = []
@@ -189,8 +189,8 @@ class DecisionEngine:
             yellow_triggers.append("yellow:weak_profile")
             explanations.append("Weak overall financial profile for a significant purchase.")
 
-        # YELLOW triggers when 2+ rules trigger.
-        if len(yellow_triggers) >= 2:
+        # YELLOW triggers when at least one rule triggers.
+        if len(yellow_triggers) >= 1:
             combined_explanation = " ".join(explanations)
             return DecisionResult("YELLOW", yellow_triggers, [],
                 explanation=combined_explanation)

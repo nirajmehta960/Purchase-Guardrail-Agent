@@ -216,7 +216,7 @@ class TestGenerateScenarios:
             # 6 financial features (no product review features).
             "affordability_score", "price_to_income_ratio", "residual_utility_score",
             "savings_to_price_ratio", "net_worth_indicator", "credit_risk_indicator",
-            "financial_label",
+            "final_recommendation",
         ]
         for col in required:
             assert col in scenarios.columns, f"Missing column: {col}"
@@ -233,14 +233,14 @@ class TestGenerateScenarios:
         scenarios = generate_scenarios(
             _make_financial_df(), _make_products_df(), n_scenarios=200
         )
-        assert set(scenarios["financial_label"].unique()).issubset({"GREEN", "YELLOW", "RED"})
+        assert set(scenarios["final_recommendation"].unique()).issubset({"GREEN", "YELLOW", "RED"})
 
     def test_not_all_one_label(self):
         """With varied synthetic data we should get at least 2 label classes."""
         scenarios = generate_scenarios(
             _make_financial_df(100), _make_products_df(50), n_scenarios=500
         )
-        assert scenarios["financial_label"].nunique() >= 2
+        assert scenarios["final_recommendation"].nunique() >= 2
 
     def test_reproducibility(self):
         """Same seed produces identical output."""
@@ -347,7 +347,7 @@ class TestGenerateScenarios:
         scenarios = _compute_graduated_scenarios(poor_user, tier_products)
 
         budget_label = scenarios.loc[
-            scenarios["price_tier"] == "budget", "financial_label"
+            scenarios["price_tier"] == "budget", "final_recommendation"
         ].values[0]
         assert budget_label == "RED", (
             f"Poor user should get RED on budget tier, got {budget_label}"
@@ -398,17 +398,16 @@ class TestGenerateScenarios:
             fin, prod, n_scenarios=3, graduated=True,
         )
         budget_label = scenarios.loc[
-            scenarios["price_tier"] == "budget", "financial_label"
+            scenarios["price_tier"] == "budget", "final_recommendation"
         ].values[0]
         assert budget_label == "GREEN", (
             f"$150 purchase with $3000 income should be GREEN, got {budget_label}"
         )
-        # The premium tier should trigger RED/YELLOW after cumulative spend.
         last_row = scenarios.iloc[-1]
         if last_row["price_tier"] == "premium":
-            assert last_row["financial_label"] in ("YELLOW", "RED"), (
+            assert last_row["final_recommendation"] in ("YELLOW", "RED"), (
                 f"Expensive purchase after cumulative spend "
-                f"should not be GREEN: got {last_row['financial_label']}"
+                f"should not be GREEN: got {last_row['final_recommendation']}"
             )
 
     def test_legacy_stratified_mode(self):

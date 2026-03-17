@@ -62,6 +62,8 @@ data_pipeline/dags/data/quarantine/*
 # Model artifacts (tracked with DVC or model registry)
 model_pipeline/models/*
 !model_pipeline/models/.gitkeep
+model_pipeline/data/*
+!model_pipeline/data/.gitkeep
 model_pipeline/experiments/*
 !model_pipeline/experiments/.gitkeep
 

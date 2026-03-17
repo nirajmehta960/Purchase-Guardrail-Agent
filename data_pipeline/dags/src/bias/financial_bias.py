@@ -19,7 +19,6 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-
 BOOL_TRUE = {"1", "true", "yes", "y", "t"}
 BOOL_FALSE = {"0", "false", "no", "n", "f"}
 
@@ -39,7 +38,7 @@ class FlagItem:
 
 
 # ---------------------------------------------------------------------------
-# Low-level helpers
+# Low-level helpers (used only in this module)
 # ---------------------------------------------------------------------------
 
 def _missing_mask(series: pd.Series) -> pd.Series:
@@ -75,9 +74,15 @@ def _normalize_column_name(name: str) -> str:
 def _first_existing(df: pd.DataFrame, candidates: Sequence[str]) -> Optional[str]:
     lookup = {_normalize_column_name(c): c for c in df.columns}
     for cand in candidates:
-        if cand in lookup:
-            return lookup[cand]
+        key = _normalize_column_name(cand)
+        if key in lookup:
+            return lookup[key]
     return None
+
+
+def _log_slice_stats(stats: List[SliceStat], indent: str = "  ") -> None:
+    for row in stats:
+        logger.info(f"{indent}- {row.label}: {row.count} ({row.pct}%)")
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +153,16 @@ def _band_monthly_expenses(values: pd.Series) -> pd.Series:
 
 
 def _band_savings(values: pd.Series) -> pd.Series:
+    return pd.cut(
+        values,
+        [-math.inf, 500, 3000, 15000, math.inf],
+        labels=["Near-zero", "Low", "Moderate", "High"],
+        right=False,
+    ).astype(str)
+
+
+def _band_liquid_savings(values: pd.Series) -> pd.Series:
+    """Liquid savings (feature): same banding as savings; low/near-zero is vulnerable."""
     return pd.cut(
         values,
         [-math.inf, 500, 3000, 15000, math.inf],
@@ -245,8 +260,10 @@ def _resolve_banding(column: str, values: pd.Series) -> Tuple[pd.Series, Optiona
         return _band_monthly_expenses(values), None
     if name in {"savings_usd", "savings_balance"}:
         return _band_savings(values), "Near-zero"
+    if name == "liquid_savings":
+        return _band_liquid_savings(values), "Near-zero"
     if name in {"monthly_emi_usd", "monthly_emi"}:
-        return _band_emi(values), None
+        return _band_emi(values), "High"
     if name in {"loan_amount_usd", "loan_amount"}:
         return _band_loan_amount(values), None
     if name == "loan_term_months":
@@ -273,11 +290,6 @@ def _resolve_banding(column: str, values: pd.Series) -> Tuple[pd.Series, Optiona
 # ---------------------------------------------------------------------------
 # Column profilers (one per inferred type)
 # ---------------------------------------------------------------------------
-
-def _log_slice_stats(stats: List[SliceStat], indent: str = "  ") -> None:
-    for row in stats:
-        logger.info(f"{indent}- {row.label}: {row.count} ({row.pct}%)")
-
 
 def _profile_id(column: str, series: pd.Series, total_rows: int) -> List[FlagItem]:
     missing = int(_missing_mask(series).sum())
@@ -497,6 +509,44 @@ def _apply_missingness_bias_checks(df: pd.DataFrame) -> List[FlagItem]:
 
 
 # ---------------------------------------------------------------------------
+# Cross-column: EMI exceeds monthly income (debt burden bias)
+# ---------------------------------------------------------------------------
+
+def _apply_emi_exceeds_income_check(df: pd.DataFrame) -> List[FlagItem]:
+    """
+    Flag when EMI (monthly loan payment) is greater than monthly income.
+    That indicates unsustainable debt burden and is a bias/vulnerability to detect.
+    """
+    flags: List[FlagItem] = []
+    income_col = _first_existing(df, ["monthly_income", "monthly_income_usd"])
+    emi_col = _first_existing(df, ["monthly_emi", "monthly_emi_usd"])
+    if income_col is None or emi_col is None:
+        return flags
+    income = _as_numeric(df[income_col])
+    emi = _as_numeric(df[emi_col])
+    # Only consider rows with positive income and non-missing EMI
+    valid = income.notna() & emi.notna() & (income > 0)
+    emi_exceeds_income = valid & (emi > income)
+    n = int(emi_exceeds_income.sum())
+    total_valid = int(valid.sum())
+    if total_valid == 0:
+        return flags
+    pct = _pct(n, total_valid)
+    logger.info(f"\nCross-column check: EMI vs income")
+    logger.info("-" * 40)
+    logger.info(f"  Rows with EMI > monthly_income: {n} ({pct}% of rows with valid income and EMI)")
+    if n > 0:
+        flags.append(
+            FlagItem(
+                "monthly_emi vs monthly_income",
+                "EMI exceeds income",
+                f"Debt burden bias: {n} rows ({pct}%) have EMI greater than monthly income — unsustainable; review data or treat as vulnerable slice.",
+            )
+        )
+    return flags
+
+
+# ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
 
@@ -577,6 +627,7 @@ def run_financial_bias(processed_path: str, featured_path: Optional[str] = None)
         all_flags.extend(_profile_categorical(column, series, total_rows))
 
     all_flags.extend(_apply_missingness_bias_checks(df))
+    all_flags.extend(_apply_emi_exceeds_income_check(df))
 
     logger.info(f"\nFlagged Representation Risks")
     logger.info("-" * 40)

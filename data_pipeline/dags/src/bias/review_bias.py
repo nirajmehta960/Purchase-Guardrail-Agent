@@ -20,7 +20,6 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-
 BOOL_TRUE = {"1", "true", "yes", "y", "t"}
 BOOL_FALSE = {"0", "false", "no", "n", "f"}
 MISSING_STRINGS = {"", "na", "n/a", "nan", "null", "none", "missing"}
@@ -39,10 +38,6 @@ class FlagItem:
     group: str
     reason: str
 
-
-# ---------------------------------------------------------------------------
-# Low-level helpers
-# ---------------------------------------------------------------------------
 
 def _norm(name: str) -> str:
     return name.strip().lower()
@@ -74,8 +69,8 @@ def _log_slice_stats(stats: List[SliceStat], indent: str = "  ") -> None:
 def _first_existing(df: pd.DataFrame, candidates: Sequence[str]) -> Optional[str]:
     lookup = {_norm(c): c for c in df.columns}
     for cand in candidates:
-        if cand in lookup:
-            return lookup[cand]
+        if _norm(cand) in lookup:
+            return lookup[_norm(cand)]
     return None
 
 

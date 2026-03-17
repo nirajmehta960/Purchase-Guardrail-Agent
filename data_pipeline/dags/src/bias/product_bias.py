@@ -22,11 +22,9 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-
 BOOL_TRUE = {"1", "true", "yes", "y", "t"}
 BOOL_FALSE = {"0", "false", "no", "n", "f"}
 MISSING_STRINGS = {"", "na", "n/a", "nan", "null", "none", "missing"}
-
 COMMON_DETAIL_KEYS = ["Brand", "Model", "Capacity", "Date First Available"]
 
 
@@ -43,10 +41,6 @@ class FlagItem:
     group: str
     reason: str
 
-
-# ---------------------------------------------------------------------------
-# Low-level helpers
-# ---------------------------------------------------------------------------
 
 def _norm(text: str) -> str:
     return text.strip().lower()
@@ -74,8 +68,8 @@ def _safe_json_parse(value: Any) -> Any:
 def _first_existing(df: pd.DataFrame, names: Sequence[str]) -> Optional[str]:
     lookup = {_norm(c): c for c in df.columns}
     for name in names:
-        if name in lookup:
-            return lookup[name]
+        if _norm(name) in lookup:
+            return lookup[_norm(name)]
     return None
 
 

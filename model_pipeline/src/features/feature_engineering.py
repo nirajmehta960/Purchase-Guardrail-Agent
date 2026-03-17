@@ -21,7 +21,7 @@ import pandas as pd
 from config import Config
 from features.training_data_generator import generate_scenarios
 from features.affordability import add_affordability_features
-from model_pipeline.src.features.feature_preprocessing import FeaturePipeline
+from features.feature_preprocessing import FeaturePipeline
 from deterministic_engine.labeling_pipeline import apply_deterministic_labels
 from data.db_loader import load_financial_profiles, load_products, load_reviews
 

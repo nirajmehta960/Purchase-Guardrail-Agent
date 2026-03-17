@@ -15,7 +15,6 @@ Usage:
 import os
 import logging
 import joblib
-import pandas as pd
 import numpy as np
 from datetime import datetime
 
@@ -26,7 +25,7 @@ from mlflow.models.signature import infer_signature
 from mlflow.tracking import MlflowClient
 
 from config import Config
-# from features.feature_engineering import build_feature_matrix
+from features.feature_engineering import build_training_data
 from core_models.train import train_model, log_model_to_mlflow
 from core_models.evaluate import evaluate_model
 from core_models.optuna_tuner import tune_best_candidate
@@ -122,15 +121,7 @@ def prepare_data():
                         sens_train, sens_val, sens_test, label_encoder, scenarios_raw
     """
     # Feature engineering + deterministic labeling (GREEN/YELLOW/RED).
-    # X, y_raw, scenarios_raw = build_feature_matrix(is_training=True)
-    data = pd.read_csv(Config.SCENARIO_OUTPUT_PATH)
-    X = data.drop(columns=[Config.LABEL_COL])
-    non_numeric_cols = X.select_dtypes(exclude=["number", "bool"]).columns.tolist()
-    if non_numeric_cols:
-        logger.info("Dropping non-numeric feature columns: %s", non_numeric_cols)
-        X = X.drop(columns=non_numeric_cols)
-    y_raw = data[Config.LABEL_COL]
-    scenarios_raw = data.copy()  # Keep for bias detection and artifact logging.
+    X, y_raw, scenarios_raw = build_training_data(is_training=True)
 
     # Encode string labels into integers for model training.
     label_encoder = LabelEncoder()
@@ -236,13 +227,6 @@ def train_candidates(X_train, y_train, X_val, y_val, sens_val, label_encoder):
                 # Log model artifact.
                 signature = infer_signature(X_train, model.predict(X_train))
                 log_model_to_mlflow(model, model_type, signature)
-
-                # Log preprocessing artifacts.
-                encoder_path = os.path.join(Config.MODEL_SAVE_DIR, "categorical_encoder.pkl")
-                scaler_path = os.path.join(Config.MODEL_SAVE_DIR, "feature_scaler.pkl")
-                for path in (encoder_path, scaler_path):
-                    if os.path.exists(path):
-                        mlflow.log_artifact(path, "preprocessing")
 
                 # Log scenario artifact for reproducibility.
                 if os.path.exists(Config.SCENARIO_OUTPUT_PATH):

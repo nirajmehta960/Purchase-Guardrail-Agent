@@ -27,9 +27,10 @@ Usage (single pair — Decision API / Deterministic Engine):
 """
 
 import logging
-import math
 from dataclasses import dataclass
 from typing import Optional
+
+from features.affordability import compute_affordability_values
 
 logger = logging.getLogger(__name__)
 
@@ -88,60 +89,26 @@ def compute_affordability(
     Returns:
         AffordabilityResult with 6 financial features.
     """
-    income = user_financial_profile.get("monthly_income", 0.0)
-    discretionary = user_financial_profile.get("discretionary_income", 0.0)
-    savings = user_financial_profile.get("liquid_savings", 0.0)
-    expenses = user_financial_profile.get("monthly_expenses", 0.0)
-    emi = user_financial_profile.get("monthly_emi", 0.0)
-    loan_amount = user_financial_profile.get("loan_amount", 0.0)
-    credit_score = user_financial_profile.get("credit_score", 0)
-
-    # DI absorbs prior purchases first; savings cover any shortfall.
-    di_used = min(max(discretionary, 0.0), cumulative_spend)
-    savings_used = cumulative_spend - di_used
-    discretionary = discretionary - di_used
-    savings = max(savings - savings_used, 0.0)
-
-    total_obligations = expenses + emi
-
-    # ── Financial features ───────────────────────────────────────────────
-
-    # Remaining discretionary budget after subtracting the product price.
-    affordability_score = round(discretionary - product_price, 2)
-
-    # What fraction of monthly income does this product cost?
-    price_to_income = round(product_price / income, 4) if income > 0 else None
-
-    # How many months of financial runway remain if the user buys this
-    # from savings? (savings − price) / total monthly obligations.
-    residual_utility = None
-    if total_obligations > 0:
-        residual_utility = round((savings - product_price) / total_obligations, 4)
-
-    # How many times over can savings cover the product price?
-    savings_to_price = round(savings / product_price, 4) if product_price > 0 else None
-
-    # Normalized net worth: (savings − outstanding_loan) / monthly_income.
-    # Negative means the user is underwater on their loan.
-    net_worth = round((savings - loan_amount) / income, 4) if income > 0 else None
-
-    # Credit score normalized to the 0–1 range: (score − 300 + 1) / 550.
-    # The +1 ensures a brand-new credit holder (score=300) gets a small
-    # positive CRI (~0.002) rather than exactly 0.
-    credit_risk = round((credit_score - 299) / 550, 4) if credit_score else None
+    values = compute_affordability_values(
+        user_financial_profile=user_financial_profile,
+        product_price=product_price,
+        cumulative_spend=cumulative_spend,
+    )
 
     result = AffordabilityResult(
-        affordability_score=affordability_score,
-        price_to_income_ratio=price_to_income,
-        residual_utility_score=residual_utility,
-        savings_to_price_ratio=savings_to_price,
-        net_worth_indicator=net_worth,
-        credit_risk_indicator=credit_risk,
+        affordability_score=values["affordability_score"],
+        price_to_income_ratio=values["price_to_income_ratio"],
+        residual_utility_score=values["residual_utility_score"],
+        savings_to_price_ratio=values["savings_to_price_ratio"],
+        net_worth_indicator=values["net_worth_indicator"],
+        credit_risk_indicator=values["credit_risk_indicator"],
     )
 
     logger.info(
         "Affordability computed — price: %.2f, score: %.2f, RUS: %s",
-        product_price, affordability_score, residual_utility,
+        product_price,
+        result.affordability_score,
+        result.residual_utility_score,
     )
 
     return result

@@ -26,7 +26,7 @@ import argparse
 import logging
 import os
 import sys
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -35,7 +35,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import Config
-from data.db_loader import load_financial_profiles, load_products, load_reviews
+from data.db_loader import load_financial_profiles, load_products
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +224,7 @@ def main():
     parser.add_argument(
         "--output",
         type=str,
-        default=os.path.join(Config.BASE_DIR, "data", "training_scenarios.csv"),
+        default=Config.SCENARIO_OUTPUT_PATH,
         help="Output CSV path for raw sampled scenarios.",
     )
     args = parser.parse_args()
@@ -236,7 +236,6 @@ def main():
     print("\n[1/2] Loading data from PostgreSQL...")
     fin_df = load_financial_profiles()
     prod_df = load_products()
-    reviews_df = load_reviews()
     print(f"      Financial profiles: {len(fin_df):,}")
     print(f"      Products:           {len(prod_df):,}")
 

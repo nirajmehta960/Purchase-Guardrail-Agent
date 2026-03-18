@@ -82,6 +82,7 @@ services:
       S3_BUCKET: ${S3_BUCKET}
     restart: "no"
 
+  # TODO: stop when finished for prod
   mlflow:
     image: ghcr.io/mlflow/mlflow:${MLFLOW_VERSION}
     container_name: mlflow-server
@@ -95,6 +96,8 @@ services:
     environment:
       # Backend store URI built from vars
       MLFLOW_BACKEND_STORE_URI: ${MLFLOW_BACKEND_STORE_URI}
+      # new security layer needs allowed hosts to be specified
+      MLFLOW_SERVER_ALLOWED_HOSTS: ${MLFLOW_SERVER_ALLOWED_HOSTS}
 
       # ----------------------------------------------------
       # Option 1: Local S3/RustFS settings (Current)
@@ -142,21 +145,39 @@ services:
   # ============================================================
   # ML Trainer — Compute environment for model training
   # ============================================================
+
+  # TODO : export report
   ml-trainer:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: savvio-ml-trainer
-    tty: true
-    stdin_open: true
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    # tty: true
+    # stdin_open: true
+    restart: "no"
     volumes:
       - ./src:/app/src
-      - ./model:/app/model
-      - ../data_pipeline/dags/data:/app/data
+      - ./models:/app/models
+      - ./data:/app/data
       - ../savviocore:/app/savviocore
       - ./pyproject.toml:/app/pyproject.toml
+      - ./reports:/app/reports
     environment:
       MLFLOW_TRACKING_URI: http://mlflow-server:${MLFLOW_PORT}
+      DB_USER: ${DB_USER:?DB_USER is required}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      DB_HOST: ${DB_HOST:?DB_HOST is required}
+      DB_PORT: ${DB_PORT:?DB_PORT is required}
+      DB_NAME: ${DB_NAME:?DB_NAME is required}
+    command:
+      - bash
+      - -c
+      - |
+        pip install -e /app/savviocore && pip install -e /app
+        cd /app/src && python run_pipeline.py
     ports:
       - "8888:8888"
     # ----------------------------------------------------------

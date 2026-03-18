@@ -62,6 +62,8 @@ class ProductStats:
     negative_price_removed: int = 0
     low_price_removed: int = 0
     prices_imputed: int = 0
+    price_imputed_title: int = 0
+    price_imputed_category: int = 0
     price_fallback_count: int = 0
     final_row_count: int = 0
 
@@ -193,6 +195,7 @@ def preprocess_product_data(input_path: str, output_path: str) -> pd.DataFrame:
 
     # For imputation statistics (built from valid, non-missing prices only).
     group_price_values: Dict[str, List[float]] = {}
+    category_price_values: Dict[str, List[float]] = {}
     all_valid_prices: List[float] = []
 
     LOGGER.info("Loading JSONL stream from: %s", input_path)
@@ -222,11 +225,15 @@ def preprocess_product_data(input_path: str, output_path: str) -> pd.DataFrame:
                 cleaned = _process_stage1_batch(batch_records, seen_parent_asins, stats)
                 if not cleaned.empty:
                     cleaned["title_group_key"] = cleaned["title"].apply(_title_group_key)
+                    cleaned["category_key"] = cleaned["categories"].apply(_normalize_categories)
                     priced = cleaned[cleaned["price"].notna()]
-                    for _, row in priced[["title_group_key", "price"]].iterrows():
+                    for _, row in priced[["title_group_key", "category_key", "price"]].iterrows():
                         group_key = str(row["title_group_key"])
+                        cat_key = str(row["category_key"])
                         price = float(row["price"])
                         group_price_values.setdefault(group_key, []).append(price)
+                        if cat_key:
+                            category_price_values.setdefault(cat_key, []).append(price)
                         all_valid_prices.append(price)
 
                     for item in cleaned.to_dict(orient="records"):
@@ -240,11 +247,15 @@ def preprocess_product_data(input_path: str, output_path: str) -> pd.DataFrame:
             cleaned = _process_stage1_batch(batch_records, seen_parent_asins, stats)
             if not cleaned.empty:
                 cleaned["title_group_key"] = cleaned["title"].apply(_title_group_key)
+                cleaned["category_key"] = cleaned["categories"].apply(_normalize_categories)
                 priced = cleaned[cleaned["price"].notna()]
-                for _, row in priced[["title_group_key", "price"]].iterrows():
+                for _, row in priced[["title_group_key", "category_key", "price"]].iterrows():
                     group_key = str(row["title_group_key"])
+                    cat_key = str(row["category_key"])
                     price = float(row["price"])
                     group_price_values.setdefault(group_key, []).append(price)
+                    if cat_key:
+                        category_price_values.setdefault(cat_key, []).append(price)
                     all_valid_prices.append(price)
 
                 for item in cleaned.to_dict(orient="records"):
@@ -259,18 +270,19 @@ def preprocess_product_data(input_path: str, output_path: str) -> pd.DataFrame:
     group_medians: Dict[str, float] = {}
     for key, prices in group_price_values.items():
         arr = np.asarray(prices, dtype=float)
-        # Required dataset-driven statistics.
-        _ = float(np.quantile(arr, 0.25))
-        group_median = float(np.median(arr))
-        _ = float(np.quantile(arr, 0.75))
-        group_medians[key] = group_median
+        group_medians[key] = float(np.median(arr))
+
+    category_medians: Dict[str, float] = {}
+    for key, prices in category_price_values.items():
+        arr = np.asarray(prices, dtype=float)
+        category_medians[key] = float(np.median(arr))
 
     LOGGER.info(
         "Dropped non-required fields (main_category, store, images, videos) for cleaner analytics/embeddings."
     )
     LOGGER.info(
-        "Built local price stats for %d title groups using dataset median/p25/p75.",
-        len(group_medians),
+        "Built price stats for %d title groups and %d categories (global median: $%.2f).",
+        len(group_medians), len(category_medians), global_median,
     )
 
     # Pass 2: impute missing prices and write final output.
@@ -281,8 +293,13 @@ def preprocess_product_data(input_path: str, output_path: str) -> pd.DataFrame:
             price_val = record.get("price")
             if price_val is None or (isinstance(price_val, float) and np.isnan(price_val)):
                 group_key = _title_group_key(record.get("title", ""))
+                cat_key = _normalize_categories(record.get("categories"))
                 if group_key in group_medians:
                     record["price"] = float(group_medians[group_key])
+                    stats.price_imputed_title += 1
+                elif cat_key and cat_key in category_medians:
+                    record["price"] = float(category_medians[cat_key])
+                    stats.price_imputed_category += 1
                 else:
                     record["price"] = float(global_median)
                     stats.price_fallback_count += 1
@@ -338,7 +355,9 @@ def preprocess_product_data(input_path: str, output_path: str) -> pd.DataFrame:
     LOGGER.info("Rows removed (price < 0): %d", stats.negative_price_removed)
     LOGGER.info("Rows removed (price == 0): %d", stats.low_price_removed)
     LOGGER.info("Prices imputed (missing -> estimated): %d", stats.prices_imputed)
-    LOGGER.info("Price imputation fallback to global median: %d", stats.price_fallback_count)
+    LOGGER.info("  ├─ via title-group median: %d", stats.price_imputed_title)
+    LOGGER.info("  ├─ via category median: %d", stats.price_imputed_category)
+    LOGGER.info("  └─ via global median (fallback): %d", stats.price_fallback_count)
     LOGGER.info("Final row count: %d", stats.final_row_count)
     LOGGER.info("Saved cleaned product dataset to: %s", output_path)
 

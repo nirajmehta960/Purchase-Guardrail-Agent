@@ -30,8 +30,11 @@ COPY model-requirements.txt .
 RUN pip install --upgrade pip && \
     pip install -r model-requirements.txt
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
 # Copy pyproject.toml so pip recognizes this as a package
 COPY pyproject.toml .
 
-# Install savviocore as a dependency, then install this package in editable mode
-CMD pip install -e /app/savviocore && pip install -e /app && tail -f /dev/null
+# Default: open a shell (runtime command is defined in docker-compose.yml)
+CMD ["bash"]

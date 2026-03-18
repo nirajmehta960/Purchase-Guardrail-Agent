@@ -8,23 +8,36 @@
 
 ```
 SavVio/
-└── model_pipeline/                   # ← THIS PHASE
-    ├── Dockerfile                  # GPU-enabled base image
-    ├── docker-compose.yml          # Unified MLflow + ML-Dev orchestration
+└── model_pipeline/
+    ├── Dockerfile
+    ├── docker-compose.yml
     ├── model-requirements.txt
+    ├── models/                         # Local dev model storage (gitignored)
+    │   ├── checkpoints/
+    │   ├── artifacts/
+    │   └── preprocessing/
     ├── src/
-    │   ├── run_pipeline.py         # Entrypoint to run the whole ML pipeline end-to-end
-    │   ├── config.py               # Defines MLflow URIs, Hyperparameters, File paths
-    │   ├── data_loader.py          # Reads from temp_data or Airflow DB
+    │   ├── run_pipeline.py             # End-to-end ML pipeline entrypoint
+    │   ├── config.py                   # Centralized configuration
+    │   ├── data/
+    │   │   ├── db_loader.py            # Reads from PostgreSQL
+    │   │   └── validate_data.py        # Schema validation
     │   ├── features/
-    │   │   └── engineering.py      # OrdinalEncoding, Scaling, Target definitions
+    │   │   ├── feature_engineering.py  # Imputation, encoding, scaling, orchestration
+    │   │   ├── affordability_features.py   # 6 computed financial features
+    │   │   └── training_data_generator.py  # Scenario generation + labeling
+    │   ├── deterministic_engine/
+    │   │   └── decision_logic.py       # Authoritative GREEN/YELLOW/RED rules
     │   ├── core_models/
-    │   │   ├── train.py            # Logic to train XGBoost, LightGBM, LinearBoost
-    │   │   └── evaluate.py         # Accuracy, F1, ROC-AUC calculations
+    │   │   ├── train.py                # XGBoost, LightGBM, XGB-Linear, LogReg
+    │   │   └── evaluate.py             # Metrics, visualizations, MLflow logging
+    │   ├── tuning/
+    │   │   └── optuna_tuner.py         # Bayesian hyperparameter optimization
     │   ├── guards/
-    │   │   └── bias_detection.py   # Fairlearn integration (Demographic Parity)
+    │   │   └── bias_detection.py       # Fairlearn slice-based fairness analysis
     │   └── llm/
-    │       └── prompt_engin.py     # Wrappers for prompting/language explanations
+    │       └── prompt_engin.py         # LLM wrapping + guardrails
+    └── tests/
 ```
 
 ---
@@ -36,9 +49,9 @@ SavVio/
 | Data Loading | DVC, GCS, Pandas | Polars, LakeFS | Data version + schema check |
 | Feature Engineering | Pandas, NumPy, scikit-learn | Polars, Feature-engine | Feature schema validation |
 | Deterministic Engine | Pure Python | — | Unit tests must pass |
-| Model Training | XGBoost, scikit-learn | LightGBM, LinearBoost | Reproducible training run |
-| Hyperparameter Tuning | Ray Tune | Optuna, RandomizedSearchCV | Best-run tracking required |
-| Validation & Metrics | sklearn.metrics, Matplotlib, Seaborn | TorchMetrics, Plotly | Minimum F1 / AUC threshold |
+| Model Training | XGBoost, LightGBM, scikit-learn | — | Reproducible training run |
+| Hyperparameter Tuning | Optuna | RandomizedSearchCV | Best-run tracking required |
+| Validation & Metrics | sklearn.metrics, Matplotlib | Seaborn, Plotly | Minimum F1 / AUC threshold |
 | Bias Detection | Fairlearn, Pandas groupby | AIF360, TFMA | Block on severe disparity |
 | Bias Mitigation | Fairlearn, imbalanced-learn | scikit-learn threshold | Re-evaluate until gates pass |
 | Model Selection | MLflow UI | Custom dashboards | Bias mitigation gate must pass |
@@ -51,58 +64,62 @@ SavVio/
 
 ---
 
-
 ## Model Pipeline Execution Order
 
 ```
-1.  Load Versioned Data (GCS via DVC)
+1.  Load Data (PostgreSQL via data pipeline)
         ↓
-2.  Feature Engineering
+2.  Feature Engineering + Scenario Generation
         ↓
-3.  Model Training (XGBoost / LinearBoost baselines)
+3.  Deterministic Engine → GREEN / YELLOW / RED labels
         ↓
-4.  Hyperparameter Tuning (Ray Tune)
+4.  3-Way Stratified Split (train 60% / val 20% / test 20%)
         ↓
-5.  Validation on Hold-out Set
+5.  Baseline Training (XGBoost, LightGBM, XGB-Linear, Logistic Regression)
         ↓
-6.  Bias Detection — Post-Training (slice analysis)
+6.  Hyperparameter Tuning (Optuna on best baseline)
         ↓
-7.  Model Selection (performance + bias constraints)
+7.  Validation on Validation Set (per-candidate metrics + visualizations)
         ↓
-8.  Sensitivity & Explainability (SHAP / LIME)
+8.  Bias Detection — Post-Training (slice analysis on validation set)
         ↓
-9.  Experiment Tracking (MLflow)
+9.  Model Selection (F1 ranking + bias gate)
         ↓
-10. Deterministic Engine → Green / Yellow / Red
+10. Final Evaluation on Held-Out Test Set
         ↓
-11. Model Registry Push (GCP)
+11. Sensitivity & Explainability (SHAP / LIME)
         ↓
-12. CI/CD Automation (Dockerized)
+12. Experiment Tracking (MLflow — all runs, artifacts, comparisons)
         ↓
-13. LLM Wrapping + NeMo Guardrails
+13. Model Registry Push (MLflow registry + GCP Artifact Registry)
+        ↓
+14. CI/CD Automation (Dockerized)
+        ↓
+15. LLM Wrapping + NeMo Guardrails
 ```
 
 ---
 
 ## Table of Contents
 
-1. [Phase 1 — Data Loading](#5-phase-1--data-loading)
-2. [Phase 2 — Feature Engineering](#6-phase-2--feature-engineering)
-3. [Phase 3 — Deterministic Decision Engine](#7-phase-3--deterministic-decision-engine)
-4. [Phase 4 — Model Training](#8-phase-4--model-training)
-5. [Phase 5 — Hyperparameter Tuning](#9-phase-5--hyperparameter-tuning)
-7. [Phase 6 — Validation & Metrics](#10-phase-6--validation--metrics)
-8. [Phase 7 — Bias Detection](#11-phase-7--bias-detection)
-9. [Phase 8 — Bias Mitigation](#12-phase-8--bias-mitigation)
-10. [Phase 9 — Model Selection](#13-phase-9--model-selection)
-11. [Phase 10 — Sensitivity & Explainability](#14-phase-10--sensitivity--explainability)
-12. [Phase 11 — Experiment Tracking](#15-phase-11--experiment-tracking)
-13. [Phase 12 — Model Registry Push](#16-phase-12--model-registry-push)
-14. [Phase 13 — CI/CD Automation](#17-phase-13--cicd-automation)
-15. [Phase 14 — LLM Wrapping & Guardrails](#18-phase-14--llm-wrapping--guardrails)
-16. [Phase 15 — Monitoring & Dashboard](#19-phase-15--monitoring--dashboard)
-17. [Phase 16 — Testing](#testing)
-18. [Phase 17 — Operational Risks & Guardrails](#operational-risks--guardrails)
+1. [Phase 1 — Data Loading](#phase-1--data-loading)
+2. [Phase 2 — Feature Engineering](#phase-2--feature-engineering)
+3. [Phase 3 — Deterministic Decision Engine](#phase-3--deterministic-decision-engine)
+4. [Phase 4 — Model Training](#phase-4--model-training)
+5. [Phase 5 — Hyperparameter Tuning](#phase-5--hyperparameter-tuning)
+6. [Phase 6 — Validation & Metrics](#phase-6--validation--metrics)
+7. [Phase 7 — Bias Detection](#phase-7--bias-detection)
+8. [Phase 8 — Bias Mitigation](#phase-8--bias-mitigation)
+9. [Phase 9 — Model Selection](#phase-9--model-selection)
+10. [Phase 10 — Sensitivity & Explainability](#phase-10--sensitivity--explainability)
+11. [Phase 11 — Experiment Tracking](#phase-11--experiment-tracking)
+12. [Phase 12 — Model Registry Push](#phase-12--model-registry-push)
+13. [Phase 13 — CI/CD Automation](#phase-13--cicd-automation)
+14. [Phase 14 — LLM Wrapping & Guardrails](#phase-14--llm-wrapping--guardrails)
+15. [Phase 15 — Monitoring & Dashboard](#phase-15--monitoring--dashboard)
+16. [Phase 16 — Testing](#phase-16--testing)
+17. [Phase 17 — Operational Risks & Guardrails](#phase-17--operational-risks--guardrails)
+18. [Model Candidates — Selection Rationale](#model-candidates--selection-rationale)
 19. [Deliverable Checklist](#deliverable-checklist)
 
 ---
@@ -121,7 +138,7 @@ SavVio/
 - Validate file existence for all three feature files
 - Run schema checks (Pandera / Great Expectations) — verify column names, types, null rates
 - Log DVC commit hash and GCS artifact path for reproducibility tracing
-- Join financial, product, and review features into a single model-ready table
+- Load financial profiles and products from PostgreSQL
 - Construct Green/Yellow/Red labels from deterministic engine outputs for supervised training
 
 **Tools:**
@@ -136,26 +153,39 @@ SavVio/
 
 ### Phase 2 — Feature Engineering
 
-**Objective:** Transform raw pipeline artifacts into model-ready features covering financial, product, and review signals.
+**Objective:** Transform raw DB tables into a model-ready feature matrix with deterministic GREEN/YELLOW/RED labels.
+
+**Pipeline:**
+1. `generate_training_data()` — Load data, create scenarios via stratified sampling, label with deterministic engine
+2. `transform_features()` — Impute missing values, encode categoricals, scale numerics, drop non-feature columns
+3. `build_feature_matrix()` — Orchestrator that calls 1 then 2 and returns `(X, y, scenarios_raw)`
+
+**Feature Groups:**
+
+| Group | Features | Source |
+|-------|----------|--------|
+| Financial (DB) | `discretionary_income`, `debt_to_income_ratio`, `saving_to_income_ratio`, `monthly_expense_burden_ratio`, `emergency_fund_months` | financial_profiles table |
+| Product (DB) | `price`, `average_rating`, `rating_number`, `rating_variance` | products table |
+| Computed (6) | `affordability_score`, `price_to_income_ratio`, `residual_utility_score`, `savings_to_price_ratio`, `net_worth_indicator`, `credit_risk_indicator` | affordability_features.py |
+| Categorical | `employment_status`, `has_loan`, `region` | financial_profiles table |
+
+**Scenario Generation:**
+- Stratified sampling across 9 (income × price) bracket cells for balanced representation
+- 50,000 scenarios by default (configurable via `Config.N_SCENARIOS`)
+- Each scenario = one (user, product) pair with computed features + deterministic label
 
 **Tasks:**
-- Extract and normalize financial features from `financial_featured.csv`: `discretionary_income`, `debt_to_income_ratio`, `monthly_expense_burden_ratio`, `emergency_fund_months`, `savings_to_income_ratio`
-- Extract product signals from `product_featured.jsonl`: `price`, `average_rating`, `rating_number`, `rating_variance`
-- Build review signals from `review_featured.jsonl`: sentiment bucket, verified purchase flag, helpfulness tier, cold-start indicator
-- Handle missing values — apply imputation strategy per field; missing financial fields default to Yellow
-- Encode categorical features (income bands, sentiment buckets)
-- Apply feature scaling and normalization where required
-- Run TA feature selection to identify top features before training
-- Save final feature matrix and label vector as a versioned artifact
-
-**Reference:** https://github.com/raminmohammadi/MLOps/tree/main/Labs/Model_Development/Feature_Selection
+- Handle missing values — median imputation for financial numerics, 0 for rating_variance, 'Unknown' for categoricals
+- Encode categorical features via OrdinalEncoder (saved as artifact for inference)
+- Scale numeric features via StandardScaler (saved as artifact for inference)
+- Save raw scenarios as versioned CSV artifact
 
 **Tools:**
 
 | Tool | Purpose |
 |------|---------|
 | Pandas / NumPy | Feature construction |
-| scikit-learn Pipelines | Preprocessing and transformation |
+| scikit-learn | OrdinalEncoder, StandardScaler |
 
 ---
 
@@ -163,102 +193,63 @@ SavVio/
 
 **Location:** `deterministic_engine/decision_logic.py`
 
-The deterministic engine is a pure Python rule system that computes the final Green/Yellow/Red recommendation. It must be built **before** model training because it generates the labels (Green/Yellow/Red) that the ML model trains on. Its output is authoritative — neither the ML model nor the LLM layer can override it.
+The deterministic engine is a pure-financial multi-condition labeling system. It is built **before** model training because it generates the labels (GREEN/YELLOW/RED) that the ML model trains on. Its output is authoritative — neither the ML model nor the LLM layer can override it.
 
-### Rule Priority Order (Highest to Lowest)
+**Design Principle:** Every rule combines signals from at least TWO independent correlation groups to avoid false triggers from a single underlying cause.
 
-1. Hard-stop safety checks
-2. Caution checks
-3. Confidence downgrade checks
-4. Final color assignment
+**Correlation Groups:**
 
-### Why This Order Matters
+| Group | Features |
+|-------|----------|
+| Group 1 — Income capacity | `affordability_score`, `discretionary_income`, `price_to_income_ratio` |
+| Group 2 — Savings depth | `saving_to_income_ratio`, `savings_to_price_ratio`, `emergency_fund_months`, `residual_utility_score` |
+| Group 3 — Debt burden | `debt_to_income_ratio`, `monthly_expense_burden_ratio` |
+| Group 4 — Independent | `credit_risk_indicator`, `net_worth_indicator` |
 
-Rules are evaluated from most to least conservative. If any hard financial limit is breached, Red is returned immediately with no further evaluation. This ensures safety flags can never be bypassed by product quality or ML confidence signals.
+**Features Used — 11 total (5 DB + 6 computed), all financial:**
+- DB: `discretionary_income`, `debt_to_income_ratio`, `saving_to_income_ratio`, `monthly_expense_burden_ratio`, `emergency_fund_months`
+- Computed: `affordability_score`, `price_to_income_ratio`, `residual_utility_score`, `savings_to_price_ratio`, `net_worth_indicator`, `credit_risk_indicator`
 
-### Inputs at Inference
+### RED Rules (4 compound AND rules)
 
-**Financial (user-level):**
+Each rule crosses at least 2 correlation groups and includes a `price_to_income_ratio` escape hatch so trivial purchases never trigger RED. RED returns immediately — no further evaluation.
 
-| Field | Description |
-|-------|-------------|
-| `discretionary_income` | Income remaining after fixed expenses |
-| `debt_to_income_ratio` | Total debt payments / gross income |
-| `monthly_expense_burden_ratio` | Monthly expenses / monthly income |
-| `emergency_fund_months` | Months of expenses covered by savings |
-| `savings_to_income_ratio` | Savings / monthly income |
+| Rule | Groups Crossed | Condition |
+|------|----------------|-----------|
+| RED 1 — Can't afford from any angle | 1 + 2 | `affordability_score < 0` AND `savings_to_price_ratio < 1.5` AND `residual_utility_score < 1.0` AND `price_to_income_ratio > 0.10` |
+| RED 2 — Maxed budget, significant purchase | 3 + 1 + 2 | `monthly_expense_burden_ratio > 0.80` AND `price_to_income_ratio > 0.20` AND `emergency_fund_months < 3.0` AND `savings_to_price_ratio < 3.0` |
+| RED 3 — Underwater, no surplus | 4 + 1 + 2 | `net_worth_indicator < -2.0` AND `affordability_score < 0` AND `price_to_income_ratio > 0.15` AND `emergency_fund_months < 3.0` |
+| RED 4 — Paycheck-to-paycheck | 2 + 3 | `emergency_fund_months < 1.0` AND `residual_utility_score < 0.5` AND `debt_to_income_ratio > 0.30` AND `price_to_income_ratio > 0.10` |
 
-**Product / Review (item-level):**
+### YELLOW Rules (5 compound AND rules, require ≥2 to trigger)
 
-| Field | Description |
-|-------|-------------|
-| `price` | Item price |
-| `average_rating` | Mean product rating |
-| `rating_number` | Total number of ratings |
-| `rating_variance` | Variance across ratings |
+Each rule crosses at least 2 correlation groups. YELLOW triggers when 2 or more rules fire.
 
-### 1) Hard-stop Safety Checks → Red
+| Rule | Groups Crossed | Condition |
+|------|----------------|-----------|
+| YELLOW 1 — Income pressure | 1 + 2 | `affordability_score < 0` AND `price_to_income_ratio > 0.25` AND `savings_to_price_ratio < 10.0` |
+| YELLOW 2 — Savings strain | 2 + 1 | `savings_to_price_ratio < 5.0` AND `residual_utility_score < 3.0` AND `price_to_income_ratio > 0.10` |
+| YELLOW 3 — Debt stress | 3 + 2 | `debt_to_income_ratio > 0.30` AND `emergency_fund_months < 4.0` AND `price_to_income_ratio > 0.10` |
+| YELLOW 4 — Low resilience | 2 + 1 | `emergency_fund_months < 3.0` AND `saving_to_income_ratio < 0.25` AND `affordability_score < 0` |
+| YELLOW 5 — Weak profile | 4 + 1 + 2 | `credit_risk_indicator < 0.35` AND `net_worth_indicator < 1.0` AND `price_to_income_ratio > 0.15` AND `savings_to_price_ratio < 10.0` |
 
-Return **Red** immediately if any condition is true:
+### GREEN — Default
 
-- `discretionary_income < 0`
-- `debt_to_income_ratio > 0.40`
-- `monthly_expense_burden_ratio > 0.80`
-- `emergency_fund_months < 1`
-- `price > discretionary_income` AND `emergency_fund_months < 3`
-
-### 2) Caution Checks → Yellow Candidate
-
-Mark as Yellow if no Red rule triggered and one or more of:
-
-- `0 <= discretionary_income <= 1000`
-- `0.20 <= debt_to_income_ratio <= 0.40`
-- `0.50 <= monthly_expense_burden_ratio <= 0.80`
-- `1 <= emergency_fund_months <= 3`
-- `0.25 <= savings_to_income_ratio <= 1.0`
-- `price` falls outside user's normal affordability tier
-
-### 3) Confidence Downgrade Checks
-
-Downgrade one level if product signal quality is weak:
-
-- `rating_number < 10` — insufficient reviews
-- `rating_variance == 0` with low review count — artificially uniform signal
-- `rating_variance > 1.0` — highly polarized, uncertain quality
-- `average_rating <= 3.0` — poor quality signal
-
-Downgrade policy: Green → Yellow → Red (Red stays Red)
-
-### 4) Final Assignment
-
-| Result | Condition |
-|--------|-----------|
-| **Green** | No Red trigger, no Yellow trigger, no confidence downgrade |
-| **Yellow** | No Red trigger, but at least one caution trigger or one downgrade from Green |
-| **Red** | Any hard-stop trigger, or Yellow downgraded by strong uncertainty |
+No RED rules fired and fewer than 2 YELLOW rules accumulated.
 
 ### Edge Cases
 
-- Missing financial fields → default **Yellow**
-- Conflicting rules → choose **more conservative** class
-- User override → retain thresholds, log override event
-
-### Example Scenarios
-
-| Scenario | Key Signals | Output |
-|----------|-------------|--------|
-| Stable profile, strong runway | DTI 0.15, runway 5 months, positive discretionary | Green |
-| Tight buffer, uncertain product | DTI 0.30, runway 2, `rating_number` 7 | Yellow |
-| Negative discretionary income | `discretionary_income < 0` | Red |
-| Risky debt + polarized reviews | DTI 0.48, variance 1.3 | Red |
+- Missing financial fields → default YELLOW
+- NaN or None values → safe defaults (0.0 for most, 0.5 for credit_risk_indicator)
+- Conflicting rules → more conservative class wins
 
 ### Tasks
 
-- [ ] Implement hard-stop safety checks → Red output
-- [ ] Implement caution checks → Yellow candidate logic
-- [ ] Implement confidence downgrade checks (product signal quality)
-- [ ] Implement final color assignment with tie-breaker rules
-- [ ] Use engine output to generate labels for ML model training
+- [x] Implement RED rules — compound AND logic with PIR escape hatch
+- [x] Implement YELLOW rules — compound AND logic, ≥2 required to trigger
+- [x] Implement GREEN default assignment
+- [x] Handle NaN/None via `_safe()` helper
+- [x] Use engine output to generate labels for ML model training
 - [ ] Write unit tests for all rule conditions and edge cases
 - [ ] Verify engine output cannot be overridden by ML or LLM layer
 
@@ -266,16 +257,25 @@ Downgrade policy: Green → Yellow → Red (Red stays Red)
 
 ### Phase 4 — Model Training
 
-**Objective:** Train baseline candidates for recommendation and decision support.
+**Objective:** Train baseline candidates for recommendation confidence scoring.
+
+**Candidates:**
+
+| Model | Type | Role |
+|-------|------|------|
+| XGBoost (tree booster) | Nonlinear ensemble | Primary candidate |
+| LightGBM | Nonlinear ensemble | Secondary candidate |
+| XGBoost (linear booster) | Linear ensemble | Fast linear baseline |
+| Logistic Regression | Linear model | Sanity-check baseline |
 
 **Tasks:**
-- Set fixed random seeds across NumPy, scikit-learn, and XGBoost for reproducibility
-- Create stratified train/validation/test split by label class
-- Train **XGBoost (Plan A)** with default hyperparameters as primary baseline
-- Train **LinearBoost (Plan B)** as fast fallback (~98% faster than XGBoost)
-- Train optional calibrated tree model (CalibratedClassifierCV)
-- Log each baseline run to MLflow: model type, params, train/val metrics
-- Compare baseline results in MLflow UI and document best pre-tuning candidate
+- Set fixed random seeds across NumPy, scikit-learn, and XGBoost via `Config.RANDOM_STATE`
+- Create stratified 3-way split: train (60%) / validation (20%) / test (20%)
+- Train all 4 candidates with default hyperparameters as baselines
+- Use `eval_set` with validation data + early stopping (10 rounds) for tree-based models
+- Filter invalid hyperparameters per model type automatically
+- Log each baseline run to MLflow: model type, params, validation metrics, artifacts
+- Compare baseline results in MLflow UI
 
 **Note:** ML model output supports confidence scoring and ranking only. It does not override the deterministic financial safety logic.
 
@@ -283,9 +283,9 @@ Downgrade policy: Green → Yellow → Red (Red stays Red)
 
 | Tool | Purpose |
 |------|---------|
-| XGBoost | Primary nonlinear baseline (Plan A) |
-| LinearBoost | Fast linear fallback (Plan B) |
-| scikit-learn | Preprocessing and pipeline |
+| XGBoost | Primary nonlinear baseline |
+| LightGBM | Secondary nonlinear baseline |
+| scikit-learn | Logistic Regression, preprocessing, pipeline |
 | MLflow | Baseline run logging |
 
 ---
@@ -294,27 +294,42 @@ Downgrade policy: Green → Yellow → Red (Red stays Red)
 
 **Objective:** Optimize model performance while preserving fairness and robustness.
 
-**Search Strategy:** Ray Tune (Plan A) — distributed, scalable, integrates natively with MLflow. Fallback: RandomizedSearchCV or Optuna.
+**Strategy:** Optuna with TPE sampler (Bayesian optimization) and MedianPruner for early trial termination. Each trial is logged to MLflow via Optuna's native callback.
+
+**Approach:**
+- After baseline training, identify the best-performing tunable candidate
+- Run Optuna study on that candidate's search space
+- Train a final model with the optimized hyperparameters
+- Compare tuned vs. baseline head-to-head in MLflow
+
+**Search Spaces:**
+
+| Model | Parameters Tuned |
+|-------|-----------------|
+| XGBoost | `max_depth`, `learning_rate`, `n_estimators`, `subsample`, `colsample_bytree`, `reg_alpha`, `reg_lambda`, `min_child_weight` |
+| LightGBM | `max_depth`, `learning_rate`, `n_estimators`, `num_leaves`, `subsample`, `colsample_bytree`, `reg_alpha`, `reg_lambda` |
+| XGB-Linear | `learning_rate`, `n_estimators`, `reg_alpha`, `reg_lambda` |
+
+**Configuration:**
+- `N_TUNING_TRIALS = 50` — maximum number of trials
+- `TUNING_TIMEOUT_SECONDS = 600` — safety timeout (whichever limit hits first)
+- `TUNING_BACKEND = "optuna"` — set to `"none"` to skip tuning
 
 **Tasks:**
-- Define search space: learning rate, max depth, n_estimators, subsample, regularization terms
-- Set up Ray Tune with MLflow callback for automatic run logging
-- Run distributed hyperparameter search with early stopping
-- Fall back to RandomizedSearchCV or Optuna if Ray is unavailable
-- Log every trial: model type, hyperparameters, split strategy, validation metrics, artifact path
+- Define search space per model type
+- Set up Optuna with MLflow callback for automatic trial logging
+- Run Bayesian hyperparameter search with pruning
+- Log every trial: hyperparameters, validation metrics
 - Identify and tag best trial in MLflow
-- Document search space and tuning strategy for submission
-
-**Minimum logging per run:** model type, hyperparameters, split strategy, validation metrics, artifact path / run ID.
+- Document search space and tuning strategy
 
 **Tools:**
 
 | Tool | Purpose |
 |------|---------|
-| Ray Tune | Distributed hyperparameter search (Plan A) |
-| Optuna | Bayesian optimization fallback |
-| GridSearchCV / RandomizedSearchCV | Simple search fallback |
-| MLflow | Trial logging |
+| Optuna | Bayesian optimization with TPE sampler |
+| Optuna MedianPruner | Early termination of underperforming trials |
+| MLflow | Trial logging via `MLflowCallback` |
 
 ---
 
@@ -322,35 +337,52 @@ Downgrade policy: Green → Yellow → Red (Red stays Red)
 
 **Objective:** Validate model performance on unseen data using task-relevant metrics and required visualizations.
 
+**Split Strategy:** Candidates are evaluated on the **validation set** (20%). The **test set** (20%) is used exactly once for the final selected model.
+
+**Metrics Computed:**
+
+| Metric | Scope | Purpose |
+|--------|-------|---------|
+| Accuracy | Aggregate | Overall correctness |
+| F1-score (weighted) | Aggregate | Balanced performance across classes |
+| ROC-AUC (weighted, OVR) | Aggregate | Discrimination ability |
+| PR-AUC (weighted) | Aggregate | Performance under class imbalance |
+| Precision, Recall, F1 | Per-class (GREEN, YELLOW, RED) | Identify weak classes — especially RED |
+
+**Visualizations Generated (all logged to MLflow):**
+
+| Visualization | Description |
+|---------------|-------------|
+| Confusion Matrix | 3×3 grid showing predicted vs. actual for GREEN/YELLOW/RED |
+| ROC Curves | Per-class one-vs-rest curves on a single figure |
+| Precision-Recall Curves | Per-class curves — exposes imbalance issues ROC hides |
+| Calibration Curves | Per-class reliability diagrams for probability quality |
+| Classification Report | Full precision/recall/F1 table logged as text artifact |
+
 **Tasks:**
-- Run trained model on held-out test set (not used during training or tuning)
-- Compute: Accuracy, Precision, Recall, F1-score, AUC-ROC
-- Compute PR-AUC if class imbalance is present
-- Generate calibration / reliability curve
-- Generate confusion matrix per model candidate (Green / Yellow / Red classes)
-- Generate ROC curve comparison across all model candidates
-- Generate bar plots comparing F1 / AUC across model runs
-- Log all metrics and plots to MLflow
+- Evaluate all candidates on validation set with full metric suite
+- Generate all visualizations per candidate run
+- Log per-class metrics individually (e.g., `RED_f1`, `GREEN_precision`)
 - Apply acceptance gates — block promotion if below minimum thresholds
-- Document which models pass or fail the gate and why
+- Run final model on held-out test set exactly once after selection
 
 **Tools:**
 
 | Tool | Purpose |
 |------|---------|
 | sklearn.metrics | Classification metrics |
-| Matplotlib / Seaborn | Required visualizations |
-| Evidently | Drift-ready eval summaries |
+| Matplotlib | Required visualizations |
+| MLflow | Metric and artifact logging |
 
 ---
 
 ### Phase 7 — Bias Detection
 
-**Objective:** Detect performance disparities across meaningful data subgroups after model training. Bias detection is performed **post-training** — run on validation/test set predictions after model fitting is complete.
+**Objective:** Detect performance disparities across meaningful data subgroups after model training. Bias detection is performed **post-training** — run on validation set predictions after model fitting is complete.
 
 **Tasks:**
-- Define all slices in `config/bias_config.yaml`
-- Collect model predictions and ground truth per slice on validation/test set
+- Define all slices in `Config.SENSITIVE_FEATURES`
+- Collect model predictions and ground truth per slice on validation set
 - Compute per-slice metrics: Accuracy, F1, AUC for each subgroup
 - Compare per-slice vs. aggregate metrics — flag disparities above configured threshold
 - Generate bias report: F1 bar chart per slice, disparity summary table
@@ -363,15 +395,14 @@ Downgrade policy: Green → Yellow → Red (Red stays Red)
 |------------|-----------|
 | Financial | Income bands, DTI bands, savings-to-income, emergency fund runway |
 | Product | Price bands, rating variance bands, review confidence bands (`rating_number`) |
-| Review | Sentiment buckets, verified purchase, helpfulness tiers, cold-start bands |
+| Demographic | Region, employment status |
 
 **Tools:**
 
 | Tool | Purpose |
 |------|---------|
-| Fairlearn | Slice fairness analysis |
+| Fairlearn | Slice fairness analysis via `MetricFrame` |
 | AIF360 | Alternative fairness toolkit |
-| TFMA | TensorFlow-centric slice evaluation |
 | Pandas groupby | Manual slice metric computation |
 
 ---
@@ -402,20 +433,23 @@ Downgrade policy: Green → Yellow → Red (Red stays Red)
 
 ---
 
-
-
 ### Phase 9 — Model Selection
 
 **Objective:** Select the final model only after both validation metrics and bias mitigation are satisfactory.
 
+**Selection Logic:**
+1. Filter out candidates that failed the bias gate
+2. Rank remaining candidates by weighted F1 on the validation set
+3. If no candidate passes bias, fall back to best F1 with logged warning
+4. Tag selected run in MLflow as `best-model`
+
 **Tasks:**
 - Collect all candidates that passed the validation gate (Phase 6)
 - Filter out any candidate that failed the bias gate (Phase 8)
-- Rank remaining candidates by aggregate F1 / AUC
-- Review sensitivity and stability notes from Phase 10 for final candidates
+- Rank remaining candidates by F1
 - Select best model and document: metrics, bias results, trade-offs made
-- Tag selected run in MLflow as `best-model`
-- Log selection rationale as an MLflow run note or artifact
+- Tag selected run in MLflow
+- Log selection rationale as an MLflow artifact
 
 **Selection rule:** Final model is never selected on aggregate accuracy alone. The bias mitigation gate must pass first.
 
@@ -429,7 +463,7 @@ Downgrade policy: Green → Yellow → Red (Red stays Red)
 - Compute global feature importance from XGBoost built-in scores
 - Run SHAP on selected model — generate global summary plot and local force plots
 - Run LIME on 3–5 representative predictions per class (Green / Yellow / Red)
-- Generate hyperparameter sensitivity curves (F1 vs. key hyperparameters)
+- Generate hyperparameter sensitivity curves (F1 vs. key hyperparameters) from Optuna study
 - Identify features that cause instability across financial and product slices
 - Document top 5–10 driving features for Green/Yellow/Red classification
 - Log all SHAP plots, LIME explanations, and sensitivity charts to MLflow
@@ -449,15 +483,35 @@ Downgrade policy: Green → Yellow → Red (Red stays Red)
 
 **Objective:** Track every meaningful experiment and maintain full lineage from data version to model artifact.
 
+**Experiment Organization:**
+```
+Experiment: Financial_Wellbeing_Prediction
+├── Run: xgboost_baseline
+├── Run: lightgbm_baseline
+├── Run: xgb_linear_baseline
+├── Run: logistic_regression_baseline
+├── Run: xgboost_tuning_trial_001 ... N  (auto-logged by Optuna)
+├── Run: xgboost_tuned
+└── Run: FINAL_xgboost  (held-out test evaluation)
+```
+
+**What Gets Logged Per Run:**
+
+| Category | Items |
+|----------|-------|
+| Params | model_type, hyperparams, n_scenarios, random_state, label_type, num_classes |
+| Aggregate Metrics | accuracy, f1_score, roc_auc, pr_auc |
+| Per-Class Metrics | GREEN_f1, YELLOW_f1, RED_f1, GREEN_precision, YELLOW_recall, etc. |
+| Bias Metrics | bias_gate_passed, per-slice disparity values |
+| Artifacts | model binary, confusion_matrix.png, roc_curves.png, pr_curves.png, calibration_curves.png, classification_report.txt, encoder.pkl, scaler.pkl, scenarios.csv |
+
 **Tasks:**
-- Set up MLflow tracking server (local or GCP-hosted)
-- Create MLflow experiment named `savvio-model_pipeline`
-- Instrument `train.py` to auto-log: params, metrics, model artifact, data version reference
+- Set up MLflow tracking server (local Docker with persistent volume)
+- Instrument `run_pipeline.py` to auto-log: params, metrics, model artifact, data version reference
 - Log bias reports and slice charts as MLflow artifacts per run
-- Log confusion matrix, ROC curve, and bar plots per run
+- Log all visualizations per run
 - Use MLflow UI to compare all runs — capture comparison screenshot for submission
 - Tag winning run as `best-model` with version label
-- Tie DVC commit hash and GCS data reference to each MLflow run for full lineage
 
 **Tools:**
 
@@ -473,14 +527,17 @@ Downgrade policy: Green → Yellow → Red (Red stays Red)
 
 **Objective:** Version and store the approved model in the registry for deployment traceability and rollback capability.
 
+**Two-stage process:**
+1. **MLflow Model Registry** — Register best model with version tag for experiment tracking and comparison
+2. **GCP Artifact Registry** — Push model binary for production deployment (automated via CI/CD)
+
 **Tasks:**
 - Confirm model passed all gates: validation ✅ and bias ✅
-- Serialize model artifact (pickle / joblib / ONNX)
+- Register model in MLflow via `mlflow.register_model()`
+- Serialize model artifact via joblib
+- Push to GCP Artifact Registry
 - Tag artifact with: model version, commit hash, DVC data ref, MLflow run ID
-- Push to GCP Artifact Registry or Vertex AI Model Registry
 - Record rollback pointer — store previous stable model version tag
-- Verify push succeeded and artifact is retrievable from registry
-- Update `config/training_config.yaml` with latest registered model version
 
 **Registry checklist:**
 
@@ -495,8 +552,8 @@ Downgrade policy: Green → Yellow → Red (Red stays Red)
 
 | Tool | Purpose |
 |------|---------|
-| GCP Artifact Registry | Artifact storage and versioning |
-| Vertex AI Model Registry | Managed model registry |
+| MLflow Model Registry | Experiment-time model versioning |
+| GCP Artifact Registry | Production deployment storage |
 | Cloud IAM | Access control |
 
 ---
@@ -525,17 +582,23 @@ GitHub Actions / Cloud Build  [Dockerized]
         └── 9. Slack / email notification
 ```
 
+**Gate Thresholds (configurable):**
+
+| Gate | Metric | Threshold |
+|------|--------|-----------|
+| Validation | Weighted F1 | > 0.70 |
+| Validation | ROC AUC | > 0.75 |
+| Bias | Max F1 disparity across any slice | < 0.10 |
+| Rollback | F1 vs. previous model | No decrease > 0.02 |
+
 **Tasks:**
-- Write `docker/Dockerfile` to containerize full training and validation environment
-- Test Docker build locally: `docker build -t savvio-model ./docker`
+- Write Dockerfile to containerize full training and validation environment
 - Configure GitHub Actions workflow (`.github/workflows/model_ci.yml`)
-- Implement automated validation gate — fail CI if metrics below threshold
-- Implement automated bias gate — fail CI and send alert if disparity exceeds limit
-- Implement rollback mechanism — compare new vs. previous registry model; block if worse
-- Connect pipeline: src unit tests → DB connection check → ML training → registry push
-- Set up Slack/email notifications for pipeline failure, completion, and gate failures
+- Implement automated validation gate
+- Implement automated bias gate
+- Implement rollback mechanism
+- Set up Slack/email notifications
 - Test full end-to-end pipeline in CI environment
-- Document pipeline YAML and Docker setup for reproducibility
 
 **Tools:**
 
@@ -559,9 +622,6 @@ GitHub Actions / Cloud Build  [Dockerized]
 - Integrate NeMo Guardrails — define rails for: hallucinated financial figures, out-of-scope advice, unsafe outputs
 - Test guardrails with adversarial prompts — confirm rails block unsafe completions
 - Version-control all prompt templates alongside model artifacts
-- Set up monitoring dashboard: track latency, refusal rate, hallucination flags per request
-- Set up drift detection on LLM recommendation distribution over time
-- Configure alerts for: hallucination spike, latency threshold breach, safety rail trigger volume
 - Document all prompt engineering decisions and guardrail configuration
 
 **Tools:**
@@ -571,8 +631,6 @@ GitHub Actions / Cloud Build  [Dockerized]
 | NeMo Guardrails | LLM safety and hallucination prevention |
 | LangChain / LlamaIndex | Prompt orchestration |
 | Evidently / Arize | Output monitoring and drift detection |
-
-
 
 ---
 
@@ -591,7 +649,6 @@ GitHub Actions / Cloud Build  [Dockerized]
   - Model performance degradation vs. baseline
 - Log all monitoring metrics to dashboard (Evidently / Arize)
 - Trigger re-training pipeline if drift exceeds configured threshold
-- Document monitoring setup and alert thresholds
 
 **Tools:**
 
@@ -614,14 +671,15 @@ pytest model_pipeline/tests
 
 | Test File | What It Tests |
 |-----------|--------------|
-| `test_load_data.py` | DVC pull, schema checks, join logic |
-| `test_features.py` | Feature construction, encoding, scaling |
-| `test_train.py` | Training smoke test, seed reproducibility |
-| `test_validate.py` | Metric computation, acceptance gates |
-| `test_bias_slicing.py` | Slice metric computation, disparity detection |
+| `test_load_data.py` | Schema checks, data loading, join logic |
+| `test_features.py` | Feature construction, encoding, scaling, scenario generation |
+| `test_train.py` | All 4 model types, param filtering, early stopping, seed reproducibility |
+| `test_evaluate.py` | Metric computation, multi-class AUC, visualization generation |
+| `test_bias_slicing.py` | Slice metric computation, disparity detection, pass/fail logic |
+| `test_optuna_tuner.py` | Study creation, objective functions, timeout, unsupported model error |
 | `test_sensitivity.py` | SHAP output shape, LIME stability |
 | `test_registry.py` | Registry push, rollback pointer |
-| `test_decision_logic.py` | All rule conditions and edge cases |
+| `test_decision_logic.py` | All 4 RED rules, all 5 YELLOW rules, GREEN default, edge cases |
 | `test_llm_wrapper.py` | Guardrail enforcement, prompt output validation |
 
 ---
@@ -649,37 +707,48 @@ pytest model_pipeline/tests
 
 ---
 
-### 18. Deliverable Checklist
+### Model Candidates — Selection Rationale
+
+The pipeline trains and compares four model candidates: XGBoost (tree booster), LightGBM, XGBoost (linear booster), and Logistic Regression.
+
+Two additional algorithms were evaluated during planning but excluded:
+
+**LinearBoost** (`linearboost` package) was considered as a fast linear baseline. However, `LinearBoostClassifier` only supports binary classification. SavVio's labeling task is a 3-class problem (GREEN / YELLOW / RED), which would require wrapping LinearBoost in a `OneVsRestClassifier`. This adds complexity without a clear advantage over XGBoost's built-in linear booster (`booster='gblinear'`), which handles multi-class natively and serves the same role as a linear baseline.
+
+**CatBoost** was considered as an alternative gradient boosting candidate alongside XGBoost and LightGBM. While CatBoost offers strong out-of-the-box performance and native categorical feature handling, its package dependency is significantly heavier (~200MB) compared to XGBoost and LightGBM. Given that our categorical features are already ordinal-encoded and our pipeline runs in Docker containers where image size affects build and deployment time, the marginal performance gain did not justify the added footprint. XGBoost and LightGBM provide sufficient coverage of the gradient boosting design space for this project's scope.
+
+---
+
+### Deliverable Checklist
 
 ### Professor Guidelines
 
-- [ ] Data loaded from versioned pipeline outputs (GCS via DVC)
-- [ ] Baseline models trained and compared
-- [ ] Hyperparameter tuning documented (Ray Tune — Plan A)
-- [ ] Validation metrics computed on hold-out set
-- [ ] Visualizations produced: confusion matrix, ROC curve, F1/AUC bar plots
-- [ ] Experiments tracked in MLflow with full artifact logging
+- [x] Data loaded from versioned pipeline outputs (GCS via DVC)
+- [x] Baseline models trained and compared
+- [x] Hyperparameter tuning documented (Optuna — Bayesian optimization)
+- [x] Validation metrics computed on hold-out set
+- [x] Visualizations produced: confusion matrix, ROC curve, PR curve, calibration curve
+- [x] Experiments tracked in MLflow with full artifact logging
 - [ ] Sensitivity and explainability analysis completed (SHAP / LIME)
 - [ ] Post-training slice-based bias analysis completed
 - [ ] Bias mitigation steps documented where disparities found
-- [ ] Model selection performed after bias checking
+- [x] Model selection performed after bias checking
 - [ ] Best model pushed to GCP Artifact Registry or Vertex AI
 - [ ] CI/CD pipeline: trigger → train → validate → bias → push
 - [ ] Automated validation gate implemented
 - [ ] Automated bias detection gate implemented
 - [ ] Notifications and alerts configured
 - [ ] Rollback mechanism implemented
-- [ ] Full pipeline containerized in Docker
+- [x] Full pipeline containerized in Docker
 
 ### SavVio-Specific
 
-- [ ] Data source confirmed: GCS via DVC (not raw database)
-- [ ] Deterministic engine implemented for Green/Yellow/Red logic
-- [ ] ML model confirmed as confidence layer only — does not override engine
-- [ ] Ray Tune configured as Plan A for hyperparameter search
-- [ ] Bias detection confirmed as post-training
-- [ ] TA feature selection reference incorporated
-- [ ] MLflow experiment tracking fully implemented
+- [x] Data source confirmed: PostgreSQL via data pipeline
+- [x] Deterministic engine implemented for Green/Yellow/Red logic (compound AND rules, correlation groups)
+- [x] ML model confirmed as confidence layer only — does not override engine
+- [x] Optuna configured for hyperparameter search (Bayesian + pruning)
+- [x] Bias detection confirmed as post-training (on validation set)
+- [x] MLflow experiment tracking fully implemented
 - [ ] CI/CD connects src ↔ test ↔ DB ↔ ML (Dockerized)
 - [ ] LLM wrapping implemented with NeMo Guardrails
 - [ ] Prompt templates version-controlled

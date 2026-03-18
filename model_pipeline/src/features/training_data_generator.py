@@ -1,75 +1,58 @@
 """
-Training Data Generator — Scenario Creation & Labeling.
+Training Data Generator — Stratified Scenario Sampling.
 
-Generates synthetic user-product scenarios by pairing real financial
-profiles with real products, computes the 6 financial features for each
-pair, and labels each scenario GREEN/YELLOW/RED using the DecisionEngine.
+Provides a library API that takes real financial profiles and products,
+samples user–product pairs using a single stratified strategy, and
+returns raw (user, product) scenarios suitable as input to the feature
+engineering and labeling pipeline.
 
-Supports two sampling strategies:
-    - stratified (default): Equal representation across income × price
-      bracket combinations (3 income × 3 price = 9 cells) so the model
-      sees balanced edge cases (e.g., low-income + premium product).
-    - random: Pure uniform random pairing (legacy / quick experiments).
+Sampling strategy:
+    - stratified (only): Equal representation across income × price
+      bracket combinations (3 income × 3 price = 9 cells). This ensures
+      good coverage of edge cases for model training.
 
-Output becomes the training dataset for downstream ML models.
-
-Usage:
+Library usage:
     from features.training_data_generator import generate_scenarios
-
     scenarios_df = generate_scenarios(financial_df, products_df, n_scenarios=50000)
+
+CLI usage (from model_pipeline/, raw sampling only):
+    PYTHONPATH=$PYTHONPATH:$(pwd)/src:/path/to/savviocore/src \\
+        python3 src/features/training_data_generator.py \\
+        --n-scenarios 50000 \\
+        --output data/raw_scenarios.csv
 """
 
+import argparse
 import logging
+import os
+import sys
 from typing import List, Tuple
 
 import numpy as np
 import pandas as pd
 
-from deterministic_engine.decision_logic import DecisionEngine
+# Ensure project root (src) is on sys.path when run as a script.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from config import Config
+from data.db_loader import load_financial_profiles, load_products
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Bracket definitions for stratified sampling
+# Bracket definitions
 # ---------------------------------------------------------------------------
 
 INCOME_BINS: List[float] = [0, 3_000, 7_000, float("inf")]
 INCOME_LABELS: List[str] = ["low", "mid", "high"]
 
-PRICE_BINS: List[float] = [0, 25, 200, float("inf")]
+PRICE_BINS: List[float] = [100, 500, 1_500, float("inf")]
 PRICE_LABELS: List[str] = ["budget", "mid", "premium"]
 
-
 # ---------------------------------------------------------------------------
-# Sampling strategies
+# Stratified sampling (single strategy)
 # ---------------------------------------------------------------------------
-
-def _sample_random(
-    financial_profiles: pd.DataFrame,
-    products: pd.DataFrame,
-    n_scenarios: int,
-    rng: np.random.Generator,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Pure uniform random pairing — legacy behaviour.
-    
-    Args:
-        financial_profiles: DataFrame containing user financial profiles.
-        products: DataFrame containing product data.
-        n_scenarios: Total number of scenarios to generate.
-        rng: NumPy random generator instance for reproducibility.
-        
-    Returns:
-        A tuple of (sampled_users_df, sampled_products_df), both of length n_scenarios.
-    """
-    user_idx = rng.integers(0, len(financial_profiles), size=n_scenarios)
-    prod_idx = rng.integers(0, len(products), size=n_scenarios)
-    return (
-        financial_profiles.iloc[user_idx].reset_index(drop=True),
-        products.iloc[prod_idx].reset_index(drop=True),
-    )
-
 
 def _sample_stratified(
     financial_profiles: pd.DataFrame,
@@ -86,17 +69,16 @@ def _sample_stratified(
 
     Empty cells are skipped and their quota is redistributed evenly
     across remaining cells.
-    
+
     Args:
         financial_profiles: DataFrame containing user financial profiles.
         products: DataFrame containing product data.
         n_scenarios: Total number of scenarios to generate.
         rng: NumPy random generator instance for reproducibility.
-        
+
     Returns:
         A tuple of (sampled_users_df, sampled_products_df), both of length n_scenarios.
     """
-    # Assign brackets.
     income_bracket = pd.cut(
         financial_profiles["monthly_income"],
         bins=INCOME_BINS, labels=INCOME_LABELS, include_lowest=True,
@@ -115,7 +97,6 @@ def _sample_stratified(
         for label in PRICE_LABELS
     }
 
-    # Identify non-empty cells.
     valid_cells = [
         (ig, pg)
         for ig in INCOME_LABELS
@@ -128,7 +109,6 @@ def _sample_stratified(
             "No valid (income, price) bracket combinations — check your data."
         )
 
-    # Distribute n_scenarios evenly; spread remainder across first cells.
     base, remainder = divmod(n_scenarios, len(valid_cells))
     cell_counts = [base + (1 if i < remainder else 0) for i in range(len(valid_cells))]
 
@@ -136,8 +116,6 @@ def _sample_stratified(
     prod_chunks: List[pd.DataFrame] = []
 
     for (ig_label, pg_label), count in zip(valid_cells, cell_counts):
-        # Draw reproducible integer seeds from the generator so
-        # pd.DataFrame.sample() stays deterministic per cell.
         seed = int(rng.integers(0, 2**31))
 
         user_sample = income_groups[ig_label].sample(
@@ -165,71 +143,21 @@ def _sample_stratified(
 
 
 # ---------------------------------------------------------------------------
-# Feature computation & labeling
+# Pair merging
 # ---------------------------------------------------------------------------
 
-def _compute_features_and_label(
+def _merge_pairs(
     users: pd.DataFrame,
     prods: pd.DataFrame,
 ) -> pd.DataFrame:
-    """
-    Given paired user and product DataFrames of equal length, compute the
-    6 financial features and label each row with the DecisionEngine.
-    
-    Args:
-        users: DataFrame containing sampled user financial profiles.
-        prods: DataFrame containing sampled products, matched row-by-row with users.
-        
-    Returns:
-        A single DataFrame combining user and product data, along with 
-        6 newly computed financial features and a final decision 'label'.
-    """
-    engine = DecisionEngine()
-
+    """Combine user and product DataFrames into scenario rows."""
     scenarios = users.copy()
     scenarios["product_id"] = prods["product_id"].values
     scenarios["product_price"] = prods["price"].values
 
-    # Keep product metadata for downstream use (but NOT for decision engine).
-    for col in ("average_rating", "rating_number", "rating_variance"):
+    for col in ("average_rating", "rating_number", "rating_variance", "category"):
         if col in prods.columns:
             scenarios[col] = prods[col].values
-
-    # Vectorized helper references for readability.
-    price = scenarios["product_price"]
-    income = scenarios["monthly_income"].replace(0, np.nan)
-    savings = scenarios["savings_balance"]
-    discretionary = scenarios["discretionary_income"]
-    expenses = scenarios["monthly_expenses"]
-    emi = scenarios["monthly_emi"]
-    loan_amount = scenarios["loan_amount"].fillna(0)
-    credit_score = scenarios["credit_score"].fillna(0)
-    total_obligations = (expenses + emi).replace(0, np.nan)
-    safe_price = price.replace(0, np.nan)
-
-    # ── Financial features (6 computed) ──────────────────────────────────
-
-    # Remaining discretionary budget after subtracting the product price.
-    scenarios["affordability_score"] = discretionary - price
-
-    # Product price as a fraction of monthly income.
-    scenarios["price_to_income_ratio"] = price / income
-
-    # Months of financial runway remaining after purchasing from savings.
-    scenarios["residual_utility_score"] = (savings - price) / total_obligations
-
-    # How many times over can savings cover the product price?
-    scenarios["savings_to_price_ratio"] = savings / safe_price
-
-    # Normalized net worth: positive = savings exceed debt.
-    scenarios["net_worth_indicator"] = (savings - loan_amount) / income
-
-    # Credit score projected onto 0–1 range.
-    scenarios["credit_risk_indicator"] = (credit_score - 300) / 550.0
-
-    # Label each scenario using the multi-condition deterministic engine.
-    logger.info("Labeling %d scenarios with DecisionEngine...", len(scenarios))
-    scenarios["label"] = scenarios.apply(engine.decide_row, axis=1)
 
     return scenarios
 
@@ -243,44 +171,92 @@ def generate_scenarios(
     products: pd.DataFrame,
     n_scenarios: int = 10_000,
     random_state: int = 42,
-    stratified: bool = True,
 ) -> pd.DataFrame:
     """
-    Generate synthetic user-product scenarios.
+    Generate raw user-product scenario pairs.
 
-    Pairs real user financial profiles with real products, computes the 6
-    financial features for each pair, and labels each scenario
-    GREEN/YELLOW/RED using the DecisionEngine.
+    Returns a DataFrame with user columns merged with product columns,
+    ready for feature computation and labeling by feature_engineering.py.
 
     Args:
         financial_profiles: DataFrame from the financial_profiles table.
         products: DataFrame from the products table.
-        n_scenarios: Number of (user, product) pairs to generate.
+        n_scenarios: Target number of (user, product) rows to generate.
         random_state: Seed for reproducibility.
-        stratified: If True (default), sample equally across 9
-            (income × price) bracket cells for balanced representation.
-            If False, use pure uniform random pairing.
 
     Returns:
-        DataFrame with one row per scenario containing user features,
-        product columns, 6 computed features, and a rule-based label.
+        DataFrame with one row per (user, product) pair containing
+        raw user columns and product columns.  No computed features
+        or labels are included.
     """
     rng = np.random.default_rng(random_state)
 
-    if stratified:
-        users, prods = _sample_stratified(
-            financial_profiles, products, n_scenarios, rng,
-        )
-    else:
-        users, prods = _sample_random(
-            financial_profiles, products, n_scenarios, rng,
-        )
-
-    scenarios = _compute_features_and_label(users, prods)
-
-    logger.info(
-        "Generated %d scenarios (stratified=%s) — label distribution:\n%s",
-        len(scenarios), stratified,
-        scenarios["label"].value_counts().to_string(),
+    # Single, stratified sampling strategy.
+    users, prods = _sample_stratified(
+        financial_profiles, products, n_scenarios, rng,
     )
+    scenarios = _merge_pairs(users, prods)
+
+    logger.info("Generated %d scenario pairs.", len(scenarios))
     return scenarios
+
+
+# ---------------------------------------------------------------------------
+# CLI Entrypoint
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Sample raw (user, product) scenarios using stratified sampling."
+    )
+    parser.add_argument(
+        "--n-scenarios",
+        type=int,
+        default=Config.N_SCENARIOS,
+        help=f"Number of scenarios to generate (default: {Config.N_SCENARIOS})",
+    )
+    parser.add_argument(
+        "--random-state",
+        type=int,
+        default=Config.RANDOM_STATE,
+        help=f"Random seed (default: {Config.RANDOM_STATE})",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=Config.SCENARIO_OUTPUT_PATH,
+        help="Output CSV path for raw sampled scenarios.",
+    )
+    args = parser.parse_args()
+
+    print("=" * 60)
+    print("SavVio — Raw Scenario Sampler (stratified)")
+    print("=" * 60)
+
+    print("\n[1/2] Loading data from PostgreSQL...")
+    fin_df = load_financial_profiles()
+    prod_df = load_products()
+    print(f"      Financial profiles: {len(fin_df):,}")
+    print(f"      Products:           {len(prod_df):,}")
+
+    print(f"\n[2/2] Sampling {args.n_scenarios:,} raw scenarios (stratified)...")
+    scenarios = generate_scenarios(
+        fin_df,
+        prod_df,
+        n_scenarios=args.n_scenarios,
+        random_state=args.random_state,
+    )
+
+    os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
+    scenarios.to_csv(args.output, index=False)
+    print(f"      Saved raw scenarios to: {args.output}")
+    print(f"      Rows: {len(scenarios):,}, Columns: {len(scenarios.columns)}")
+    print()
+
+
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+    main()

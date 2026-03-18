@@ -2,10 +2,11 @@
 SQLAlchemy table definitions for SavVio.
 Matches the actual columns from preprocessing (see Data Pipeline Plan).
 """
+import logging
 
 from sqlalchemy import (
     Column, Integer, Float, String, Boolean, Text, DateTime, ForeignKey,
-    UniqueConstraint, JSON, text
+    UniqueConstraint, JSON, text, inspect as sa_inspect
 )
 from sqlalchemy.orm import declarative_base
 
@@ -33,6 +34,7 @@ class FinancialProfile(Base):
     employment_status   = Column(String(50))
     region              = Column(String(50))
     # --- feature-engineered columns (optional, loaded if present) ---
+    liquid_savings        = Column(Float)
     discretionary_income  = Column(Float)
     debt_to_income_ratio  = Column(Float)
     saving_to_income_ratio       = Column(Float)
@@ -92,5 +94,24 @@ class Review(Base):
 # ---------------------------------------------------------------------------
 
 def create_tables(engine):
-    """Create all tables that don't already exist."""
+    """Create all tables that don't already exist, and add any missing columns to existing tables."""
     Base.metadata.create_all(engine, checkfirst=True)
+
+    # Add any new columns to existing tables (handles schema evolution
+    # without a full migration framework like Alembic).
+    inspector = sa_inspect(engine)
+    for table_name, table in Base.metadata.tables.items():
+        if not inspector.has_table(table_name):
+            continue
+        existing_cols = {c["name"] for c in inspector.get_columns(table_name)}
+        for col in table.columns:
+            if col.name not in existing_cols:
+                col_type = col.type.compile(engine.dialect)
+                with engine.begin() as conn:
+                    conn.execute(text(
+                        f'ALTER TABLE {table_name} ADD COLUMN "{col.name}" {col_type}'
+                    ))
+                logging.getLogger(__name__).info(
+                    "Added column '%s' (%s) to table '%s'",
+                    col.name, col_type, table_name,
+                )

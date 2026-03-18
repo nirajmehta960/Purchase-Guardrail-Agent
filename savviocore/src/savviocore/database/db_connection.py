@@ -12,6 +12,11 @@ import logging
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
+from dotenv import load_dotenv
+# Automatically load the credentials from the project's root .env file
+dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))), '.env')
+load_dotenv(dotenv_path)
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -20,11 +25,11 @@ logger = logging.getLogger(__name__)
 
 def _dev_url() -> str:
     """Local PostgreSQL connection string."""
-    user = os.environ.get("DB_USER", "postgres")
-    password = os.environ.get("DB_PASSWORD", "postgres")
-    host = os.environ.get("DB_HOST", "localhost")
-    port = os.environ.get("DB_PORT", "5432")
-    name = os.environ.get("DB_NAME", "savvio_dev")
+    user = os.environ["DB_USER"]
+    password = os.environ["DB_PASSWORD"]
+    host = os.environ["DB_HOST"]
+    port = os.environ["DB_PORT"]
+    name = os.environ["DB_NAME"]
     return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{name}"
 
 
@@ -35,7 +40,7 @@ def _prod_url() -> str:
     """
     user = os.environ["DB_USER"]
     password = os.environ["DB_PASSWORD"]
-    name = os.environ.get("DB_NAME", "savvio_prod")
+    name = os.environ["DB_NAME"]
 
     # Option A: Cloud SQL Auth Proxy on localhost (default)
     proxy_host = os.environ.get("DB_HOST", "127.0.0.1")

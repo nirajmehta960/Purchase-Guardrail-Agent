@@ -48,5 +48,25 @@ _utils.ensure_output_dir = _src_utils.ensure_output_dir
 sys.modules["utils"] = _utils
 
 _src = sys.modules.get("src", types.ModuleType("src"))
+_src.__path__ = [os.path.join(_dags_dir, "src")]
 _src.utils = _src_utils
 sys.modules["src"] = _src
+
+# Stub src.features package so "from src.features.utils import ..." works
+_src_features = sys.modules.get("src.features", types.ModuleType("src.features"))
+_src_features.__path__ = [os.path.join(_dags_dir, "src", "features")]
+sys.modules["src.features"] = _src_features
+_src.features = _src_features
+
+# Stub src.features.utils with the same helpers
+_src_features_utils = sys.modules.get("src.features.utils", types.ModuleType("src.features.utils"))
+_src_features_utils.setup_logging = _src_utils.setup_logging
+_src_features_utils.ensure_output_dir = _src_utils.ensure_output_dir
+sys.modules["src.features.utils"] = _src_features_utils
+_src_features.utils = _src_features_utils
+
+# Stub src.incremental (used by financial_features.py)
+_src_incremental = sys.modules.get("src.incremental", types.ModuleType("src.incremental"))
+_src_incremental.merge_csv = lambda new, old, **kw: {"new": 0, "updated": 0, "unchanged": 0}
+sys.modules["src.incremental"] = _src_incremental
+_src.incremental = _src_incremental

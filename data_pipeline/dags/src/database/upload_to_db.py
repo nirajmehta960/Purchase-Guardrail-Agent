@@ -46,6 +46,7 @@ FINANCIAL_COLS = {
     "employment_status": "employment_status",
     "region": "region",
     # Feature-engineered (included if present)
+    "liquid_savings": "liquid_savings",
     "discretionary_income": "discretionary_income",
     "debt_to_income_ratio": "debt_to_income_ratio",
     "saving_to_income_ratio": "saving_to_income_ratio",

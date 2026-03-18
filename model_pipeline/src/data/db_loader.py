@@ -47,10 +47,10 @@ def load_financial_profiles(engine=None) -> pd.DataFrame:
     Load all rows from the `financial_profiles` table.
 
     Columns returned match the schema in data_pipeline/dags/src/database/db_schema.py:
-        user_id, monthly_income, monthly_expenses, savings_balance, has_loan,
-        loan_amount, monthly_emi, loan_interest_rate, loan_term_months,
-        credit_score, employment_status, region, discretionary_income,
-        debt_to_income_ratio, saving_to_income_ratio,
+        user_id, monthly_income, monthly_expenses, savings_balance,
+        liquid_savings, has_loan, loan_amount, monthly_emi, loan_interest_rate,
+        loan_term_months, credit_score, employment_status, region,
+        discretionary_income, debt_to_income_ratio, saving_to_income_ratio,
         monthly_expense_burden_ratio, emergency_fund_months
     """
     if engine is None:
@@ -58,7 +58,7 @@ def load_financial_profiles(engine=None) -> pd.DataFrame:
 
     query = """
         SELECT user_id, monthly_income, monthly_expenses, savings_balance,
-               has_loan, loan_amount, monthly_emi, loan_interest_rate,
+               liquid_savings, has_loan, loan_amount, monthly_emi, loan_interest_rate,
                loan_term_months, credit_score, employment_status, region,
                discretionary_income, debt_to_income_ratio,
                saving_to_income_ratio, monthly_expense_burden_ratio,

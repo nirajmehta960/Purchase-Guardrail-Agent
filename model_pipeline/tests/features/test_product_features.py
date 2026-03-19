@@ -5,7 +5,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from features.product_features import (
     compute_category_stats,

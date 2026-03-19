@@ -1,7 +1,7 @@
 """
 Unit tests for Feature Engineering pipeline.
 
-Tests missing-value handling, encoding, scaling, and build_feature_matrix().
+Tests missing-value handling, encoding, scaling, and build_training_data().
 Uses synthetic data so tests run without a live PostgreSQL connection.
 """
 
@@ -80,7 +80,7 @@ def _make_products_df(n=32):
 class TestMissingValues:
 
     def test_financial_nulls_filled(self):
-        from features.preprocessing import MissingValueImputer
+        from features.feature_preprocessing import MissingValueImputer
         df = _make_financial_df(20)
         df.loc[0, "discretionary_income"] = np.nan
         df.loc[1, "debt_to_income_ratio"] = np.nan
@@ -89,7 +89,7 @@ class TestMissingValues:
         assert result["debt_to_income_ratio"].isnull().sum() == 0
 
     def test_product_variance_null_filled_with_zero(self):
-        from features.preprocessing import MissingValueImputer
+        from features.feature_preprocessing import MissingValueImputer
         df = pd.DataFrame({
             "rating_variance": [1.0, np.nan, 0.5],
             "price": [10, 20, 30],
@@ -98,7 +98,7 @@ class TestMissingValues:
         assert result["rating_variance"].iloc[1] == 0.0
 
     def test_categorical_nulls_filled_with_unknown(self):
-        from features.preprocessing import MissingValueImputer
+        from features.feature_preprocessing import MissingValueImputer
         df = pd.DataFrame({
             "employment_status": ["employed", None, "self-employed"],
             "has_loan": [True, None, False],
@@ -110,7 +110,7 @@ class TestMissingValues:
 
     def test_computed_features_nulls_filled_with_median(self):
         """All 6 computed financial features should have NaN filled with median."""
-        from features.preprocessing import MissingValueImputer
+        from features.feature_preprocessing import MissingValueImputer
         computed_cols = [
             "affordability_score", "price_to_income_ratio", "residual_utility_score",
             "savings_to_price_ratio", "net_worth_indicator", "credit_risk_indicator",
@@ -127,7 +127,7 @@ class TestMissingValues:
 class TestEncoding:
 
     def test_ordinal_encoder_produces_numeric(self, tmp_path):
-        from features.preprocessing import CategoricalEncoder
+        from features.feature_preprocessing import CategoricalEncoder
         
         df = pd.DataFrame({
             "employment_status": ["employed", "self-employed", "unemployed"],
@@ -144,7 +144,7 @@ class TestEncoding:
         assert (result["employment_status"] == result2["employment_status"]).all()
 
     def test_unknown_category_at_inference(self):
-        from features.preprocessing import CategoricalEncoder
+        from features.feature_preprocessing import CategoricalEncoder
         train_df = pd.DataFrame({
             "employment_status": ["employed", "self-employed"],
             "has_loan": [True, False],
@@ -168,7 +168,7 @@ class TestEncoding:
 class TestScaling:
 
     def test_scaled_features_near_zero_mean(self, tmp_path):
-        from features.preprocessing import NumericScaler
+        from features.feature_preprocessing import NumericScaler
         rng = np.random.default_rng(42)
         df = pd.DataFrame({
             "discretionary_income": rng.uniform(-1000, 5000, 100),
@@ -184,12 +184,12 @@ class TestScaling:
                 assert abs(result[col].mean()) < 0.1
 
 
-# ── build_feature_matrix integration ─────────────────────────────────────────
+# ── build_training_data integration ─────────────────────────────────────────
 
 class TestBuildFeatureMatrix:
 
     def test_returns_correct_shapes(self, tmp_path):
-        from features.feature_engineering import build_feature_matrix
+        from features.feature_engineering import build_training_data
         import config
         original = config.Config.MODEL_SAVE_DIR
         config.Config.MODEL_SAVE_DIR = str(tmp_path)
@@ -199,7 +199,7 @@ class TestBuildFeatureMatrix:
         fin = _make_financial_df(50)
         prod = _make_products_df(30)
 
-        X, y, raw = build_feature_matrix(
+        X, y, raw = build_training_data(
             financial_df=fin, products_df=prod, reviews_df=_make_reviews_df(100), n_scenarios=200
         )
 
@@ -214,7 +214,7 @@ class TestBuildFeatureMatrix:
         config.Config.SCENARIO_OUTPUT_PATH = original_scenario
 
     def test_label_column_not_in_X(self, tmp_path):
-        from features.feature_engineering import build_feature_matrix
+        from features.feature_engineering import build_training_data
         import config
         original = config.Config.MODEL_SAVE_DIR
         config.Config.MODEL_SAVE_DIR = str(tmp_path)
@@ -224,7 +224,7 @@ class TestBuildFeatureMatrix:
         fin = _make_financial_df(50)
         prod = _make_products_df(30)
 
-        X, y, _ = build_feature_matrix(
+        X, y, _ = build_training_data(
             financial_df=fin, products_df=prod, reviews_df=_make_reviews_df(100), n_scenarios=100
         )
         assert "final_recommendation" not in X.columns
@@ -233,7 +233,7 @@ class TestBuildFeatureMatrix:
         config.Config.SCENARIO_OUTPUT_PATH = original_scenario
 
     def test_no_id_columns_in_X(self, tmp_path):
-        from features.feature_engineering import build_feature_matrix
+        from features.feature_engineering import build_training_data
         import config
         original = config.Config.MODEL_SAVE_DIR
         config.Config.MODEL_SAVE_DIR = str(tmp_path)
@@ -243,7 +243,7 @@ class TestBuildFeatureMatrix:
         fin = _make_financial_df(50)
         prod = _make_products_df(30)
 
-        X, _, _ = build_feature_matrix(
+        X, _, _ = build_training_data(
             financial_df=fin, products_df=prod, reviews_df=_make_reviews_df(100), n_scenarios=100
         )
         assert "user_id" not in X.columns
@@ -254,7 +254,7 @@ class TestBuildFeatureMatrix:
 
     def test_computed_features_present_in_X(self, tmp_path):
         """Verify all 6 computed financial features survive the pipeline into X."""
-        from features.feature_engineering import build_feature_matrix
+        from features.feature_engineering import build_training_data
         import config
         original = config.Config.MODEL_SAVE_DIR
         config.Config.MODEL_SAVE_DIR = str(tmp_path)
@@ -264,7 +264,7 @@ class TestBuildFeatureMatrix:
         fin = _make_financial_df(50)
         prod = _make_products_df(30)
 
-        X, _, _ = build_feature_matrix(
+        X, _, _ = build_training_data(
             financial_df=fin, products_df=prod, reviews_df=_make_reviews_df(100), n_scenarios=100
         )
 

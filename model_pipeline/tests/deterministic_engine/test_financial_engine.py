@@ -13,7 +13,6 @@ import sys
 import pytest
 import pandas as pd
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from deterministic_engine.financial_engine import DecisionEngine, DecisionResult
 

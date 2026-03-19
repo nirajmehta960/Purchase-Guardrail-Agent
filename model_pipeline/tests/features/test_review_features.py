@@ -4,7 +4,6 @@ import os
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from features.review_features import (
     compute_review_features,

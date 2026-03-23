@@ -4,7 +4,6 @@
 pandas>=2.1.4
 duckdb>=1.0.0
 numpy>=1.26.2
-scikit-learn 
 flask # maybe remove after testing
 scipy 
 
@@ -62,7 +61,6 @@ fairlearn>=0.10.0
 # Machine Learning (for future model development phase)
 # -----------------------------------------------------------------------------
 scikit-learn>=1.3.2
-xgboost>=2.0.3
 
 # -----------------------------------------------------------------------------
 # API Requests (for api_loader.py)
@@ -70,19 +68,9 @@ xgboost>=2.0.3
 requests>=2.31.0
 urllib3>=2.1.0
 
-# -----------------------------------------------------------------------------
-# Testing
-# -----------------------------------------------------------------------------
-pytest>=7.4.3
-pytest-cov>=4.1.0
-pytest-mock>=3.12.0
-
-# -----------------------------------------------------------------------------
-# Code Quality & Linting
-# -----------------------------------------------------------------------------
-black>=23.12.1
-flake8>=7.0.0
-pylint>=3.0.3
+# NOTE:
+# Test and lint dependencies are intentionally excluded from runtime image build.
+# Install them via data-requirements-dev.txt for local development/testing.
 
 # -----------------------------------------------------------------------------
 # Logging & Monitoring

@@ -107,6 +107,13 @@ class Config:
     TUNING_TIMEOUT_SECONDS = 600
 
     # ---------------------------------------------------------------------------
+    # Hyperparameter Sensitivity Analysis
+    # ---------------------------------------------------------------------------
+    SENSITIVITY_ANALYSIS_ENABLED = True
+    SENSITIVITY_MIN_COMPLETED_TRIALS = 10
+    SENSITIVITY_TOP_K_PARAMS = 5
+
+    # ---------------------------------------------------------------------------
     # Model Registry
     # ---------------------------------------------------------------------------
     REGISTERED_MODEL_NAME = "SavVio_Predictor"

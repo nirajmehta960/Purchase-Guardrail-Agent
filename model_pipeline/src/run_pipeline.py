@@ -29,11 +29,12 @@ from features.feature_engineering import build_training_data
 from core_models.train import train_model, log_model_to_mlflow
 from core_models.evaluate import evaluate_model
 from core_models.optuna_tuner import tune_best_candidate
+from core_models.sensitivity_analysis import analyze_optuna_sensitivity
 
 logger = logging.getLogger(__name__)
 
 
-def write_evaluation_summary_md(candidates, best, final_metrics, output_path):
+def write_evaluation_summary_md(candidates, best, final_metrics, output_path, sensitivity_summary=None):
     """Write a simple markdown summary for 3 baseline models + champion."""
     baseline_names = {"xgboost", "lightgbm", "xgb_linear"}
     baseline_rows = [c for c in candidates if c.get("name") in baseline_names]
@@ -73,7 +74,31 @@ def write_evaluation_summary_md(candidates, best, final_metrics, output_path):
         for metric_name, metric_value in final_metrics.items():
             lines.append(f"- {metric_name}: {metric_value}")
 
-    with open(output_path, "w") as f:
+    lines.extend([
+        "",
+        "## Hyperparameter Sensitivity (Tuned Champion)",
+        "",
+    ])
+
+    if not sensitivity_summary:
+        lines.append("Sensitivity analysis was not executed.")
+    elif sensitivity_summary.get("status") != "ok":
+        lines.append(
+            f"Sensitivity analysis skipped: {sensitivity_summary.get('reason', 'unknown_reason')}"
+        )
+        lines.append(f"- completed_trials: {sensitivity_summary.get('trial_count', 0)}")
+    else:
+        lines.append(f"- study_name: {sensitivity_summary.get('study_name', 'unknown')}")
+        lines.append(f"- completed_trials: {sensitivity_summary.get('trial_count', 0)}")
+        lines.append("- top_hyperparameters:")
+        for item in sensitivity_summary.get("top_importances", []):
+            lines.append(f"  - {item['param']}: {item['importance']:.6f}")
+        if sensitivity_summary.get("artifacts"):
+            lines.append("- artifact_paths:")
+            for artifact_path in sensitivity_summary["artifacts"]:
+                lines.append(f"  - {artifact_path}")
+
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
     logger.info("Saved evaluation summary markdown: %s", output_path)
@@ -256,13 +281,15 @@ def train_candidates(X_train, y_train, X_val, y_val, sens_val, label_encoder):
 
 def tune_candidate(candidates, data):
     # 3b. Hyperparameter tuning on best baseline.
+    tuning_context = None
     tuning_result = tune_best_candidate(
         candidates,
         data["X_train"], data["y_train"],
         data["X_val"], data["y_val"],
     )
     if tuning_result:
-        model_type, tuned_params, _ = tuning_result
+        model_type, tuned_params, _, tuning_study = tuning_result
+        tuning_context = {"model_type": model_type, "study": tuning_study}
         try:
             with mlflow.start_run(run_name=f"{model_type}_tuned"):
                 mlflow.log_param("model_type", model_type)
@@ -287,11 +314,51 @@ def tune_candidate(candidates, data):
                     "run_id": mlflow.active_run().info.run_id,
                     "metrics": tuned_metrics,
                     "bias_passed": True,  # Will be checked in select_best_model
+                    "tuning_study": tuning_study,
                 })
         except Exception as e:
             logger.error("Tuned model training failed: %s", e, exc_info=True)
 
-    return candidates
+    return candidates, tuning_context
+
+
+def run_sensitivity_analysis(best, tuning_context):
+    """Run Optuna-based sensitivity analysis for the tuned champion only."""
+    if best is None:
+        return {"status": "skipped", "reason": "no_champion", "trial_count": 0}
+
+    if not Config.SENSITIVITY_ANALYSIS_ENABLED:
+        return {"status": "skipped", "reason": "disabled_in_config", "trial_count": 0}
+
+    if not best["name"].endswith("_tuned"):
+        return {
+            "status": "skipped",
+            "reason": "champion_is_not_tuned",
+            "trial_count": 0,
+        }
+
+    if not tuning_context or tuning_context.get("study") is None:
+        return {"status": "skipped", "reason": "missing_tuning_study", "trial_count": 0}
+
+    if not best["name"].startswith(tuning_context.get("model_type", "")):
+        return {
+            "status": "skipped",
+            "reason": "study_champion_mismatch",
+            "trial_count": 0,
+        }
+
+    output_dir = os.path.join(Config.BASE_DIR, "reports", "sensitivity")
+    try:
+        return analyze_optuna_sensitivity(
+            study=tuning_context["study"],
+            model_name=best["name"],
+            output_dir=output_dir,
+            min_completed_trials=Config.SENSITIVITY_MIN_COMPLETED_TRIALS,
+            top_k_params=Config.SENSITIVITY_TOP_K_PARAMS,
+        )
+    except Exception as exc:
+        logger.warning("Sensitivity analysis failed: %s", exc, exc_info=True)
+        return {"status": "skipped", "reason": "runtime_error", "trial_count": 0}
 
 # ---------------------------------------------------------------------------
 # 4. Model Selection
@@ -407,7 +474,7 @@ def main():
 
     # 3b. Hyperparameter tuning on best baseline.
     print("[4/6] Running hyperparameter tuning on best baseline...")
-    candidates = tune_candidate(candidates, data)
+    candidates, tuning_context = tune_candidate(candidates, data)
     print(f"[4/6] Tuning stage complete. candidates={len(candidates)}")
 
     # 4. Select best model (F1 + bias gate).
@@ -429,12 +496,20 @@ def main():
     else:
         print("[6/6] Final evaluation skipped or failed.")
 
+    sensitivity_summary = run_sensitivity_analysis(best, tuning_context)
+
     # 6. Save best model and label encoder locally under artifacts and preprocessing.
     save_best_model_local(best, data["label_encoder"])
 
     # 7. Save a simple markdown summary for 3 baseline models + champion final metrics.
     report_path = os.path.join(Config.BASE_DIR, "reports", "evaluation_summary.md")
-    write_evaluation_summary_md(candidates, best, final_metrics, report_path)
+    write_evaluation_summary_md(
+        candidates,
+        best,
+        final_metrics,
+        report_path,
+        sensitivity_summary=sensitivity_summary,
+    )
 
     # Summary.
     if best:

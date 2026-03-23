@@ -119,8 +119,9 @@ SavVio/
 15. [Phase 15 — Monitoring & Dashboard](#phase-15--monitoring--dashboard)
 16. [Phase 16 — Testing](#phase-16--testing)
 17. [Phase 17 — Operational Risks & Guardrails](#phase-17--operational-risks--guardrails)
-18. [Model Candidates — Selection Rationale](#model-candidates--selection-rationale)
-19. [Deliverable Checklist](#deliverable-checklist)
+18. [Phase 18 — Dockerize Model Development](#phase-18--dockerize-model-development)
+19. [Model Candidates — Selection Rationale](#model-candidates--selection-rationale)
+20. [Deliverable Checklist](#deliverable-checklist)
 
 ---
 
@@ -718,6 +719,18 @@ Two additional algorithms were evaluated during planning but excluded:
 **CatBoost** was considered as an alternative gradient boosting candidate alongside XGBoost and LightGBM. While CatBoost offers strong out-of-the-box performance and native categorical feature handling, its package dependency is significantly heavier (~200MB) compared to XGBoost and LightGBM. Given that our categorical features are already ordinal-encoded and our pipeline runs in Docker containers where image size affects build and deployment time, the marginal performance gain did not justify the added footprint. XGBoost and LightGBM provide sufficient coverage of the gradient boosting design space for this project's scope.
 
 ---
+
+### Phase 18 — Dockerize Model Development
+
+**Objective:** Containerize the model pipeline and tracking server to ensure consistent execution environments across local development and CI/CD.
+
+**Tasks:**
+- **Hardware Flexibility in Build:** Define a `Dockerfile` that supports both lightweight CPU-only execution and GPU/CUDA environments (requiring the NVIDIA Container Toolkit), managing complex base image options.
+- **Multi-Service Orchestration:** Configure `docker-compose.yml` to seamlessly coordinate 5 distinct services (`postgres`, `storage` via RustFS, an ephemeral `create-bucket` container, `mlflow` server, and `ml-trainer`).
+- **Startup Sequencing & Healthchecks:** Implement strict `depends_on` conditions with robust healthchecks to ensure services like RustFS and PostgreSQL are fully ready before the database logic or MLflow tracking API initiates.
+- **Environment & Port Management:** Distribute dozens of environment variables across containers and carefully map ports (e.g., binding Postgres to port 5433 to prevent conflicts with the separate data pipeline's database).
+- **Volume Mounting for Local Dev:** Set up pervasive volume mounts (`src`, `models`, `data`, `savviocore`, `reports`) for the `ml-trainer` container to sync local code and artifacts while maintaining connectivity to isolated tracking and storage APIs.
+
 
 ### Deliverable Checklist
 

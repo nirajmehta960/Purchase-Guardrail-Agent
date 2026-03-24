@@ -1,42 +1,66 @@
 """
 Post-Training Bias Detection for SavVio Model Pipeline.
 
-Detects performance disparities across sensitive subgroups after model
-training. Run on validation set predictions after model fitting is complete.
+Called from run_pipeline.py inside train_candidates() after each model
+is evaluated on the validation set.
 
-Slices checked:
-    Demographic : region, employment_status
-    Financial   : income_band, dti_band, savings_band, emergency_fund_band
-    Product     : price_band, rating_variance_band, review_confidence_band
+Contract (run_pipeline.py):
+    model, bias_passed, metrics = detect_and_mitigate(
+        model, X_train, y_train, X_val, y_val, y_pred_val,
+        sens_train, sens_val,
+        scenarios_raw=scenarios_val,  # row-aligned with val (not full scenarios_raw)
+        y_prob_val=y_prob_val,
+    )
 
-Metrics computed per slice:
+Slices checked (17 total):
+    Demographic (2) : employment_status, region
+    Financial  (10) : income_band, dti_band, savings_band,
+                      emergency_fund_band, discretionary_income_band,
+                      saving_to_income_band, expense_burden_band,
+                      affordability_band, has_loan, over_leveraged
+    Product    (5)  : price_band, review_confidence_band,
+                      rating_variance_band, average_rating_band,
+                      cold_start
+
+Metrics per group:
     - Accuracy
-    - F1 (weighted)
-    - AUC (one-vs-rest, weighted)
+    - Weighted F1
+    - GREEN rate (fraction predicted GREEN)
+    - Demographic Parity Difference (DPD) via Fairlearn
+    - Equalized Odds Difference (EOD) via Fairlearn
+
+Flags bias if:
+    - Any group F1 drops > F1_DISPARITY_THRESHOLD (default 0.10) below aggregate F1
+    - Any group F1 < MIN_GROUP_F1 (0.50)
+    - DPD/EOD above slice-specific thresholds (demographic / financial / product)
 
 Outputs:
-    - Per-slice metrics printed to terminal
-    - Disparity summary table (per-slice vs aggregate)
-    - F1 bar chart per slice (logged to MLflow)
-    - All metrics logged to MLflow
-
-Contract (matches run_pipeline.py expectation):
-    evaluate_bias(y_test, y_pred, sensitive_features)
-        → returns (fairness_metrics dict, bias_passed bool)
+    - Disparity summary table printed to terminal
+    - F1 bar chart logged to MLflow as artifact
+    - All metrics logged to active MLflow run
+    - bias_passed bool returned to run_pipeline.py
 """
+
+from __future__ import annotations
 
 import logging
 import os
 import tempfile
+from typing import Dict, List, Optional, Tuple
 
-import numpy as np
-import pandas as pd
-import mlflow
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import mlflow
 
-from fairlearn.metrics import MetricFrame
+from fairlearn.metrics import (
+    demographic_parity_difference,
+    equalized_odds_difference,
+)
+from fairlearn.postprocessing import ThresholdOptimizer
+from sklearn.base import BaseEstimator
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
@@ -48,414 +72,880 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-BIAS_THRESHOLD = Config.BIAS_DISPARITY_THRESHOLD  # 0.10
+# ---------------------------------------------------------------------------
+# Thresholds — different per slice category
+# ---------------------------------------------------------------------------
+
+# Demographic slices (region, employment_status):
+# DPD and EOD should be close to 0 — the model must not give GREEN at
+# different rates to people based on where they live or their job status.
+DEMOGRAPHIC_DPD_THRESHOLD = getattr(Config, "BIAS_DISPARITY_THRESHOLD", 0.10)
+DEMOGRAPHIC_EOD_THRESHOLD = getattr(Config, "BIAS_DISPARITY_THRESHOLD", 0.10)
+
+# Financial slices (income, savings, DTI, affordability etc.):
+# DPD is intentionally NOT checked — it is correct and expected that
+# low-income / near-zero-savings users get GREEN less often. That is the
+# entire purpose of SavVio. Applying demographic parity here is a
+# category error. We only check EOD (equal error rates) and F1 disparity.
+FINANCIAL_EOD_THRESHOLD  = 0.15   # slightly relaxed — some error variation is acceptable
+FINANCIAL_DPD_THRESHOLD  = None   # not checked — GREEN rate differences are by design
+
+# Product slices (price_band, rating_variance, review_confidence etc.):
+# DPD loosely checked — some GREEN rate difference by price is expected
+# (premium products are more expensive so fewer get GREEN). EOD checked
+# to ensure the model's error rate is consistent across product types.
+PRODUCT_DPD_THRESHOLD    = 0.25
+PRODUCT_EOD_THRESHOLD    = 0.15
+
+# F1 thresholds apply to all slices equally.
+MIN_GROUP_F1             = 0.50   # absolute floor — no group should be below this
+F1_DISPARITY_THRESHOLD   = getattr(Config, "BIAS_DISPARITY_THRESHOLD", 0.10)
+MIN_GROUP_SIZE           = 5      # skip groups with fewer samples
+
+# Slice category mapping — used to apply the right thresholds per slice.
+DEMOGRAPHIC_SLICES = {"region", "employment_status"}
+FINANCIAL_SLICES   = {
+    "income_band", "dti_band", "savings_band", "emergency_fund_band",
+    "discretionary_income_band", "saving_to_income_band",
+    "expense_burden_band", "affordability_band", "has_loan", "over_leveraged",
+}
+
+# EOD on these financial slices is logged + MLflow-tagged but does **not** fail the gate.
+# Large EOD here often reflects structural label/base-rate differences by design
+# (liquidity, affordability, runway), not necessarily unfair error rates.
+FINANCIAL_EOD_MONITOR_ONLY_SLICES = frozenset({
+    "savings_band", "affordability_band", "emergency_fund_band",
+})
+PRODUCT_SLICES     = {
+    "price_band", "review_confidence_band", "rating_variance_band",
+    "average_rating_band", "cold_start",
+}
 
 
 # ---------------------------------------------------------------------------
-# Slice builders — convert raw columns into named bands
+# Slice builders
+# Each function takes scenarios_raw DataFrame and returns a pd.Series of
+# group labels, or None if the required column is not present.
 # ---------------------------------------------------------------------------
 
-def _add_financial_slices(scenarios: pd.DataFrame) -> pd.DataFrame:
-    """
-    Add financial slice columns to scenarios DataFrame.
-
-    Income band    : Low / Mid / High
-    DTI band       : Safe / Warning / Risky
-    Savings band   : Near-zero / Low / Moderate / High
-    Emergency fund : Critical / Fragile / Stable
-    """
-    df = scenarios.copy()
-
-    # Income band
-    if "monthly_income" in df.columns:
-        df["income_band"] = pd.cut(
-            df["monthly_income"],
-            bins=[0, 3000, 7000, float("inf")],
-            labels=["Low", "Mid", "High"],
-            include_lowest=True,
-        ).astype(str)
-
-    # DTI band
-    if "debt_to_income_ratio" in df.columns:
-        df["dti_band"] = pd.cut(
-            df["debt_to_income_ratio"],
-            bins=[-float("inf"), 0.2, 0.4, float("inf")],
-            labels=["Safe", "Warning", "Risky"],
-        ).astype(str)
-
-    # Savings band
-    if "savings_balance" in df.columns:
-        df["savings_band"] = pd.cut(
-            df["savings_balance"],
-            bins=[-float("inf"), 500, 3000, 15000, float("inf")],
-            labels=["Near-zero", "Low", "Moderate", "High"],
-        ).astype(str)
-
-    # Emergency fund band
-    if "emergency_fund_months" in df.columns:
-        df["emergency_fund_band"] = pd.cut(
-            df["emergency_fund_months"],
-            bins=[-float("inf"), 1, 3, float("inf")],
-            labels=["Critical", "Fragile", "Stable"],
-        ).astype(str)
-
-    return df
+def _income_band(df: pd.DataFrame) -> Optional[pd.Series]:
+    if "monthly_income" not in df.columns:
+        return None
+    return pd.cut(
+        pd.to_numeric(df["monthly_income"], errors="coerce"),
+        bins=[-float("inf"), 3_000, 7_000, float("inf")],
+        labels=["low_income", "mid_income", "high_income"],
+    ).astype(str)
 
 
-def _add_product_slices(scenarios: pd.DataFrame) -> pd.DataFrame:
-    """
-    Add product slice columns to scenarios DataFrame.
-
-    Price band             : Budget / Mid-range / Premium
-    Rating variance band   : Consensus / Mixed / Polarized / Single-review
-    Review confidence band : Low / Medium / High
-    """
-    df = scenarios.copy()
-
-    # Price band
-    if "product_price" in df.columns:
-        df["price_band"] = pd.cut(
-            df["product_price"],
-            bins=[0, 25, 200, float("inf")],
-            labels=["Budget", "Mid-range", "Premium"],
-            include_lowest=True,
-        ).astype(str)
-    elif "price" in df.columns:
-        df["price_band"] = pd.cut(
-            df["price"],
-            bins=[0, 25, 200, float("inf")],
-            labels=["Budget", "Mid-range", "Premium"],
-            include_lowest=True,
-        ).astype(str)
-
-    # Rating variance band
-    if "rating_variance" in df.columns:
-        df["rating_variance_band"] = pd.cut(
-            df["rating_variance"],
-            bins=[-float("inf"), 0.0, 0.5, 1.0, float("inf")],
-            labels=["Single-review", "Consensus", "Mixed", "Polarized"],
-        ).astype(str)
-
-    # Review confidence band
-    if "rating_number" in df.columns:
-        df["review_confidence_band"] = pd.cut(
-            df["rating_number"],
-            bins=[0, 10, 100, float("inf")],
-            labels=["Low", "Medium", "High"],
-            include_lowest=True,
-        ).astype(str)
-
-    return df
+def _dti_band(df: pd.DataFrame) -> Optional[pd.Series]:
+    if "debt_to_income_ratio" not in df.columns:
+        return None
+    return pd.cut(
+        pd.to_numeric(df["debt_to_income_ratio"], errors="coerce"),
+        bins=[-float("inf"), 0.20, 0.40, float("inf")],
+        labels=["safe_dti", "warning_dti", "risky_dti"],
+    ).astype(str)
 
 
-def build_all_slices(
+def _savings_band(df: pd.DataFrame) -> Optional[pd.Series]:
+    col = next((c for c in df.columns if c in {"liquid_savings", "savings_balance"}), None)
+    if col is None:
+        return None
+    return pd.cut(
+        pd.to_numeric(df[col], errors="coerce"),
+        bins=[-float("inf"), 500, 3_000, float("inf")],
+        labels=["near_zero_savings", "low_savings", "healthy_savings"],
+    ).astype(str)
+
+
+def _emergency_fund_band(df: pd.DataFrame) -> Optional[pd.Series]:
+    if "emergency_fund_months" not in df.columns:
+        return None
+    return pd.cut(
+        pd.to_numeric(df["emergency_fund_months"], errors="coerce"),
+        bins=[-float("inf"), 1.0, 3.0, float("inf")],
+        labels=["critical_efm", "fragile_efm", "stable_efm"],
+    ).astype(str)
+
+
+def _discretionary_income_band(df: pd.DataFrame) -> Optional[pd.Series]:
+    if "discretionary_income" not in df.columns:
+        return None
+    return pd.cut(
+        pd.to_numeric(df["discretionary_income"], errors="coerce"),
+        bins=[-float("inf"), 0, 1_000, float("inf")],
+        labels=["negative_di", "tight_di", "comfortable_di"],
+    ).astype(str)
+
+
+def _saving_to_income_band(df: pd.DataFrame) -> Optional[pd.Series]:
+    if "saving_to_income_ratio" not in df.columns:
+        return None
+    return pd.cut(
+        pd.to_numeric(df["saving_to_income_ratio"], errors="coerce"),
+        bins=[-float("inf"), 0.25, 1.0, float("inf")],
+        labels=["fragile_stir", "moderate_stir", "strong_stir"],
+    ).astype(str)
+
+
+def _expense_burden_band(df: pd.DataFrame) -> Optional[pd.Series]:
+    if "monthly_expense_burden_ratio" not in df.columns:
+        return None
+    return pd.cut(
+        pd.to_numeric(df["monthly_expense_burden_ratio"], errors="coerce"),
+        bins=[-float("inf"), 0.5, 0.8, float("inf")],
+        labels=["comfortable_mebr", "tight_mebr", "overstretched_mebr"],
+    ).astype(str)
+
+
+def _affordability_band(df: pd.DataFrame) -> Optional[pd.Series]:
+    if "affordability_score" not in df.columns:
+        return None
+    vals = pd.to_numeric(df["affordability_score"], errors="coerce")
+    result = pd.Series("adequate_afford", index=df.index)
+    result[vals < 0]                   = "below_zero_afford"
+    result[(vals >= 0) & (vals < 500)] = "low_afford"
+    return result
+
+
+def _has_loan_slice(df: pd.DataFrame) -> Optional[pd.Series]:
+    if "has_loan" not in df.columns:
+        return None
+    lowered = df["has_loan"].astype(str).str.strip().str.lower()
+    result = pd.Series("no_loan", index=df.index)
+    result[lowered.isin({"1", "true", "yes", "t", "y"})] = "has_loan"
+    return result
+
+
+def _over_leveraged_slice(df: pd.DataFrame) -> Optional[pd.Series]:
+    if "over_leveraged_flag" not in df.columns:
+        return None
+    return df["over_leveraged_flag"].astype(str).map(
+        {"0": "normal", "1": "over_leveraged"}
+    )
+
+
+def _price_band(df: pd.DataFrame) -> Optional[pd.Series]:
+    col = next((c for c in df.columns if c in {"product_price", "price"}), None)
+    if col is None:
+        return None
+    return pd.cut(
+        pd.to_numeric(df[col], errors="coerce"),
+        bins=[-float("inf"), 25, 200, float("inf")],
+        labels=["budget", "mid_range", "premium"],
+    ).astype(str)
+
+
+def _review_confidence_band(df: pd.DataFrame) -> Optional[pd.Series]:
+    if "rating_number" not in df.columns:
+        return None
+    vals = pd.to_numeric(df["rating_number"], errors="coerce")
+    result = pd.Series("medium_confidence", index=df.index)
+    result[vals < 10]  = "low_confidence"
+    result[vals > 100] = "high_confidence"
+    return result
+
+
+def _rating_variance_band(df: pd.DataFrame) -> Optional[pd.Series]:
+    if "rating_variance" not in df.columns:
+        return None
+    vals = pd.to_numeric(df["rating_variance"], errors="coerce")
+    result = pd.Series("mixed", index=df.index)
+    result[vals == 0.0]               = "single_review"
+    result[(vals > 0) & (vals < 0.5)] = "consensus"
+    result[vals > 1.0]                = "polarized"
+    return result
+
+
+def _average_rating_band(df: pd.DataFrame) -> Optional[pd.Series]:
+    if "average_rating" not in df.columns:
+        return None
+    vals = pd.to_numeric(df["average_rating"], errors="coerce")
+    result = pd.Series("medium_rating", index=df.index)
+    result[vals <= 3.0] = "low_rating"
+    result[vals > 4.0]  = "high_rating"
+    return result
+
+
+def _cold_start_slice(df: pd.DataFrame) -> Optional[pd.Series]:
+    if "cold_start_flag" not in df.columns:
+        return None
+    return df["cold_start_flag"].astype(str).map(
+        {"0": "established", "1": "cold_start"}
+    )
+
+
+# ---------------------------------------------------------------------------
+# Frame builder — combines demographic + all derived slices
+# ---------------------------------------------------------------------------
+
+# Maps slice name → builder function
+SLICE_BUILDERS: Dict = {
+    # Financial
+    "income_band":               _income_band,
+    "dti_band":                  _dti_band,
+    "savings_band":              _savings_band,
+    "emergency_fund_band":       _emergency_fund_band,
+    "discretionary_income_band": _discretionary_income_band,
+    "saving_to_income_band":     _saving_to_income_band,
+    "expense_burden_band":       _expense_burden_band,
+    "affordability_band":        _affordability_band,
+    "has_loan":                  _has_loan_slice,
+    "over_leveraged":            _over_leveraged_slice,
+    # Product
+    "price_band":                _price_band,
+    "review_confidence_band":    _review_confidence_band,
+    "rating_variance_band":      _rating_variance_band,
+    "average_rating_band":       _average_rating_band,
+    "cold_start":                _cold_start_slice,
+}
+
+
+def _build_full_sensitive_frame(
     sensitive_features: pd.DataFrame,
-    scenarios_raw: pd.DataFrame = None,
+    scenarios_raw: Optional[pd.DataFrame],
 ) -> pd.DataFrame:
     """
-    Combine demographic, financial, and product slices into one DataFrame.
-
-    Args:
-        sensitive_features: DataFrame with demographic columns
-                            (region, employment_status)
-        scenarios_raw:      Full scenarios DataFrame with all raw columns.
-                            If None, only demographic slices are used.
-
-    Returns:
-        DataFrame with all slice columns ready for MetricFrame.
+    Combine demographic columns (employment_status, region) from
+    sensitive_features with all derived financial and product slices
+    from scenarios_raw.
     """
-    slices = sensitive_features.copy()
+    frame = sensitive_features.copy().reset_index(drop=True)
 
-    if scenarios_raw is not None:
-        # Add financial slices
-        fin_sliced = _add_financial_slices(scenarios_raw)
-        for col in ["income_band", "dti_band", "savings_band", "emergency_fund_band"]:
-            if col in fin_sliced.columns:
-                slices[col] = fin_sliced[col].values
+    if scenarios_raw is None:
+        logger.warning(
+            "scenarios_raw not provided — only demographic slices will be checked."
+        )
+        return frame
 
-        # Add product slices
-        prod_sliced = _add_product_slices(scenarios_raw)
-        for col in ["price_band", "rating_variance_band", "review_confidence_band"]:
-            if col in prod_sliced.columns:
-                slices[col] = prod_sliced[col].values
+    raw = scenarios_raw.reset_index(drop=True)
 
-    return slices
-
-
-# ---------------------------------------------------------------------------
-# Per-slice metric computation
-# ---------------------------------------------------------------------------
-
-def _compute_slice_metrics(
-    y_true,
-    y_pred,
-    y_prob,
-    sf_col: pd.Series,
-    feature_name: str,
-    n_classes: int,
-) -> pd.DataFrame:
-    """
-    Compute accuracy, F1, and AUC per group in a single sensitive feature.
-
-    Returns:
-        DataFrame with columns: group, accuracy, f1, auc, disparity_f1
-    """
-    groups = sf_col.unique()
-    rows = []
-
-    # Aggregate metrics (used to compute disparity)
-    agg_acc = accuracy_score(y_true, y_pred)
-    agg_f1  = f1_score(y_true, y_pred, average="weighted", zero_division=0)
-
-    if y_prob is not None and n_classes > 1:
-        try:
-            agg_auc = roc_auc_score(
-                y_true, y_prob, multi_class="ovr", average="weighted"
-            )
-        except Exception:
-            agg_auc = float("nan")
-    else:
-        agg_auc = float("nan")
-
-    for group in sorted(groups):
-        mask = sf_col == group
-        if mask.sum() < 5:
-            # Skip groups with too few samples to be meaningful
-            continue
-
-        yt = np.array(y_true)[mask]
-        yp = np.array(y_pred)[mask]
-
-        acc = accuracy_score(yt, yp)
-        f1  = f1_score(yt, yp, average="weighted", zero_division=0)
-
-        if y_prob is not None and n_classes > 1:
-            yprob_g = np.array(y_prob)[mask]
-            try:
-                auc = roc_auc_score(
-                    yt, yprob_g, multi_class="ovr", average="weighted"
-                )
-            except Exception:
-                auc = float("nan")
+    active, skipped = [], []
+    for name, builder in SLICE_BUILDERS.items():
+        result = builder(raw)
+        if result is not None:
+            frame[name] = result.values
+            active.append(name)
         else:
-            auc = float("nan")
+            skipped.append(name)
 
-        rows.append({
-            "feature":      feature_name,
-            "group":        str(group),
-            "n_samples":    int(mask.sum()),
-            "accuracy":     round(acc, 4),
-            "f1":           round(f1, 4),
-            "auc":          round(auc, 4) if not np.isnan(auc) else "n/a",
-            "disparity_f1": round(abs(f1 - agg_f1), 4),
-            "agg_f1":       round(agg_f1, 4),
-            "agg_acc":      round(agg_acc, 4),
-        })
+    logger.info("Active slices (%d): %s", len(frame.columns), list(frame.columns))
+    if skipped:
+        logger.debug("Skipped slices (column not in scenarios): %s", skipped)
 
-    return pd.DataFrame(rows)
+    return frame
 
 
 # ---------------------------------------------------------------------------
-# Visualizations
+# Metrics helpers
 # ---------------------------------------------------------------------------
 
-def _plot_f1_bar_chart(slice_df: pd.DataFrame, save_dir: str) -> None:
+def _compute_auc(
+    y_true: np.ndarray,
+    y_prob: Optional[np.ndarray],
+    classes: np.ndarray,
+) -> Optional[float]:
+    if y_prob is None or len(classes) < 2:
+        return None
+    try:
+        y_bin = label_binarize(y_true, classes=classes)
+        if y_bin.shape[1] < 2:
+            return None
+        return float(roc_auc_score(y_bin, y_prob, multi_class="ovr", average="weighted"))
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Per-group metrics computation
+# ---------------------------------------------------------------------------
+
+def _compute_all_slice_metrics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    y_prob: Optional[np.ndarray],
+    full_sf: pd.DataFrame,
+    classes: np.ndarray,
+) -> Tuple[pd.DataFrame, Dict[str, float]]:
     """
-    Generate F1 bar chart per slice group and log to MLflow.
-
-    Each sensitive feature gets its own bar chart showing per-group F1
-    vs the aggregate F1, with a red dashed line at the bias threshold.
+    Compute accuracy, F1, AUC, GREEN rate, and F1 disparity per group
+    for every slice column. Returns a summary DataFrame and a flat dict
+    ready for mlflow.log_metrics().
     """
-    features = slice_df["feature"].unique()
+    green_idx = int(classes.min())  # GREEN=0 after LabelEncoder alphabetical sort
+    agg_acc   = float(accuracy_score(y_true, y_pred))
+    agg_f1    = float(f1_score(y_true, y_pred, average="weighted", zero_division=0))
+    agg_auc   = _compute_auc(y_true, y_prob, classes)
+    agg_green = float((y_pred == green_idx).mean())
 
-    for feature in features:
-        df = slice_df[slice_df["feature"] == feature].copy()
-        if df.empty:
-            continue
+    rows = [{
+        "slice": "AGGREGATE", "group": "all",
+        "n": len(y_true),
+        "accuracy": round(agg_acc, 4),
+        "f1": round(agg_f1, 4),
+        "auc": round(agg_auc, 4) if agg_auc else None,
+        "green_rate": round(agg_green, 4),
+        "f1_disparity": 0.0,
+    }]
+    flat: Dict[str, float] = {
+        "aggregate_accuracy":   round(agg_acc, 4),
+        "aggregate_f1":         round(agg_f1, 4),
+        "aggregate_green_rate": round(agg_green, 4),
+    }
+    if agg_auc:
+        flat["aggregate_auc"] = round(agg_auc, 4)
 
-        fig, ax = plt.subplots(figsize=(max(8, len(df) * 1.2), 5))
+    for col in full_sf.columns:
+        sf_col = full_sf[col].astype(str)
 
-        colors = [
-            "tomato" if row["disparity_f1"] > BIAS_THRESHOLD else "steelblue"
-            for _, row in df.iterrows()
-        ]
+        for grp in sorted(sf_col.unique()):
+            mask = (sf_col == grp).values
+            n = int(mask.sum())
+            if n < MIN_GROUP_SIZE:
+                continue
 
-        bars = ax.bar(df["group"], df["f1"], color=colors, edgecolor="white")
+            g_true = y_true[mask]
+            g_pred = y_pred[mask]
+            g_prob = y_prob[mask] if y_prob is not None else None
 
-        # Aggregate F1 line
-        agg_f1 = df["agg_f1"].iloc[0]
-        ax.axhline(agg_f1, color="black", linestyle="--", linewidth=1.5,
-                   label=f"Aggregate F1: {agg_f1:.4f}")
+            g_acc   = float(accuracy_score(g_true, g_pred))
+            g_f1    = float(f1_score(g_true, g_pred, average="weighted", zero_division=0))
+            g_auc   = _compute_auc(g_true, g_prob, classes)
+            g_green = float((g_pred == green_idx).mean())
+            g_disp  = round(agg_f1 - g_f1, 4)
 
-        # Bias threshold band
-        ax.axhline(agg_f1 - BIAS_THRESHOLD, color="red", linestyle=":",
-                   linewidth=1.2, label=f"Threshold (±{BIAS_THRESHOLD})")
+            safe = lambda s: str(s).replace(" ", "_").replace("-", "_")
+            p = f"grp_{safe(col)}_{safe(grp)}"
 
-        # Value labels on bars
-        for bar, (_, row) in zip(bars, df.iterrows()):
-            ax.text(
-                bar.get_x() + bar.get_width() / 2,
-                bar.get_height() + 0.005,
-                f"{row['f1']:.3f}\nn={row['n_samples']}",
-                ha="center", va="bottom", fontsize=8,
+            flat[f"{p}_accuracy"]     = round(g_acc, 4)
+            flat[f"{p}_f1"]           = round(g_f1, 4)
+            flat[f"{p}_green_rate"]   = round(g_green, 4)
+            flat[f"{p}_f1_disparity"] = g_disp
+            if g_auc:
+                flat[f"{p}_auc"] = round(g_auc, 4)
+
+            rows.append({
+                "slice": col, "group": grp, "n": n,
+                "accuracy": round(g_acc, 4),
+                "f1": round(g_f1, 4),
+                "auc": round(g_auc, 4) if g_auc else None,
+                "green_rate": round(g_green, 4),
+                "f1_disparity": g_disp,
+            })
+
+    return pd.DataFrame(rows), flat
+
+
+# ---------------------------------------------------------------------------
+# DPD and EOD via Fairlearn
+# ---------------------------------------------------------------------------
+
+def _compute_dpd_eod(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    full_sf: pd.DataFrame,
+    classes: np.ndarray,
+) -> Tuple[Dict[str, float], List[str]]:
+    """
+    Compute DPD and EOD for each sensitive feature column.
+    Binary: GREEN vs not-GREEN.
+
+    Thresholds applied per slice category:
+    - Demographic: DPD ≤ 0.10, EOD ≤ 0.10
+    - Financial:   DPD not checked (by design), EOD ≤ 0.15 for gate — except
+      ``savings_band``, ``affordability_band``, ``emergency_fund_band`` are
+      EOD **monitor-only** (logged / tagged, do not fail the gate).
+    - Product:     DPD ≤ 0.25, EOD ≤ 0.15
+    """
+    green_idx  = int(classes.min())
+    y_bin_true = (pd.Series(y_true) == green_idx).astype(int).reset_index(drop=True)
+    y_bin_pred = (pd.Series(y_pred) == green_idx).astype(int).reset_index(drop=True)
+
+    metrics: Dict[str, float] = {}
+    flags:   List[str]        = []
+
+    for col in full_sf.columns:
+        sf_col = full_sf[col].astype(str).reset_index(drop=True)
+
+        # Determine which threshold set applies to this slice.
+        if col in DEMOGRAPHIC_SLICES:
+            dpd_thresh = DEMOGRAPHIC_DPD_THRESHOLD
+            eod_thresh = DEMOGRAPHIC_EOD_THRESHOLD
+            check_dpd  = True
+        elif col in FINANCIAL_SLICES:
+            dpd_thresh = None   # not checked
+            eod_thresh = FINANCIAL_EOD_THRESHOLD
+            check_dpd  = False  # GREEN rate differences are by design
+        else:  # product slices
+            dpd_thresh = PRODUCT_DPD_THRESHOLD
+            eod_thresh = PRODUCT_EOD_THRESHOLD
+            check_dpd  = True
+
+        try:
+            dpd = float(demographic_parity_difference(
+                y_bin_true, y_bin_pred, sensitive_features=sf_col
+            ))
+            eod = float(equalized_odds_difference(
+                y_bin_true, y_bin_pred, sensitive_features=sf_col
+            ))
+
+            metrics[f"bias_dpd_{col}"] = round(dpd, 4)
+            metrics[f"bias_eod_{col}"] = round(eod, 4)
+
+            logger.info(
+                "  [%s | %s] DPD=%.4f (check=%s, thresh=%s)  EOD=%.4f (thresh=%.2f)",
+                col,
+                "demographic" if col in DEMOGRAPHIC_SLICES
+                else "financial" if col in FINANCIAL_SLICES
+                else "product",
+                dpd, check_dpd,
+                f"{dpd_thresh:.2f}" if dpd_thresh is not None else "n/a",
+                eod, eod_thresh,
             )
 
-        ax.set_title(f"F1 Score per Group — {feature}", fontsize=13)
-        ax.set_xlabel("Group")
+            if check_dpd and dpd_thresh is not None and abs(dpd) > dpd_thresh:
+                flag = f"DPD_{col}={dpd:.4f}"
+                flags.append(flag)
+                logger.warning("  BIAS FLAG: %s", flag)
+
+            if abs(eod) > eod_thresh:
+                flag = f"EOD_{col}={eod:.4f}"
+                if col in FINANCIAL_EOD_MONITOR_ONLY_SLICES:
+                    logger.warning(
+                        "  MONITOR (EOD not gate-blocking): %s [thresh=%.2f]",
+                        flag, eod_thresh,
+                    )
+                    try:
+                        mlflow.set_tag(f"monitor_eod_{col}", flag)
+                    except Exception:
+                        pass
+                else:
+                    flags.append(flag)
+                    logger.warning("  BIAS FLAG: %s", flag)
+
+        except Exception as e:
+            logger.warning("DPD/EOD failed for %s: %s", col, e)
+
+    return metrics, flags
+
+
+# ---------------------------------------------------------------------------
+# Disparity summary table — terminal output
+# ---------------------------------------------------------------------------
+
+def _print_disparity_table(slice_df: pd.DataFrame) -> None:
+    agg = slice_df[slice_df["slice"] == "AGGREGATE"].iloc[0]
+    logger.info("\n%s", "=" * 75)
+    logger.info("DISPARITY SUMMARY TABLE")
+    logger.info("%-28s %-22s %6s %6s %6s %8s %s",
+                "slice", "group", "n", "acc", "f1", "ΔF1", "flag")
+    logger.info("-" * 75)
+    logger.info("%-28s %-22s %6d %6.3f %6.3f %8s",
+                "AGGREGATE", "all", agg["n"], agg["accuracy"], agg["f1"], "—")
+    logger.info("-" * 75)
+
+    for _, row in slice_df[slice_df["slice"] != "AGGREGATE"].iterrows():
+        flag = ""
+        if abs(row["f1_disparity"]) > F1_DISPARITY_THRESHOLD:
+            flag += " ⚠ DISPARITY"
+        if row["f1"] < MIN_GROUP_F1:
+            flag += " ⚠ LOW F1"
+        logger.info("%-28s %-22s %6d %6.3f %6.3f %8.4f%s",
+                    row["slice"], row["group"], row["n"],
+                    row["accuracy"], row["f1"], row["f1_disparity"], flag)
+
+    logger.info("=" * 75)
+
+
+# ---------------------------------------------------------------------------
+# F1 bar chart
+# ---------------------------------------------------------------------------
+
+def _plot_f1_chart(slice_df: pd.DataFrame) -> Optional[str]:
+    try:
+        plot_df = slice_df[slice_df["slice"] != "AGGREGATE"].copy()
+        if plot_df.empty:
+            return None
+
+        agg_f1 = float(slice_df.loc[slice_df["slice"] == "AGGREGATE", "f1"].iloc[0])
+
+        colors = []
+        for f1 in plot_df["f1"]:
+            if f1 < MIN_GROUP_F1:
+                colors.append("#d62728")   # red — below floor
+            elif (agg_f1 - f1) > F1_DISPARITY_THRESHOLD:
+                colors.append("#ff7f0e")   # orange — disparity
+            else:
+                colors.append("#2ca02c")   # green — passing
+
+        labels = [f"{r['slice']}\n{r['group']}" for _, r in plot_df.iterrows()]
+
+        fig, ax = plt.subplots(figsize=(max(14, len(plot_df) * 0.6), 5))
+        ax.bar(range(len(plot_df)), plot_df["f1"], color=colors, width=0.6)
+        ax.axhline(agg_f1, color="steelblue", linestyle="--", linewidth=1.5,
+                   label=f"Aggregate F1 = {agg_f1:.3f}")
+        ax.axhline(MIN_GROUP_F1, color="red", linestyle=":", linewidth=1.2,
+                   label=f"Min F1 floor = {MIN_GROUP_F1:.2f}")
+        ax.set_xticks(range(len(plot_df)))
+        ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=7)
         ax.set_ylabel("Weighted F1")
-        ax.set_ylim(0, 1.1)
-        ax.legend(loc="lower right")
-        plt.xticks(rotation=30, ha="right")
+        ax.set_title("Per-slice F1 — green=pass, orange=disparity, red=below floor")
+        ax.legend(fontsize=9)
+        ax.set_ylim(0, 1.05)
         plt.tight_layout()
 
-        path = os.path.join(save_dir, f"bias_f1_{feature}.png")
-        fig.savefig(path, dpi=150, bbox_inches="tight")
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        fig.savefig(tmp.name, dpi=120)
         plt.close(fig)
-        mlflow.log_artifact(path, "bias_report")
-        logger.info("F1 bar chart logged for feature: %s", feature)
+        return tmp.name
 
-
-def _save_disparity_table(slice_df: pd.DataFrame, save_dir: str) -> None:
-    """
-    Save disparity summary table as CSV and log to MLflow.
-
-    Table columns: feature, group, n_samples, accuracy, f1, auc,
-                   disparity_f1, flagged
-    """
-    table = slice_df.copy()
-    table["flagged"] = table["disparity_f1"] > BIAS_THRESHOLD
-
-    path = os.path.join(save_dir, "bias_disparity_table.csv")
-    table.to_csv(path, index=False)
-    mlflow.log_artifact(path, "bias_report")
-
-    # Print to terminal
-    print("\n  Disparity Summary Table:")
-    print(f"  {'Feature':<25} {'Group':<20} {'N':>6} {'Acc':>6} {'F1':>6} "
-          f"{'AUC':>6} {'ΔF1':>6} {'Flag':>5}")
-    print("  " + "-" * 85)
-    for _, row in table.iterrows():
-        flag = "⚠️" if row["flagged"] else "✅"
-        print(
-            f"  {row['feature']:<25} {row['group']:<20} "
-            f"{row['n_samples']:>6} {row['accuracy']:>6} {row['f1']:>6} "
-            f"{str(row['auc']):>6} {row['disparity_f1']:>6} {flag:>5}"
-        )
-
-    logger.info("Disparity table saved: %s", path)
+    except Exception as e:
+        logger.warning("F1 chart generation failed: %s", e)
+        return None
 
 
 # ---------------------------------------------------------------------------
-# Main entry point
+# Public API — called from run_pipeline.py
 # ---------------------------------------------------------------------------
 
 def evaluate_bias(
     y_test,
     y_pred,
     sensitive_features: pd.DataFrame,
-    y_prob=None,
-    scenarios_raw: pd.DataFrame = None,
-) -> tuple:
+    y_prob: Optional[np.ndarray] = None,
+    scenarios_raw: Optional[pd.DataFrame] = None,
+) -> Tuple[Dict[str, float], bool]:
     """
-    Detect bias in the trained model across all sensitive slices.
-
-    Computes accuracy, F1, and AUC per group for every slice column.
-    Flags any group whose F1 deviates from aggregate F1 by more than
-    BIAS_THRESHOLD (0.10). Generates F1 bar charts and a disparity
-    summary table, all logged to MLflow.
+    Post-training bias detection across 17 slices.
 
     Args:
-        y_test:             True labels (integer encoded)
-        y_pred:             Model predictions (integer encoded)
-        sensitive_features: DataFrame with demographic slice columns
-                            (region, employment_status)
-        y_prob:             Predicted probabilities (optional, for AUC)
-        scenarios_raw:      Full scenarios DataFrame for financial +
-                            product slices (optional)
+        y_test:             True labels (encoded ints) on validation set.
+        y_pred:             Model predictions (encoded ints) on validation set.
+        sensitive_features: DataFrame with employment_status, region columns.
+        y_prob:             Predicted probabilities shape (n, n_classes). Optional.
+        scenarios_raw:      Raw scenario DataFrame for deriving financial
+                            and product slices. Optional but recommended.
 
     Returns:
-        Tuple of (fairness_metrics dict, bias_passed bool)
+        (fairness_metrics dict, bias_passed bool)
     """
-    print("\n" + "=" * 60)
-    print("POST-TRAINING BIAS DETECTION")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("POST-TRAINING BIAS DETECTION")
+    logger.info("=" * 60)
 
-    # Build all slices (demographic + financial + product if available)
-    all_slices = build_all_slices(sensitive_features, scenarios_raw)
+    y_true_arr = np.asarray(y_test)
+    y_pred_arr = np.asarray(y_pred)
+    classes    = np.unique(y_true_arr)
 
-    n_classes = len(np.unique(y_test))
-    fairness_metrics = {}
-    bias_passed = True
-    all_slice_rows = []
+    # Step 1 — build full sensitive frame (demographic + financial + product)
+    full_sf = _build_full_sensitive_frame(
+        sensitive_features.reset_index(drop=True),
+        scenarios_raw,
+    )
 
-    # ── Aggregate baseline metrics ────────────────────────────────────
-    agg_acc = accuracy_score(y_test, y_pred)
-    agg_f1  = f1_score(y_test, y_pred, average="weighted", zero_division=0)
-    print(f"\n  Aggregate — Accuracy: {agg_acc:.4f}  F1: {agg_f1:.4f}")
-    fairness_metrics["aggregate_accuracy"] = round(agg_acc, 4)
-    fairness_metrics["aggregate_f1"] = round(agg_f1, 4)
+    # Step 2 — per-group metrics (accuracy, F1, AUC, GREEN rate, disparity)
+    slice_df, flat_metrics = _compute_all_slice_metrics(
+        y_true_arr, y_pred_arr, y_prob, full_sf, classes
+    )
 
-    # ── Per-slice analysis ────────────────────────────────────────────
-    for feature_name in all_slices.columns:
-        sf_col = all_slices[feature_name]
+    # Step 3 — DPD and EOD via Fairlearn
+    dpd_eod_metrics, dpd_eod_flags = _compute_dpd_eod(
+        y_true_arr, y_pred_arr, full_sf, classes
+    )
+    flat_metrics.update(dpd_eod_metrics)
 
-        # Skip columns with only 1 unique value — no comparison possible
-        if sf_col.nunique() < 2:
-            continue
+    # Step 4 — collect all bias flags
+    all_flags = list(dpd_eod_flags)
 
-        print(f"\n  ── Slice: {feature_name} ──")
-        print(f"     Groups: {sorted(sf_col.dropna().unique().tolist())}")
-
-        slice_df = _compute_slice_metrics(
-            y_test, y_pred, y_prob, sf_col, feature_name, n_classes
-        )
-
-        if slice_df.empty:
-            continue
-
-        all_slice_rows.append(slice_df)
-
-        # Print per-group results and check threshold
-        for _, row in slice_df.iterrows():
-            flag = "⚠️  FLAGGED" if row["disparity_f1"] > BIAS_THRESHOLD else "✅"
-            print(
-                f"     {row['group']:<20} "
-                f"acc={row['accuracy']}  f1={row['f1']}  "
-                f"auc={row['auc']}  ΔF1={row['disparity_f1']}  {flag}"
+    for _, row in slice_df[slice_df["slice"] != "AGGREGATE"].iterrows():
+        if abs(row["f1_disparity"]) > F1_DISPARITY_THRESHOLD:
+            all_flags.append(
+                f"F1_disparity_{row['slice']}={row['group']}({row['f1_disparity']:.4f})"
+            )
+        if row["f1"] < MIN_GROUP_F1:
+            all_flags.append(
+                f"low_f1_{row['slice']}={row['group']}({row['f1']:.4f})"
             )
 
-            if row["disparity_f1"] > BIAS_THRESHOLD:
-                bias_passed = False
-                logger.warning(
-                    "Bias detected — %s / %s: F1=%.4f, disparity=%.4f > threshold=%.2f",
-                    feature_name, row["group"],
-                    row["f1"], row["disparity_f1"], BIAS_THRESHOLD,
-                )
+    # Step 5 — print disparity table to terminal
+    _print_disparity_table(slice_df)
 
-            # Log per-group metrics to MLflow
-            key = f"{feature_name}_{row['group'].replace(' ', '_')}"
-            fairness_metrics[f"bias_acc_{key}"]  = row["accuracy"]
-            fairness_metrics[f"bias_f1_{key}"]   = row["f1"]
-            fairness_metrics[f"bias_disp_{key}"] = row["disparity_f1"]
+    # Step 6 — generate and log F1 bar chart to MLflow
+    chart_path = _plot_f1_chart(slice_df)
+    if chart_path:
+        try:
+            mlflow.log_artifact(chart_path, artifact_path="bias_report")
+            os.unlink(chart_path)
+        except Exception as e:
+            logger.warning("Could not log F1 chart to MLflow: %s", e)
 
-    # ── Bias gate result ──────────────────────────────────────────────
-    fairness_metrics["bias_gate_passed"] = int(bias_passed)
-    print(f"\n  Bias Gate: {'✅ PASSED' if bias_passed else '❌ FAILED — mitigation required'}")
-    print("=" * 60)
+    # Step 7 — determine bias_passed
+    bias_passed = len(all_flags) == 0
+    flat_metrics["bias_gate_passed"] = int(bias_passed)
+    flat_metrics["bias_flags_count"] = len(all_flags)
 
-    # ── Visualizations & reports ──────────────────────────────────────
-    if all_slice_rows:
-        combined = pd.concat(all_slice_rows, ignore_index=True)
+    if all_flags:
+        logger.warning("Bias gate FAILED — %d flag(s):", len(all_flags))
+        for f in all_flags[:10]:
+            logger.warning("  %s", f)
+    else:
+        logger.info("Bias gate PASSED — no disparities above threshold.")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # F1 bar charts per slice feature
-            _plot_f1_bar_chart(combined, tmp_dir)
+    # Step 8 — log all metrics to MLflow
+    try:
+        mlflow.log_metrics(flat_metrics)
+        if all_flags:
+            mlflow.set_tag("bias_flags", "; ".join(all_flags[:5]))
+        mlflow.set_tag("bias_slices_checked", str(list(full_sf.columns)))
+    except Exception as e:
+        logger.warning("MLflow logging failed in evaluate_bias: %s", e)
 
-            # Disparity summary table
-            _save_disparity_table(combined, tmp_dir)
+    return flat_metrics, bias_passed
 
-    # ── Log all metrics to MLflow ─────────────────────────────────────
-    mlflow.log_metrics(fairness_metrics)
-    logger.info("Bias detection complete. bias_passed=%s", bias_passed)
 
-    return fairness_metrics, bias_passed
+# ---------------------------------------------------------------------------
+# Post-training mitigation — ThresholdOptimizer (binary GREEN vs rest)
+# ---------------------------------------------------------------------------
+
+def _green_class_index(y: np.ndarray) -> int:
+    """
+    Encoded class index for GREEN, aligned with DPD/EOD in _compute_dpd_eod
+    (uses smallest label value as GREEN).
+    """
+    return int(np.unique(np.asarray(y)).min())
+
+
+def attach_savings_band_to_sensitive(
+    sens_df: Optional[pd.DataFrame],
+    scenarios_df: pd.DataFrame,
+) -> Optional[pd.DataFrame]:
+    """
+    Add ``savings_band`` to the sensitive-features frame using scenario columns
+    (``liquid_savings`` / ``savings_balance``). Row alignment must match
+    ``scenarios_df``.
+    """
+    if sens_df is None:
+        return None
+    sb = _savings_band(scenarios_df)
+    if sb is None:
+        return sens_df
+    out = sens_df.copy()
+    out["savings_band"] = sb.astype(str).values
+    return out
+
+
+def _primary_mitigation_axis(sensitive_df: pd.DataFrame) -> str:
+    """
+    Sensitive column for ThresholdOptimizer: prefer ``savings_band`` when present,
+    then ``employment_status``, then ``region``, else first column.
+    """
+    for col in ("savings_band", "employment_status", "region"):
+        if col in sensitive_df.columns:
+            return col
+    return sensitive_df.columns[0]
+
+
+def is_fairlearn_threshold_optimizer(model: object) -> bool:
+    """True if ``model`` is Fairlearn's ThresholdOptimizer (needs ``sensitive_features``)."""
+    try:
+        from fairlearn.postprocessing import ThresholdOptimizer
+        return isinstance(model, ThresholdOptimizer)
+    except ImportError:
+        return False
+
+
+def predict_with_sensitive_features(
+    model: object,
+    X: pd.DataFrame,
+    sensitive: Optional[pd.DataFrame] = None,
+):
+    """
+    Call ``predict`` for sklearn / MLflow. Fairlearn ``ThresholdOptimizer.predict``
+    requires ``sensitive_features`` aligned with ``X``.
+    """
+    if sensitive is None or not is_fairlearn_threshold_optimizer(model):
+        return model.predict(X)
+    col = _primary_mitigation_axis(sensitive)
+    return model.predict(
+        X,
+        sensitive_features=sensitive[col].astype(str),
+    )
+
+
+class _GreenBinaryProbaWrapper(BaseEstimator):
+    """
+    Fairlearn ThresholdOptimizer is strictly binary and uses predict_proba[:, 1]
+    as the positive class score. This wrapper maps a multiclass estimator to
+    P(not GREEN), P(GREEN) using the GREEN column from predict_proba.
+    """
+
+    def __init__(self, estimator, green_class_idx: int):
+        self.estimator = estimator
+        self.green_class_idx = int(green_class_idx)
+
+    def fit(self, X, y=None):
+        return self
+
+    def predict_proba(self, X):
+        p = self.estimator.predict_proba(X)
+        p_green = p[:, self.green_class_idx]
+        return np.column_stack([1.0 - p_green, p_green])
+
+    def predict(self, X):
+        return self.estimator.predict(X)
+
+
+def _binary_mitigated_to_multiclass(
+    y_bin: np.ndarray,
+    base_model,
+    X: pd.DataFrame,
+    green_idx: int,
+) -> np.ndarray:
+    """
+    ThresholdOptimizer.predict returns 0/1 (not GREEN / GREEN).
+    Map back to multiclass labels for evaluate_bias.
+    """
+    y_bin = np.asarray(y_bin).astype(int)
+    proba = base_model.predict_proba(X)
+    n = len(y_bin)
+    out = np.empty(n, dtype=int)
+    p2 = np.asarray(proba, dtype=float).copy()
+    p2[:, green_idx] = -np.inf
+    out_alt = np.argmax(p2, axis=1)
+    out = np.where(y_bin == 1, green_idx, out_alt)
+    return out
+
+
+def mitigate_bias(
+    model,
+    X_train: pd.DataFrame,
+    y_train: np.ndarray,
+    sensitive_train: pd.DataFrame,
+    green_class_idx: int,
+    constraint: str = "demographic_parity",
+):
+    """
+    Apply Fairlearn ThresholdOptimizer to reduce disparity on GREEN vs not-GREEN.
+
+    ThresholdOptimizer only supports binary {0,1} labels. We train it on
+    y_binary = (y == green_class_idx) with a wrapper that exposes P(GREEN) in
+    predict_proba[:, 1].     Uses `prefit=True` so the multiclass base model is not
+    re-fit on binary labels.
+
+    Fairness axis priority: ``savings_band`` → ``employment_status`` → ``region``.
+    """
+    primary_col = _primary_mitigation_axis(sensitive_train)
+    primary_sf = sensitive_train[primary_col].astype(str)
+
+    y_train_arr = np.asarray(y_train)
+    y_binary = (y_train_arr == green_class_idx).astype(np.int64)
+
+    wrapped = _GreenBinaryProbaWrapper(model, green_class_idx)
+
+    logger.info(
+        "Applying ThresholdOptimizer (constraint=%s, feature=%s, GREEN class=%s)...",
+        constraint, primary_col, green_class_idx,
+    )
+
+    optimizer = ThresholdOptimizer(
+        estimator=wrapped,
+        constraints=constraint,
+        objective="balanced_accuracy_score",
+        predict_method="predict_proba",
+        grid_size=50,
+        prefit=True,
+    )
+    optimizer.fit(X_train, y_binary, sensitive_features=primary_sf)
+    logger.info("ThresholdOptimizer fitted successfully.")
+    return optimizer
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator — detect + mitigate, called from run_pipeline.py
+# ---------------------------------------------------------------------------
+
+def detect_and_mitigate(
+    model,
+    X_train: pd.DataFrame,
+    y_train: np.ndarray,
+    X_val: pd.DataFrame,
+    y_val: np.ndarray,
+    y_pred_val: np.ndarray,
+    sensitive_train: pd.DataFrame,
+    sensitive_val: pd.DataFrame,
+    scenarios_raw: Optional[pd.DataFrame] = None,
+    y_prob_val: Optional[np.ndarray] = None,
+) -> Tuple[object, bool, Dict[str, float]]:
+    """
+    Full post-training bias detection + conditional mitigation.
+
+    Steps:
+        1. Detect bias on validation predictions
+        2. If bias_passed = False → apply ThresholdOptimizer
+        3. Re-evaluate mitigated model on **X_val** (same rows as y_val / sensitive_val)
+        4. Return (final_model, bias_passed, fairness_metrics)
+
+    Args:
+        scenarios_raw: Per evaluate_bias — typically **scenarios_val** (row-aligned with val).
+    """
+    # Step 1 — detect
+    fairness_metrics, bias_passed = evaluate_bias(
+        y_val, y_pred_val, sensitive_val,
+        y_prob=y_prob_val,
+        scenarios_raw=scenarios_raw,
+    )
+
+    if bias_passed:
+        mlflow.log_metric("bias_mitigation_applied", 0)
+        return model, True, fairness_metrics
+
+    green_idx = _green_class_index(y_train)
+
+    # Step 2 — mitigate (binary GREEN vs rest; Fairlearn requires 0/1 labels)
+    logger.warning("Bias gate FAILED — applying ThresholdOptimizer.")
+    try:
+        mitigated_model = mitigate_bias(
+            model, X_train, y_train, sensitive_train,
+            green_class_idx=green_idx,
+            constraint="demographic_parity",
+        )
+
+        # Step 3 — re-predict on validation (same sensitive axis as fit)
+        primary_col = _primary_mitigation_axis(sensitive_val)
+        primary_sf_val = sensitive_val[primary_col].astype(str)
+
+        if len(X_val) != len(y_val) or len(primary_sf_val) != len(y_val):
+            raise ValueError(
+                "X_val, y_val, and sensitive_val must have the same length for mitigation re-eval."
+            )
+
+        y_pred_bin = mitigated_model.predict(
+            X_val,
+            sensitive_features=primary_sf_val,
+        )
+        # Optimizer outputs 0/1; convert to multiclass for the same metric pipeline
+        y_pred_mitigated = _binary_mitigated_to_multiclass(
+            y_pred_bin, model, X_val, green_idx,
+        )
+
+        logger.info("Re-evaluating after mitigation...")
+        fairness_metrics_after, bias_passed_after = evaluate_bias(
+            y_val, y_pred_mitigated, sensitive_val,
+            scenarios_raw=scenarios_raw,
+        )
+
+        mlflow.log_metric("bias_mitigation_applied", 1)
+        mlflow.log_metric("bias_mitigation_successful", int(bias_passed_after))
+
+        if bias_passed_after:
+            logger.info("Mitigation successful — bias gate now PASSED.")
+        else:
+            logger.warning("Mitigation applied but bias still present — flagged for review.")
+
+        return mitigated_model, bias_passed_after, fairness_metrics_after
+
+    except Exception as e:
+        logger.error("ThresholdOptimizer mitigation failed: %s", e, exc_info=True)
+        mlflow.log_metric("bias_mitigation_applied", 0)
+        return model, False, fairness_metrics

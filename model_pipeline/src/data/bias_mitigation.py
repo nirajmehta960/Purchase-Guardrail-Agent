@@ -1,640 +1,561 @@
 """
 Pre-Training Bias Mitigation for SavVio Model Pipeline.
 
-This module applies all bias mitigations BEFORE model training.
-It is called inside training_data_generator.py after scenarios are generated
-and before feature engineering and labeling.
+Called from training_data_generator.py BEFORE scenario sampling.
+Also used by run_pipeline.py via apply_all_mitigations().
 
-Mitigations applied:
-    Financial:
-        1. Oversample near-zero savings users (savings_balance < $500)
-        2. Compute missing financial_runway column from liquid_savings / monthly_expenses
-        3. Flag and handle debt-burdened users (monthly_emi > monthly_income)
-        4. Assign sample weights for employment status groups
+Addresses every flag raised by the bias detection pipeline:
 
-    Product:
-        5. Oversample premium products (price > $200)
-        6. Assign confidence weights based on rating_number
-        7. Simplify category into parent categories
-        8. Create brand_tier feature from details column
+FINANCIAL FLAGS:
+  - savings_balance Near-zero: 0.0%  → synthetic augmentation + oversample
+  - liquid_savings  Near-zero: 0.0%  → derived from savings_balance; fixed upstream
+  - employment_status Unemployed/Student: ~10%  → oversample to ≥12%
+  - EMI > monthly_income: 23.99%     → triage + conditional keep/flag
 
-    Review:
-        9. Balance rating sentiment buckets (positive / neutral / negative)
-        10. Down-weight unverified reviews
-        11. Create review_quality_score from verified + helpful_vote + text length
+PRODUCT FLAGS:
+  - category: 80+ leaf nodes all <5% → collapse to 3-level taxonomy
+  - rating_number Low-confidence: 44.6% dominance → confidence-band stratify
+  - Premium price: 3.96%             → oversample premium tier
+
+REVIEW FLAGS:
+  - rating Neutral: 4.89%            → oversample to ≥7%
+  - verified_purchase False: 4.16%   → oversample to ≥7%
+  - helpful_vote None: 80.8%         → sample weight (not oversample)
+  - user_id uniqueness 83.4%         → per-user review cap
 
 Usage:
-    from data.bias_mitigation import (
-        mitigate_financial_bias,
-        mitigate_product_bias,
-        mitigate_review_bias,
-        apply_all_mitigations,
-    )
+    from data.bias_mitigation import apply_all_mitigations
 
-    # Apply all at once (recommended)
-    financial_df, products_df, reviews_df = apply_all_mitigations(
-        financial_df, products_df, reviews_df
-    )
-
-    # Or apply individually
-    financial_df = mitigate_financial_bias(financial_df)
-    products_df  = mitigate_product_bias(products_df)
-    reviews_df   = mitigate_review_bias(reviews_df)
+    fin_df, prod_df, rev_df = apply_all_mitigations(fin_df, prod_df, rev_df)
 """
 
-import logging
-import pandas as pd
-import numpy as np
-from sklearn.utils import resample
-from typing import Tuple, Optional
+from __future__ import annotations
 
-from config import Config
+import logging
+from typing import Tuple
+
+import numpy as np
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-
 # ---------------------------------------------------------------------------
-# Constants — thresholds aligned with data pipeline bias detection findings
-# ---------------------------------------------------------------------------
-
-# Financial thresholds
-NEAR_ZERO_SAVINGS_THRESHOLD = 500       # savings_balance < $500 = near-zero
-NEAR_ZERO_SAVINGS_TARGET_PCT = 0.10     # oversample to 10% of training data
-DEBT_BURDEN_EMI_MULTIPLIER = 3.0        # EMI > 3x income = likely data error, remove
-FINANCIAL_RUNWAY_CAP = 120              # cap at 120 months (10 years)
-
-# Product thresholds
-PREMIUM_PRICE_THRESHOLD = 200           # price > $200 = premium
-PREMIUM_TARGET_PCT = 0.15              # oversample premium to 15% of training data
-LOW_CONFIDENCE_REVIEWS = 10            # rating_number < 10 = low confidence
-MED_CONFIDENCE_REVIEWS = 100           # rating_number 10-100 = medium confidence
-LOW_CONFIDENCE_WEIGHT = 0.3
-MED_CONFIDENCE_WEIGHT = 0.7
-HIGH_CONFIDENCE_WEIGHT = 1.0
-
-# Review thresholds
-UNVERIFIED_REVIEW_WEIGHT = 0.5         # unverified reviews get half weight
-HIGH_HELPFUL_VOTE_THRESHOLD = 10       # > 10 helpful votes = high quality review
-MIN_QUALITY_REVIEW_LENGTH = 100        # review text > 100 chars = detailed review
-
-
-# ---------------------------------------------------------------------------
-# MITIGATION 1 — Financial Bias
+# Constants
 # ---------------------------------------------------------------------------
 
-def mitigate_financial_bias(
-    df: pd.DataFrame,
-    random_state: int = Config.RANDOM_STATE,
+# Target minimum representation after mitigation (as fraction of dataset).
+MIN_EMPLOYMENT_SHARE = 0.12    # Unemployed and Student each
+MIN_NEUTRAL_SHARE    = 0.07    # Neutral ratings
+MIN_UNVERIFIED_SHARE = 0.07    # Unverified purchases
+MIN_PREMIUM_SHARE    = 0.06    # Premium products
+
+# EMI sanity: flag but keep rows where EMI > income (vulnerable slice).
+# Only drop if EMI is clearly erroneous (e.g. 10x income — data entry error).
+EMI_HARD_DROP_MULTIPLIER = 10.0
+
+# Per-user review cap: prevents prolific reviewers from dominating.
+MAX_REVIEWS_PER_USER = 50
+
+# Random seed for all sampling operations — must match Config.RANDOM_STATE.
+RANDOM_STATE = 42
+
+# Near-zero savings: define as savings_balance < $200.
+NEAR_ZERO_SAVINGS_THRESHOLD = 200.0
+
+
+def _safe_share(df: pd.DataFrame, col: str, mask_fn) -> float:
+    """Return masked share in [0,1], safely handling empty/missing columns."""
+    if df.empty or col not in df.columns:
+        return 0.0
+    mask = mask_fn(df[col])
+    return float(mask.sum()) / float(len(df)) if len(df) else 0.0
+
+# ---------------------------------------------------------------------------
+# Stage 1: Financial data repair + rebalancing
+# ---------------------------------------------------------------------------
+
+def repair_emi_anomalies(fin_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Triage EMI > monthly_income rows:
+      - EMI > 10× income  → zero out EMI (data entry error — not dropped,
+                            user profile is preserved with corrected EMI)
+      - EMI > income but ≤ 10×  → legitimate vulnerable slice,
+                                   add over_leveraged_flag = 1
+
+    Robust to missing monthly_emi or monthly_income columns.
+    """
+    if "monthly_income" not in fin_df.columns or "monthly_emi" not in fin_df.columns:
+        logger.info("repair_emi_anomalies: missing income or EMI column — skipping.")
+        fin_df["over_leveraged_flag"] = 0
+        return fin_df
+
+    income = fin_df["monthly_income"]
+    emi    = fin_df["monthly_emi"]
+
+    hard_error = (emi > 0) & (income > 0) & (emi > EMI_HARD_DROP_MULTIPLIER * income)
+    n_errors = int(hard_error.sum())
+    if n_errors:
+        logger.warning(
+            "Zeroing monthly_emi for %d rows where EMI > %.0f× income (data entry error).",
+            n_errors, EMI_HARD_DROP_MULTIPLIER,
+        )
+        fin_df.loc[hard_error, "monthly_emi"] = 0.0
+
+    over_leveraged = (fin_df["monthly_emi"] > 0) & (income > 0) & (fin_df["monthly_emi"] > income)
+    fin_df["over_leveraged_flag"] = over_leveraged.astype(int)
+    logger.info(
+        "Flagged %d over-leveraged rows (EMI > income) as vulnerable slice.",
+        int(over_leveraged.sum()),
+    )
+    return fin_df
+
+
+def augment_near_zero_savings(
+    fin_df: pd.DataFrame,
+    rng: np.random.Generator,
 ) -> pd.DataFrame:
     """
-    Apply all financial pre-training bias mitigations.
+    The bias detector found 0 users with Near-zero savings_balance (<$200).
+    This is almost certainly a Kaggle dataset artifact — real populations
+    always contain people with minimal liquid savings.
 
-    Steps:
-        1. Compute financial_runway (100% missing in detected data)
-        2. Flag and clean debt-burdened users (EMI > income)
-        3. Oversample near-zero savings users to 10% of dataset
-        4. Assign sample_weight for employment status groups
+    Strategy: synthesise a small cohort (≈3% of dataset) by:
+      1. Sampling from the Low-income band (monthly_income < $3,000).
+      2. Replacing savings_balance with a draw from Uniform(0, 200).
+      3. Recalculating liquid_savings downstream (financial_features.py
+         will re-derive it; we set a placeholder of 0 here).
 
-    Args:
-        df: Financial profiles DataFrame loaded from DB or CSV.
-        random_state: Seed for reproducibility.
-
-    Returns:
-        Mitigated DataFrame with new columns:
-            financial_runway, financial_runway_band,
-            debt_burden_flag, sample_weight
+    NOTE: Synthetic rows get synthetic_flag=1 so they can be identified
+    and excluded from any held-out evaluation set.
     """
-    logger.info("--- Applying Financial Bias Mitigations ---")
-    df = df.copy()
-    original_rows = len(df)
+    if fin_df.empty:
+        logger.info("augment_near_zero_savings: empty DataFrame — skipping.")
+        return fin_df
+    if "monthly_income" not in fin_df.columns:
+        logger.info("augment_near_zero_savings: missing monthly_income column — skipping.")
+        return fin_df
 
-    # ------------------------------------------------------------------
-    # Step 1: Compute financial_runway (was 100% missing in detection)
-    # ------------------------------------------------------------------
-    # financial_runway = how many months the user can survive without income
-    # Formula: liquid_savings / monthly_expenses
-    # Why: This is the most direct signal for SavVio's Red/Yellow/Green decision.
-    # A user with 0.5 months runway should almost never get a Green recommendation.
+    target_n = max(int(len(fin_df) * 0.03), 500)
+    low_income = fin_df[fin_df["monthly_income"] < 3_000]
 
-    if "liquid_savings" in df.columns and "monthly_expenses" in df.columns:
-        df["financial_runway"] = (
-            df["liquid_savings"] / df["monthly_expenses"].replace(0, np.nan)
-        )
-        # Cap at 120 months to prevent extreme outliers from skewing the model
-        df["financial_runway"] = df["financial_runway"].clip(upper=FINANCIAL_RUNWAY_CAP)
+    if len(low_income) == 0:
+        logger.warning("No low-income users found — cannot augment Near-zero savings.")
+        return fin_df
 
-        # Classify into risk bands — these map directly to SavVio's decision logic
-        def _runway_band(months):
-            if pd.isna(months) or months < 1:
-                return "Critical"   # < 1 month → strong Red signal
-            elif months < 3:
-                return "Fragile"    # 1-3 months → Yellow signal
-            else:
-                return "Stable"     # 3+ months → Green allowed
-
-        df["financial_runway_band"] = df["financial_runway"].apply(_runway_band)
-        logger.info(
-            "financial_runway computed — Critical: %d, Fragile: %d, Stable: %d",
-            (df["financial_runway_band"] == "Critical").sum(),
-            (df["financial_runway_band"] == "Fragile").sum(),
-            (df["financial_runway_band"] == "Stable").sum(),
-        )
-        print(f"[MITIGATION] financial_runway computed for {len(df)} users")
-    else:
-        logger.warning("liquid_savings or monthly_expenses not found — skipping financial_runway")
-
-    # ------------------------------------------------------------------
-    # Step 2: Flag and clean debt-burdened users (EMI > monthly_income)
-    # ------------------------------------------------------------------
-    # 23.99% of users had EMI > income in bias detection — unsustainable debt.
-    # These users are a vulnerable slice that should get Red recommendations.
-    # Rows where EMI > 3x income are likely data entry errors — remove them.
-
-    if "monthly_emi" in df.columns and "monthly_income" in df.columns:
-        # Create explicit debt burden flag — gives model a direct signal
-        df["debt_burden_flag"] = (
-            (df["monthly_emi"] > df["monthly_income"]) &
-            (df["monthly_income"] > 0)
-        ).astype(int)
-
-        # Remove rows where EMI > 3x income — these are almost certainly errors
-        # (no lender would approve such loans)
-        error_mask = df["monthly_emi"] > (df["monthly_income"] * DEBT_BURDEN_EMI_MULTIPLIER)
-        n_errors = error_mask.sum()
-        if n_errors > 0:
-            df = df[~error_mask].copy()
-            logger.warning("Removed %d rows where EMI > 3x income (likely data errors)", n_errors)
-            print(f"[MITIGATION] Removed {n_errors} debt error rows (EMI > 3x income)")
-
-        n_debt_burdened = df["debt_burden_flag"].sum()
-        logger.info("Debt burden flag: %d users flagged (EMI > income)", n_debt_burdened)
-        print(f"[MITIGATION] Debt burden flag applied — {n_debt_burdened} vulnerable users flagged")
-    else:
-        logger.warning("monthly_emi or monthly_income not found — skipping debt burden flag")
-
-    # ------------------------------------------------------------------
-    # Step 3: Oversample near-zero savings users to 10% of dataset
-    # ------------------------------------------------------------------
-    # In bias detection: near-zero savings = 0.0% of data (only 1 user!)
-    # SavVio must protect these users — they need Red recommendations for
-    # almost any significant purchase. Without examples, model won't learn this.
-
-    if "savings_balance" in df.columns:
-        vulnerable = df[df["savings_balance"] < NEAR_ZERO_SAVINGS_THRESHOLD]
-        normal = df[df["savings_balance"] >= NEAR_ZERO_SAVINGS_THRESHOLD]
-
-        n_vulnerable = len(vulnerable)
-        target_size = int(len(df) * NEAR_ZERO_SAVINGS_TARGET_PCT)
-
-        if n_vulnerable > 0 and n_vulnerable < target_size:
-            vulnerable_oversampled = resample(
-                vulnerable,
-                replace=True,
-                n_samples=target_size,
-                random_state=random_state,
-            )
-            df = pd.concat([normal, vulnerable_oversampled], ignore_index=True)
-            logger.info(
-                "Near-zero savings oversampled: %d → %d rows (target 10%%)",
-                n_vulnerable, target_size,
-            )
-            print(f"[MITIGATION] Near-zero savings oversampled: {n_vulnerable} → {target_size} rows")
-        elif n_vulnerable == 0:
-            logger.warning("No near-zero savings users found — skipping oversample")
-    else:
-        logger.warning("savings_balance not found — skipping near-zero savings oversample")
-
-    # ------------------------------------------------------------------
-    # Step 4: Assign sample weights for employment status
-    # ------------------------------------------------------------------
-    # Unemployed (9.93%) and Student (9.91%) were flagged as underrepresented.
-    # Up-weighting ensures model pays more attention to these groups
-    # without duplicating rows (unlike oversampling).
-
-    if "employment_status" in df.columns:
-        df["sample_weight"] = 1.0
-
-        # Up-weight underrepresented groups
-        df.loc[df["employment_status"] == "Unemployed", "sample_weight"] = 1.5
-        df.loc[df["employment_status"] == "Student", "sample_weight"] = 1.5
-
-        # Up-weight debt-burdened users if flag exists
-        if "debt_burden_flag" in df.columns:
-            df.loc[df["debt_burden_flag"] == 1, "sample_weight"] = (
-                df.loc[df["debt_burden_flag"] == 1, "sample_weight"] * 2.0
-            )
-
-        logger.info(
-            "Sample weights assigned — mean: %.2f, max: %.2f",
-            df["sample_weight"].mean(),
-            df["sample_weight"].max(),
-        )
-        print(f"[MITIGATION] Sample weights assigned — mean: {df['sample_weight'].mean():.2f}")
-    else:
-        logger.warning("employment_status not found — skipping sample weight assignment")
-
-    logger.info(
-        "Financial mitigation complete: %d → %d rows",
-        original_rows, len(df),
+    sampled = low_income.sample(
+        n=target_n, replace=True, random_state=int(rng.integers(0, 2**31))
     )
-    print(f"[MITIGATION] Financial: {original_rows} → {len(df)} rows after mitigation")
-    return df
+    sampled = sampled.copy()
+    sampled["savings_balance"] = rng.uniform(0, NEAR_ZERO_SAVINGS_THRESHOLD, size=len(sampled))
+    sampled["liquid_savings"]  = sampled["savings_balance"] * 0.90  # near-full liquidity at this level
+    sampled["synthetic_flag"]  = 1
+
+    fin_df["synthetic_flag"] = 0
+    augmented = pd.concat([fin_df, sampled], ignore_index=True)
+    logger.info(
+        "Augmented dataset with %d synthetic Near-zero savings rows (%.1f%% of original).",
+        target_n, target_n / len(fin_df) * 100,
+    )
+    return augmented
 
 
-# ---------------------------------------------------------------------------
-# MITIGATION 2 — Product Bias
-# ---------------------------------------------------------------------------
-
-def mitigate_product_bias(
-    df: pd.DataFrame,
-    random_state: int = Config.RANDOM_STATE,
+def oversample_minority_employment(
+    fin_df: pd.DataFrame,
+    rng: np.random.Generator,
 ) -> pd.DataFrame:
     """
-    Apply all product pre-training bias mitigations.
+    Oversample Unemployed and Student status groups to ≥ MIN_EMPLOYMENT_SHARE each.
 
-    Steps:
-        1. Oversample premium products (price > $200) to 15% of dataset
-        2. Assign confidence_weight based on rating_number
-        3. Simplify category into parent categories
-        4. Create brand_tier feature from details column
-
-    Args:
-        df: Products DataFrame loaded from DB.
-        random_state: Seed for reproducibility.
-
-    Returns:
-        Mitigated DataFrame with new columns:
-            confidence_weight, category_simplified, brand_tier
+    Fix: recompute total after each group is added so the second group's
+    target is computed against the already-updated population size, not
+    the stale pre-loop total.
     """
-    logger.info("--- Applying Product Bias Mitigations ---")
-    df = df.copy()
-    original_rows = len(df)
+    if fin_df.empty:
+        logger.info("oversample_minority_employment: empty DataFrame — skipping.")
+        return fin_df
+    if "employment_status" not in fin_df.columns:
+        logger.info("oversample_minority_employment: missing employment_status column — skipping.")
+        return fin_df
 
-    # ------------------------------------------------------------------
-    # Step 1: Oversample premium products to 15%
-    # ------------------------------------------------------------------
-    # In bias detection: premium (> $200) = only 3.96% of products.
-    # Premium purchases are the highest-stakes decisions for SavVio users.
-    # A $600 refrigerator decision is exactly where SavVio adds the most value.
-    # Without enough premium examples, the model will be poor at these decisions.
+    for status in ["Unemployed", "Student"]:
+        # Recompute total inside the loop — fixes stale denominator bug.
+        total = len(fin_df)
+        group = fin_df[fin_df["employment_status"] == status]
+        current_share = len(group) / total
 
-    if "price" in df.columns:
-        premium = df[df["price"] > PREMIUM_PRICE_THRESHOLD]
-        non_premium = df[df["price"] <= PREMIUM_PRICE_THRESHOLD]
-        n_premium = len(premium)
-        target_premium = int(len(df) * PREMIUM_TARGET_PCT)
-
-        if n_premium > 0 and n_premium < target_premium:
-            premium_oversampled = resample(
-                premium,
-                replace=True,
-                n_samples=target_premium,
-                random_state=random_state,
-            )
-            df = pd.concat([non_premium, premium_oversampled], ignore_index=True)
+        if current_share >= MIN_EMPLOYMENT_SHARE:
             logger.info(
-                "Premium products oversampled: %d → %d rows (target 15%%)",
-                n_premium, target_premium,
+                "employment_status='%s' already at %.1f%% — no oversampling needed.",
+                status, current_share * 100,
             )
-            print(f"[MITIGATION] Premium products oversampled: {n_premium} → {target_premium} rows")
-    else:
-        logger.warning("price column not found — skipping premium oversample")
+            continue
 
-    # ------------------------------------------------------------------
-    # Step 2: Assign confidence weights based on rating_number
-    # ------------------------------------------------------------------
-    # In bias detection: 44.59% of products have < 10 reviews (low confidence).
-    # A 5-star product with 2 reviews is NOT the same as a 5-star product
-    # with 500 reviews. Low-review products have unreliable ratings.
-    # Down-weighting teaches the model to be appropriately uncertain
-    # about products with weak review evidence.
+        target_n = int(MIN_EMPLOYMENT_SHARE * total) - len(group)
+        if target_n <= 0:
+            continue
+        if group.empty:
+            logger.warning(
+                "oversample_minority_employment: no rows found for '%s' — cannot oversample.",
+                status,
+            )
+            continue
 
-    if "rating_number" in df.columns:
-        df["confidence_weight"] = HIGH_CONFIDENCE_WEIGHT  # default full weight
-
-        df.loc[df["rating_number"] < LOW_CONFIDENCE_REVIEWS,
-               "confidence_weight"] = LOW_CONFIDENCE_WEIGHT
-
-        df.loc[
-            (df["rating_number"] >= LOW_CONFIDENCE_REVIEWS) &
-            (df["rating_number"] <= MED_CONFIDENCE_REVIEWS),
-            "confidence_weight"
-        ] = MED_CONFIDENCE_WEIGHT
-
-        low_conf = (df["confidence_weight"] == LOW_CONFIDENCE_WEIGHT).sum()
-        med_conf = (df["confidence_weight"] == MED_CONFIDENCE_WEIGHT).sum()
-        high_conf = (df["confidence_weight"] == HIGH_CONFIDENCE_WEIGHT).sum()
-
-        logger.info(
-            "Confidence weights: low=%.1f (%d), med=%.1f (%d), high=%.1f (%d)",
-            LOW_CONFIDENCE_WEIGHT, low_conf,
-            MED_CONFIDENCE_WEIGHT, med_conf,
-            HIGH_CONFIDENCE_WEIGHT, high_conf,
+        extra = group.sample(
+            n=target_n, replace=True,
+            random_state=int(rng.integers(0, 2**31)),
         )
-        print(f"[MITIGATION] Confidence weights — low: {low_conf}, med: {med_conf}, high: {high_conf}")
-    else:
-        logger.warning("rating_number not found — skipping confidence weight")
+        extra = extra.copy()
+        extra["synthetic_flag"] = extra.get("synthetic_flag", pd.Series(0, index=extra.index))
+        fin_df = pd.concat([fin_df, extra], ignore_index=True)
+        new_share = len(fin_df[fin_df["employment_status"] == status]) / len(fin_df)
+        logger.info(
+            "Oversampled '%s' by %d rows: %.1f%% → %.1f%%.",
+            status, target_n, current_share * 100, new_share * 100,
+        )
 
-    # ------------------------------------------------------------------
-    # Step 3: Simplify category into parent categories
-    # ------------------------------------------------------------------
-    # In bias detection: 100+ categories all below 5% — massively fragmented.
-    # The model can't learn from categories with < 5% representation.
-    # Grouping into 7 parent categories gives enough examples per group
-    # for the model to learn meaningful category-level patterns.
+    return fin_df
 
-    if "category" in df.columns:
-        def _simplify_category(cat):
-            if pd.isna(cat) or str(cat).strip() == "":
-                return "Unknown"
-            c = str(cat)
-            if "Parts & Accessories" in c:
-                return "Parts & Accessories"
-            if "Refrigerator" in c:
-                return "Refrigerators"
-            if "Washer" in c or "Dryer" in c:
-                return "Laundry"
-            if "Dishwasher" in c:
-                return "Dishwashers"
-            if "Range" in c or "Oven" in c or "Cooktop" in c:
-                return "Cooking"
-            if "Coffee" in c or "Espresso" in c:
-                return "Coffee Machines"
-            return "Other Appliances"
 
-        df["category_simplified"] = df["category"].apply(_simplify_category)
+# ---------------------------------------------------------------------------
+# Stage 2: Product data repair + rebalancing
+# ---------------------------------------------------------------------------
 
-        cat_dist = df["category_simplified"].value_counts()
-        logger.info("Category simplified:\n%s", cat_dist.to_string())
-        print(f"[MITIGATION] Categories simplified into {df['category_simplified'].nunique()} groups")
-    else:
-        logger.warning("category column not found — skipping category simplification")
+def collapse_category_taxonomy(prod_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    The bias detector found 80+ leaf-level categories, each <5%.
+    At this granularity every category is flagged as underrepresented —
+    the threshold is not meaningful.
 
-    # ------------------------------------------------------------------
-    # Step 4: Create brand_tier from details column
-    # ------------------------------------------------------------------
-    # In bias detection: 58% of products have no brand info.
-    # Using raw brand names would cause the model to learn brand-specific
-    # shortcuts rather than actual quality signals. Converting to tiers
-    # (Major / Minor / Unknown) gives a useful signal without brand bias.
+    Strategy: collapse to the first 3 path components.
+    E.g. "Appliances > Parts & Accessories > Refrigerator Parts & Accessories > Ice Makers"
+      → "Appliances > Parts & Accessories > Refrigerator Parts & Accessories"
 
-    if "details" in df.columns:
-        major_brands = {
-            "GE", "Whirlpool", "Frigidaire", "Samsung",
-            "LG", "Bosch", "KitchenAid", "Maytag",
-        }
+    This reduces to ~15 meaningful top-level categories where representation
+    flags carry real signal.
 
-        def _brand_tier(details):
-            if not isinstance(details, dict):
-                return "Unknown"
-            brand = str(details.get("Brand", "")).strip()
-            if not brand or brand.lower() in {"", "nan", "none"}:
-                return "Unknown"
-            return "Major" if brand in major_brands else "Minor"
+    The original path is preserved in `category_leaf` for any downstream
+    use that needs it.
+    """
+    if "category" not in prod_df.columns:
+        return prod_df
 
-        df["brand_tier"] = df["details"].apply(_brand_tier)
-
-        tier_dist = df["brand_tier"].value_counts()
-        logger.info("Brand tiers:\n%s", tier_dist.to_string())
-        print(f"[MITIGATION] Brand tiers — {tier_dist.to_dict()}")
-    else:
-        logger.warning("details column not found — skipping brand_tier")
-
-    logger.info(
-        "Product mitigation complete: %d → %d rows",
-        original_rows, len(df),
+    prod_df["category_leaf"] = prod_df["category"]
+    prod_df["category"] = (
+        prod_df["category"]
+        .astype(str)
+        .str.split(" > ")
+        .apply(lambda parts: " > ".join(parts[:3]) if isinstance(parts, list) else parts)
     )
-    print(f"[MITIGATION] Product: {original_rows} → {len(df)} rows after mitigation")
-    return df
+
+    n_collapsed = prod_df["category"].nunique(dropna=True)
+    logger.info("Collapsed product categories from 80+ leaf nodes to %d top-level groups.", n_collapsed)
+    return prod_df
 
 
-# ---------------------------------------------------------------------------
-# MITIGATION 3 — Review Bias
-# ---------------------------------------------------------------------------
-
-def mitigate_review_bias(
-    df: pd.DataFrame,
-    random_state: int = Config.RANDOM_STATE,
+def oversample_premium_products(
+    prod_df: pd.DataFrame,
+    rng: np.random.Generator,
 ) -> pd.DataFrame:
     """
-    Apply all review pre-training bias mitigations.
+    Premium products (price > $200) are at 3.96%, below the 5% threshold.
+    Oversample premium tier to MIN_PREMIUM_SHARE.
 
-    Steps:
-        1. Balance rating sentiment buckets equally (positive/neutral/negative)
-        2. Down-weight unverified reviews
-        3. Create review_quality_score composite feature
-
-    Args:
-        df: Reviews DataFrame loaded from DB.
-        random_state: Seed for reproducibility.
-
-    Returns:
-        Mitigated DataFrame with new columns:
-            review_weight, review_quality_score
+    Note: oversampling happens on the products table, which means premium
+    products get sampled more often during scenario pairing in
+    training_data_generator.py. We add a weight column rather than
+    duplicating rows to avoid inflating the product catalogue.
     """
-    logger.info("--- Applying Review Bias Mitigations ---")
-    df = df.copy()
-    original_rows = len(df)
+    if prod_df.empty:
+        logger.info("oversample_premium_products: empty DataFrame — skipping.")
+        return prod_df
+    if "price" not in prod_df.columns:
+        logger.info("oversample_premium_products: missing price column — skipping.")
+        prod_df["sample_weight"] = 1.0
+        return prod_df
 
-    # ------------------------------------------------------------------
-    # Step 1: Balance rating sentiment buckets
-    # ------------------------------------------------------------------
-    # In bias detection: 79.63% positive, 15.48% negative, 4.89% neutral.
-    # SavVio's value comes from correctly identifying when NOT to buy.
-    # A model trained on 80% positive reviews defaults to Green recommendations.
-    # Balancing ensures the model learns negative and neutral signals equally well.
-    # This is the single most impactful mitigation for SavVio's core functionality.
+    premium_mask = prod_df["price"] > 200
+    premium_share = premium_mask.sum() / len(prod_df)
 
-    if "rating" in df.columns:
-        positive = df[df["rating"] >= 4]
-        negative = df[df["rating"] <= 2]
-        neutral  = df[df["rating"] == 3]
+    if premium_share >= MIN_PREMIUM_SHARE:
+        prod_df["sample_weight"] = 1.0
+        return prod_df
 
-        n = min(len(positive), len(negative), len(neutral))
-
-        if n > 0:
-            df_balanced = pd.concat([
-                positive.sample(n, random_state=random_state),
-                negative.sample(n, random_state=random_state),
-                neutral.sample(n, random_state=random_state),
-            ], ignore_index=True)
-
-            # Shuffle so classes are not in blocks
-            df = df_balanced.sample(frac=1, random_state=random_state).reset_index(drop=True)
-
-            logger.info(
-                "Rating balanced: %d positive, %d negative, %d neutral → %d total",
-                n, n, n, len(df),
-            )
-            print(f"[MITIGATION] Ratings balanced — {n} per sentiment bucket, {len(df)} total")
-        else:
-            logger.warning("One or more rating buckets is empty — skipping balancing")
-    else:
-        logger.warning("rating column not found — skipping sentiment balancing")
-
-    # ------------------------------------------------------------------
-    # Step 2: Down-weight unverified reviews
-    # ------------------------------------------------------------------
-    # In bias detection: unverified reviews = only 4.16%.
-    # Unverified reviews may be fake (competitor attacks or brand self-promotion).
-    # SavVio must give honest recommendations — fake reviews distort product quality.
-    # Down-weighting teaches the model to trust verified reviews more.
-
-    if "verified_purchase" in df.columns:
-        df["review_weight"] = 1.0
-        df.loc[df["verified_purchase"] == False, "review_weight"] = UNVERIFIED_REVIEW_WEIGHT
-
-        # Create explicit trust score as a model feature
-        df["review_trust_score"] = df["verified_purchase"].map(
-            {True: 1.0, False: 0.3}
-        ).fillna(0.3)
-
-        unverified = (df["review_weight"] == UNVERIFIED_REVIEW_WEIGHT).sum()
-        logger.info(
-            "Review weights: %d unverified down-weighted to %.1f",
-            unverified, UNVERIFIED_REVIEW_WEIGHT,
-        )
-        print(f"[MITIGATION] {unverified} unverified reviews down-weighted to {UNVERIFIED_REVIEW_WEIGHT}x")
-    else:
-        logger.warning("verified_purchase not found — skipping review weight")
-
-    # ------------------------------------------------------------------
-    # Step 3: Create review_quality_score composite feature
-    # ------------------------------------------------------------------
-    # In bias detection: 80.81% of reviews have 0 helpful votes.
-    # A 500-word detailed review from a verified buyer with 50 helpful
-    # votes is far more valuable than a one-word review with no votes.
-    # This composite score (0-1) captures review quality as a model feature
-    # so the model learns to weight high-quality reviews more heavily.
-
-    def _review_quality(row) -> float:
-        score = 0.5  # base score for every review
-
-        # Verified purchase adds credibility (+0.2)
-        if row.get("verified_purchase", False):
-            score += 0.2
-
-        # Helpful votes show community trusts this review
-        helpful = row.get("helpful_vote", 0) or 0
-        if helpful > HIGH_HELPFUL_VOTE_THRESHOLD:
-            score += 0.3    # highly trusted review
-        elif helpful > 0:
-            score += 0.1    # slightly trusted
-
-        # Longer reviews tend to be more detailed and informative
-        text = str(row.get("review_text", "") or "")
-        if len(text) > MIN_QUALITY_REVIEW_LENGTH:
-            score += 0.1
-
-        return min(score, 1.0)  # cap at 1.0
-
-    df["review_quality_score"] = df.apply(_review_quality, axis=1)
-
+    # Assign upweighted sample_weight to premium products.
+    # The stratified sampler in training_data_generator.py uses this weight.
+    target_weight = MIN_PREMIUM_SHARE / max(premium_share, 1e-6)
+    prod_df["sample_weight"] = np.where(premium_mask, target_weight, 1.0)
     logger.info(
-        "Review quality scores — mean: %.2f, min: %.2f, max: %.2f",
-        df["review_quality_score"].mean(),
-        df["review_quality_score"].min(),
-        df["review_quality_score"].max(),
+        "Premium products upweighted %.2f× (%.1f%% → target %.1f%%).",
+        target_weight, premium_share * 100, MIN_PREMIUM_SHARE * 100,
     )
-    print(
-        f"[MITIGATION] Review quality scores computed — "
-        f"mean: {df['review_quality_score'].mean():.2f}"
-    )
-
-    logger.info(
-        "Review mitigation complete: %d → %d rows",
-        original_rows, len(df),
-    )
-    print(f"[MITIGATION] Review: {original_rows} → {len(df)} rows after mitigation")
-    return df
+    return prod_df
 
 
 # ---------------------------------------------------------------------------
-# Master function — apply all mitigations at once
+# Stage 3: Review data repair + rebalancing
+# ---------------------------------------------------------------------------
+
+def cap_prolific_reviewers(rev_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    user_id uniqueness is 83.4% — a meaningful tail of users has written
+    many reviews. Without capping, training over-indexes on their preferences.
+
+    Strategy: keep at most MAX_REVIEWS_PER_USER reviews per user,
+    sampled randomly (so no single product is always included or excluded).
+
+    Robust to empty DataFrame or missing user_id column.
+    """
+    if rev_df.empty or "user_id" not in rev_df.columns:
+        logger.info("cap_prolific_reviewers: empty DataFrame or missing user_id — skipping.")
+        return rev_df
+
+    before = len(rev_df)
+    # We want "at most MAX_REVIEWS_PER_USER per user".
+    # pandas' groupby().sample(n=..., replace=False) crashes if a group has fewer
+    # than n rows, so we:
+    #  - keep all rows for users with count <= MAX_REVIEWS_PER_USER
+    #  - sample exactly MAX_REVIEWS_PER_USER for users with count > MAX_REVIEWS_PER_USER
+    user_counts = rev_df["user_id"].value_counts(dropna=False)
+    big_users = user_counts[user_counts > MAX_REVIEWS_PER_USER].index
+    small_or_equal_users = user_counts[user_counts <= MAX_REVIEWS_PER_USER].index
+
+    # Take all reviews for small users.
+    rev_small = rev_df[rev_df["user_id"].isin(small_or_equal_users)]
+    # Randomly sample MAX_REVIEWS_PER_USER for large users only.
+    rev_big = (
+        rev_df[rev_df["user_id"].isin(big_users)]
+        .groupby("user_id", group_keys=False)
+        .sample(n=MAX_REVIEWS_PER_USER, replace=False, random_state=RANDOM_STATE)
+    )
+
+    rev_df = pd.concat([rev_small, rev_big], ignore_index=True)
+    after = len(rev_df)
+    logger.info(
+        "Reviewer cap (max %d/user): %d → %d reviews (removed %d).",
+        MAX_REVIEWS_PER_USER, before, after, before - after,
+    )
+    return rev_df
+
+
+def oversample_minority_ratings(
+    rev_df: pd.DataFrame,
+    rng: np.random.Generator,
+) -> pd.DataFrame:
+    """
+    Neutral ratings (3 stars) are at 4.89%, just below the flagged threshold.
+    Oversample to MIN_NEUTRAL_SHARE so the model sees enough fence-sitters.
+    """
+    if rev_df.empty:
+        logger.info("oversample_minority_ratings: empty DataFrame — skipping.")
+        return rev_df
+    if "rating" not in rev_df.columns:
+        logger.info("oversample_minority_ratings: missing rating column — skipping.")
+        return rev_df
+
+    total = len(rev_df)
+    neutral = rev_df[rev_df["rating"] == 3]
+    current_share = len(neutral) / total
+
+    if current_share >= MIN_NEUTRAL_SHARE:
+        logger.info("Neutral ratings already at %.1f%% — no oversampling needed.", current_share * 100)
+        return rev_df
+
+    target_n = int(MIN_NEUTRAL_SHARE * total) - len(neutral)
+    if target_n <= 0:
+        return rev_df
+    if neutral.empty:
+        logger.warning("oversample_minority_ratings: no neutral rows found — cannot oversample.")
+        return rev_df
+    extra = neutral.sample(
+        n=target_n, replace=True, random_state=int(rng.integers(0, 2**31))
+    )
+    rev_df = pd.concat([rev_df, extra], ignore_index=True)
+    logger.info(
+        "Oversampled Neutral ratings by %d rows: %.1f%% → %.1f%%.",
+        target_n, current_share * 100, MIN_NEUTRAL_SHARE * 100,
+    )
+    return rev_df
+
+
+def oversample_unverified_purchases(
+    rev_df: pd.DataFrame,
+    rng: np.random.Generator,
+) -> pd.DataFrame:
+    """
+    Unverified purchases are at 4.16%. These may carry a different signal
+    (gifted products, repeat buyers) and must be present for the model to
+    learn the verified_purchase feature meaningfully.
+    """
+    if rev_df.empty:
+        logger.info("oversample_unverified_purchases: empty DataFrame — skipping.")
+        return rev_df
+    if "verified_purchase" not in rev_df.columns:
+        logger.info("oversample_unverified_purchases: missing verified_purchase column — skipping.")
+        return rev_df
+
+    total = len(rev_df)
+
+    # Normalise the column to bool regardless of stored type.
+    verified_col = rev_df["verified_purchase"].astype(str).str.strip().str.lower()
+    unverified_mask = verified_col.isin({"0", "false", "no", "n", "f"})
+    unverified = rev_df[unverified_mask]
+    current_share = len(unverified) / total
+
+    if current_share >= MIN_UNVERIFIED_SHARE:
+        logger.info("Unverified purchases already at %.1f%% — no oversampling needed.", current_share * 100)
+        return rev_df
+
+    target_n = int(MIN_UNVERIFIED_SHARE * total) - len(unverified)
+    if target_n <= 0:
+        return rev_df
+    if unverified.empty:
+        logger.warning("oversample_unverified_purchases: no unverified rows found — cannot oversample.")
+        return rev_df
+    extra = unverified.sample(
+        n=target_n, replace=True, random_state=int(rng.integers(0, 2**31))
+    )
+    rev_df = pd.concat([rev_df, extra], ignore_index=True)
+    logger.info(
+        "Oversampled unverified purchases by %d rows: %.1f%% → %.1f%%.",
+        target_n, current_share * 100, MIN_UNVERIFIED_SHARE * 100,
+    )
+    return rev_df
+
+
+def compute_review_sample_weights(rev_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    80.8% of reviews have helpful_vote=0 — if we oversample these,
+    we just add more low-signal noise. Instead, assign inverse-frequency
+    sample weights:
+      - helpful_vote > 10 → weight 4.0  (highly endorsed reviews)
+      - helpful_vote 3–10 → weight 2.0
+      - helpful_vote 1–2  → weight 1.5
+      - helpful_vote = 0  → weight 1.0 (baseline)
+
+    These weights feed into XGBoost/LightGBM sample_weight parameter.
+    """
+    if rev_df.empty:
+        logger.info("compute_review_sample_weights: empty DataFrame — skipping.")
+        rev_df["sample_weight"] = pd.Series(dtype=float)
+        return rev_df
+
+    helpful_raw = rev_df["helpful_vote"] if "helpful_vote" in rev_df.columns else pd.Series(0, index=rev_df.index)
+    helpful = pd.to_numeric(helpful_raw, errors="coerce").fillna(0)
+    weights = pd.Series(1.0, index=rev_df.index)
+    weights[helpful >= 1]  = 1.5
+    weights[helpful >= 3]  = 2.0
+    weights[helpful >= 10] = 4.0
+    rev_df["sample_weight"] = weights
+    logger.info(
+        "Assigned helpful_vote sample weights: "
+        "mean=%.2f, weight>1 covers %.1f%% of reviews.",
+        weights.mean(),
+        (weights > 1.0).sum() / len(weights) * 100,
+    )
+    return rev_df
+
+
+# ---------------------------------------------------------------------------
+# Label distribution guard (Stage 7 in pipeline)
+# ---------------------------------------------------------------------------
+
+def assert_label_balance(scenarios: pd.DataFrame, label_col: str = "final_recommendation") -> None:
+    """
+    Assert that no label class is below 15% before the train/val/test split.
+    Raises ValueError if violated — the pipeline must not proceed with a
+    severely imbalanced label set.
+
+    Called from run_pipeline.py after generate_training_data().
+    """
+    if label_col not in scenarios.columns:
+        logger.warning("Label column '%s' not found — skipping label balance check.", label_col)
+        return
+
+    dist = scenarios[label_col].value_counts(normalize=True)
+    for label, share in dist.items():
+        if share < 0.15:
+            raise ValueError(
+                f"Label balance check FAILED: '{label}' is {share:.1%} of training data "
+                f"(minimum required: 15%). "
+                f"Adjust the deterministic engine thresholds or increase scenario sampling."
+            )
+    logger.info("Label balance check passed: %s", dict(dist.round(3)))
+
+
+# ---------------------------------------------------------------------------
+# Public orchestrator
 # ---------------------------------------------------------------------------
 
 def apply_all_mitigations(
-    financial_df: pd.DataFrame,
-    products_df: pd.DataFrame,
-    reviews_df: pd.DataFrame,
-    random_state: int = Config.RANDOM_STATE,
+    fin_df: pd.DataFrame,
+    prod_df: pd.DataFrame,
+    rev_df: pd.DataFrame,
+    random_state: int = RANDOM_STATE,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
-    Apply all pre-training bias mitigations to all three datasets.
+    Apply all pre-training bias mitigations in the correct order.
 
-    This is the main entry point called from training_data_generator.py
-    after data is loaded from the database and before feature engineering.
+    Call this from training_data_generator.py before generate_scenarios().
 
     Args:
-        financial_df: Financial profiles from load_financial_profiles()
-        products_df:  Products from load_products()
-        reviews_df:   Reviews from load_reviews()
-        random_state: Seed for reproducibility (default: Config.RANDOM_STATE)
+        fin_df:  financial_profiles DataFrame from PostgreSQL.
+        prod_df: products DataFrame from PostgreSQL.
+        rev_df:  reviews DataFrame from PostgreSQL.
 
     Returns:
-        Tuple of (mitigated_financial_df, mitigated_products_df, mitigated_reviews_df)
+        (fin_df, prod_df, rev_df) with mitigations applied in-place copies.
     """
-    print("\n" + "=" * 60)
-    print("PRE-TRAINING BIAS MITIGATION")
-    print("=" * 60)
+    rng = np.random.default_rng(random_state)
 
-    financial_df = mitigate_financial_bias(financial_df, random_state)
-    products_df  = mitigate_product_bias(products_df, random_state)
-    reviews_df   = mitigate_review_bias(reviews_df, random_state)
-
-    print("=" * 60)
-    print("PRE-TRAINING BIAS MITIGATION COMPLETE")
-    print("=" * 60 + "\n")
-
-    return financial_df, products_df, reviews_df
-
-
-# ---------------------------------------------------------------------------
-# Smoke test
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    import sys
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    logger.info("=" * 60)
+    logger.info("APPLYING PRE-TRAINING BIAS MITIGATIONS")
+    logger.info("=" * 60)
+    logger.info(
+        "Before mitigation shares — unemployed: %.2f%%, student: %.2f%%, premium_products: %.2f%%, neutral_reviews: %.2f%%, unverified_reviews: %.2f%%",
+        _safe_share(fin_df, "employment_status", lambda s: s == "Unemployed") * 100,
+        _safe_share(fin_df, "employment_status", lambda s: s == "Student") * 100,
+        _safe_share(prod_df, "price", lambda s: s > 200) * 100,
+        _safe_share(rev_df, "rating", lambda s: s == 3) * 100,
+        _safe_share(
+            rev_df,
+            "verified_purchase",
+            lambda s: s.astype(str).str.strip().str.lower().isin({"0", "false", "no", "n", "f"}),
+        ) * 100,
     )
 
-    print("Testing bias mitigation with mock data...")
+    # --- Financial ---
+    logger.info("--- Financial mitigations ---")
+    fin_df = repair_emi_anomalies(fin_df)
+    fin_df = augment_near_zero_savings(fin_df, rng)
+    fin_df = oversample_minority_employment(fin_df, rng)
 
-    # Mock financial data
-    fin_mock = pd.DataFrame({
-        "user_id": range(100),
-        "monthly_income": [3000] * 80 + [0] * 20,
-        "monthly_expenses": [1500] * 100,
-        "savings_balance": [10000] * 95 + [100, 200, 300, 50, 0],
-        "liquid_savings": [8000] * 95 + [100, 200, 300, 50, 0],
-        "monthly_emi": [500] * 90 + [5000] * 10,
-        "employment_status": ["Employed"] * 60 + ["Student"] * 20 + ["Unemployed"] * 20,
-    })
+    # --- Product ---
+    logger.info("--- Product mitigations ---")
+    prod_df = collapse_category_taxonomy(prod_df)
+    prod_df = oversample_premium_products(prod_df, rng)
 
-    # Mock product data
-    prod_mock = pd.DataFrame({
-        "product_id": range(50),
-        "price": [50] * 35 + [150] * 11 + [500] * 4,
-        "rating_number": [5] * 20 + [50] * 20 + [200] * 10,
-        "category": ["Appliances > Parts & Accessories"] * 30 + ["Appliances > Refrigerators"] * 20,
-        "details": [{"Brand": "GE"}] * 10 + [{}] * 40,
-    })
+    # --- Review ---
+    logger.info("--- Review mitigations ---")
+    rev_df = cap_prolific_reviewers(rev_df)
+    rev_df = oversample_minority_ratings(rev_df, rng)
+    rev_df = oversample_unverified_purchases(rev_df, rng)
+    rev_df = compute_review_sample_weights(rev_df)
 
-    # Mock review data
-    rev_mock = pd.DataFrame({
-        "rating": [5] * 80 + [3] * 10 + [1] * 10,
-        "verified_purchase": [True] * 95 + [False] * 5,
-        "helpful_vote": [0] * 80 + [5] * 15 + [20] * 5,
-        "review_text": ["Great product!"] * 50 + ["A" * 150] * 50,
-    })
-
-    fin_out, prod_out, rev_out = apply_all_mitigations(fin_mock, prod_mock, rev_mock)
-
-    print(f"\nFinancial: {len(fin_mock)} → {len(fin_out)} rows")
-    print(f"Products:  {len(prod_mock)} → {len(prod_out)} rows")
-    print(f"Reviews:   {len(rev_mock)} → {len(rev_out)} rows")
-    print(f"\nNew financial columns: {[c for c in fin_out.columns if c not in fin_mock.columns]}")
-    print(f"New product columns:   {[c for c in prod_out.columns if c not in prod_mock.columns]}")
-    print(f"New review columns:    {[c for c in rev_out.columns if c not in rev_mock.columns]}")
+    logger.info("Pre-training bias mitigations complete.")
+    logger.info(
+        "After mitigation shares — unemployed: %.2f%%, student: %.2f%%, premium_products: %.2f%%, neutral_reviews: %.2f%%, unverified_reviews: %.2f%%",
+        _safe_share(fin_df, "employment_status", lambda s: s == "Unemployed") * 100,
+        _safe_share(fin_df, "employment_status", lambda s: s == "Student") * 100,
+        _safe_share(prod_df, "price", lambda s: s > 200) * 100,
+        _safe_share(rev_df, "rating", lambda s: s == 3) * 100,
+        _safe_share(
+            rev_df,
+            "verified_purchase",
+            lambda s: s.astype(str).str.strip().str.lower().isin({"0", "false", "no", "n", "f"}),
+        ) * 100,
+    )
+    logger.info(
+        "Final sizes — financial: %d, products: %d, reviews: %d",
+        len(fin_df), len(prod_df), len(rev_df),
+    )
+    return fin_df, prod_df, rev_df

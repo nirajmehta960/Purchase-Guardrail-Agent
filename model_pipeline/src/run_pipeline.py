@@ -83,15 +83,24 @@ def write_evaluation_summary_md(candidates, best, final_metrics, output_path):
 # Bias detection — placeholder until module is complete.
 # ---------------------------------------------------------------------------
 try:
-    from guards.bias_detection import evaluate_bias
+    from guards.bias_detection import (
+        attach_savings_band_to_sensitive,
+        detect_and_mitigate,
+        predict_with_sensitive_features,
+    )
     BIAS_AVAILABLE = True
 except ImportError:
     logger.warning("Bias detection module not available — skipping bias checks.")
     BIAS_AVAILABLE = False
 
-# Temporarily force-disable bias checks until bias module contract is finalized.
-BIAS_AVAILABLE = False
+    def attach_savings_band_to_sensitive(sens_df, scenarios_df):
+        return sens_df
 
+    def predict_with_sensitive_features(model, X, sensitive=None):
+        return model.predict(X)
+
+# Temporarily force-disable bias checks until bias module contract is finalized.
+BIAS_AVAILABLE = True
 # ---------------------------------------------------------------------------
 # 1. Initialization
 # ---------------------------------------------------------------------------
@@ -118,7 +127,8 @@ def prepare_data():
 
     Returns:
         dict with keys: X_train, X_val, X_test, y_train, y_val, y_test,
-                        sens_train, sens_val, sens_test, label_encoder, scenarios_raw
+                        sens_train, sens_val, sens_test, label_encoder, scenarios_raw,
+                        scenarios_val (same rows as X_val / sens_val for bias checks)
     """
     # Feature engineering + deterministic labeling (GREEN/YELLOW/RED).
     X, y_raw, scenarios_raw = build_training_data(is_training=True)
@@ -136,27 +146,46 @@ def prepare_data():
     sensitive_features = scenarios_raw[sensitive_cols] if sensitive_cols else None
 
     # --- 3-way stratified split: train (60%) / val (20%) / test (20%) ---
+    # Split scenarios_raw (and sensitive cols) in the SAME calls as X, y so row
+    # alignment is guaranteed for post-training bias detection on the val set.
     # First split: separate test set (20%).
-    X_temp, X_test, y_temp, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=Config.RANDOM_STATE, stratify=y,
-    )
-    sens_temp, sens_test = (None, None)
     if sensitive_features is not None:
-        sens_temp, sens_test = train_test_split(
-            sensitive_features, test_size=0.2,
-            random_state=Config.RANDOM_STATE, stratify=y,
+        X_temp, X_test, y_temp, y_test, scenarios_temp, scenarios_test, sens_temp, sens_test = train_test_split(
+            X, y, scenarios_raw, sensitive_features,
+            test_size=0.2,
+            random_state=Config.RANDOM_STATE,
+            stratify=y,
         )
+    else:
+        X_temp, X_test, y_temp, y_test, scenarios_temp, scenarios_test = train_test_split(
+            X, y, scenarios_raw,
+            test_size=0.2,
+            random_state=Config.RANDOM_STATE,
+            stratify=y,
+        )
+        sens_temp, sens_test = None, None
 
     # Second split: separate validation from training (25% of remaining = 20% of total).
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_temp, y_temp, test_size=0.25, random_state=Config.RANDOM_STATE, stratify=y_temp,
-    )
-    sens_train, sens_val = (None, None)
     if sens_temp is not None:
-        sens_train, sens_val = train_test_split(
-            sens_temp, test_size=0.25,
-            random_state=Config.RANDOM_STATE, stratify=y_temp,
+        X_train, X_val, y_train, y_val, scenarios_train, scenarios_val, sens_train, sens_val = train_test_split(
+            X_temp, y_temp, scenarios_temp, sens_temp,
+            test_size=0.25,
+            random_state=Config.RANDOM_STATE,
+            stratify=y_temp,
         )
+    else:
+        X_train, X_val, y_train, y_val, scenarios_train, scenarios_val = train_test_split(
+            X_temp, y_temp, scenarios_temp,
+            test_size=0.25,
+            random_state=Config.RANDOM_STATE,
+            stratify=y_temp,
+        )
+        sens_train, sens_val = None, None
+
+    # Derive savings_band from scenario financial columns (for ThresholdOptimizer axis).
+    sens_train = attach_savings_band_to_sensitive(sens_train, scenarios_train)
+    sens_val = attach_savings_band_to_sensitive(sens_val, scenarios_val)
+    sens_test = attach_savings_band_to_sensitive(sens_test, scenarios_test)
 
     logger.info("Split sizes — train: %d, val: %d, test: %d", len(y_train), len(y_val), len(y_test))
 
@@ -164,7 +193,9 @@ def prepare_data():
         "X_train": X_train, "X_val": X_val, "X_test": X_test,
         "y_train": y_train, "y_val": y_val, "y_test": y_test,
         "sens_train": sens_train, "sens_val": sens_val, "sens_test": sens_test,
-        "label_encoder": label_encoder, "scenarios_raw": scenarios_raw,
+        "label_encoder": label_encoder,
+        "scenarios_raw": scenarios_raw,
+        "scenarios_val": scenarios_val,
     }
 
 
@@ -172,9 +203,17 @@ def prepare_data():
 # 3. Train Candidates
 # ---------------------------------------------------------------------------
 
-def train_candidates(X_train, y_train, X_val, y_val, sens_val, label_encoder):
+def train_candidates(
+    X_train, y_train, X_val, y_val,
+    sens_train, sens_val, label_encoder,
+    scenarios_val=None,
+):
     """
-    Train all model candidates, evaluate on validation set, run bias checks.
+    Train all model candidates, evaluate on validation set, run bias detection
+    and optional ThresholdOptimizer mitigation (detect_and_mitigate).
+
+    Args:
+        scenarios_val: Raw scenario rows aligned with X_val / y_val (for slice derivation).
 
     Returns:
         List of dicts, each with: name, model, run_id, metrics, bias_passed.
@@ -218,14 +257,34 @@ def train_candidates(X_train, y_train, X_val, y_val, sens_val, label_encoder):
                 )
 
                 # Bias detection — placeholder until module is complete.
+                
                 bias_passed = True
-                if BIAS_AVAILABLE and sens_val is not None:
+                if BIAS_AVAILABLE and sens_val is not None and sens_train is not None:
                     y_pred_val = model.predict(X_val)
-                    bias_results, bias_passed = evaluate_bias(y_val, y_pred_val, sens_val)
+                    y_prob_val = (
+                        model.predict_proba(X_val)
+                        if hasattr(model, "predict_proba")
+                        else None
+                    )
+                    model, bias_passed, _ = detect_and_mitigate(
+                        model,
+                        X_train,
+                        y_train,
+                        X_val,
+                        y_val,
+                        y_pred_val,
+                        sens_train,
+                        sens_val,
+                        scenarios_raw=scenarios_val,
+                        y_prob_val=y_prob_val,
+                    )
                     mlflow.log_metric("bias_gate_passed", int(bias_passed))
 
-                # Log model artifact.
-                signature = infer_signature(X_train, model.predict(X_train))
+                # Log model artifact (possibly mitigated).
+                signature = infer_signature(
+                    X_train,
+                    predict_with_sensitive_features(model, X_train, sens_train),
+                )
                 log_model_to_mlflow(model, model_type, signature)
 
                 # Log scenario artifact for reproducibility.
@@ -278,7 +337,36 @@ def tune_candidate(candidates, data):
                     label_names=list(data["label_encoder"].classes_),
                 )
 
-                signature = infer_signature(data["X_train"], tuned_model.predict(data["X_train"]))
+                bias_passed = True
+                if BIAS_AVAILABLE and data.get("sens_val") is not None and data.get(
+                    "sens_train"
+                ) is not None:
+                    y_pred_val = tuned_model.predict(data["X_val"])
+                    y_prob_val = (
+                        tuned_model.predict_proba(data["X_val"])
+                        if hasattr(tuned_model, "predict_proba")
+                        else None
+                    )
+                    tuned_model, bias_passed, _ = detect_and_mitigate(
+                        tuned_model,
+                        data["X_train"],
+                        data["y_train"],
+                        data["X_val"],
+                        data["y_val"],
+                        y_pred_val,
+                        data["sens_train"],
+                        data["sens_val"],
+                        scenarios_raw=data.get("scenarios_val"),
+                        y_prob_val=y_prob_val,
+                    )
+                    mlflow.log_metric("bias_gate_passed", int(bias_passed))
+
+                signature = infer_signature(
+                    data["X_train"],
+                    predict_with_sensitive_features(
+                        tuned_model, data["X_train"], data["sens_train"]
+                    ),
+                )
                 log_model_to_mlflow(tuned_model, model_type, signature)
 
                 candidates.append({
@@ -286,7 +374,7 @@ def tune_candidate(candidates, data):
                     "model": tuned_model,
                     "run_id": mlflow.active_run().info.run_id,
                     "metrics": tuned_metrics,
-                    "bias_passed": True,  # Will be checked in select_best_model
+                    "bias_passed": bias_passed,
                 })
         except Exception as e:
             logger.error("Tuned model training failed: %s", e, exc_info=True)
@@ -325,10 +413,13 @@ def select_best_model(candidates):
 # 5. Final Evaluation on Held-Out Test Set
 # ---------------------------------------------------------------------------
 
-def final_evaluation(best, X_test, y_test, label_encoder):
+def final_evaluation(best, X_test, y_test, label_encoder, sens_test=None):
     """
     Run the best model on the held-out test set exactly once.
     Log final metrics and all visualizations to a dedicated MLflow run.
+
+    ``sens_test`` is required when ``best['model']`` is a Fairlearn
+    ThresholdOptimizer (post bias mitigation).
     """
     if best is None:
         logger.error("No best model — skipping final evaluation.")
@@ -345,6 +436,7 @@ def final_evaluation(best, X_test, y_test, label_encoder):
         metrics = evaluate_model(
             model, X_test, y_test,
             label_names=list(label_encoder.classes_),
+            sensitive_df=sens_test,
         )
 
         logger.info("Final test metrics: %s", metrics)
@@ -365,6 +457,9 @@ def final_evaluation(best, X_test, y_test, label_encoder):
 def save_best_model_local(best, label_encoder):
     """Download champion model from MLflow to local artifacts and save label encoder."""
     if not best: return
+
+    os.makedirs(Config.MODEL_SAVE_DIR, exist_ok=True)
+    os.makedirs(Config.ENCODER_SAVE_DIR, exist_ok=True)
 
     champion_model_uri = f"models:/{Config.REGISTERED_MODEL_NAME}@champion"
     downloaded_model_path = mlflow.artifacts.download_artifacts(
@@ -401,7 +496,8 @@ def main():
     candidates = train_candidates(
         data["X_train"], data["y_train"],
         data["X_val"], data["y_val"],
-        data["sens_val"], data["label_encoder"],
+        data["sens_train"], data["sens_val"], data["label_encoder"],
+        data.get("scenarios_val"),
     )
     print(f"[3/6] Baseline training complete. candidates={len(candidates)}")
 
@@ -423,7 +519,13 @@ def main():
 
     # 5. Final evaluation on held-out test set.
     print("[6/6] Running final evaluation on held-out test set...")
-    final_metrics = final_evaluation(best, data["X_test"], data["y_test"], data["label_encoder"])
+    final_metrics = final_evaluation(
+        best,
+        data["X_test"],
+        data["y_test"],
+        data["label_encoder"],
+        sens_test=data.get("sens_test"),
+    )
     if final_metrics is not None:
         print(f"[6/6] Final test metrics: {final_metrics}")
     else:

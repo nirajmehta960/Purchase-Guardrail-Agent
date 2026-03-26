@@ -399,7 +399,7 @@ def final_evaluation(best, X_test, y_test, label_encoder):
     """
     if best is None:
         logger.error("No best model — skipping final evaluation.")
-        return
+        return None, None
 
     model = best["model"]
     model_type = best["name"]
@@ -426,7 +426,9 @@ def final_evaluation(best, X_test, y_test, label_encoder):
             version=registered_model_version.version,
         )
 
-    return metrics
+        final_run_id = mlflow.active_run().info.run_id
+
+    return metrics, final_run_id
 
 
 def save_best_model_local(best, label_encoder):
@@ -490,7 +492,12 @@ def main():
 
     # 5. Final evaluation on held-out test set.
     print("[6/6] Running final evaluation on held-out test set...")
-    final_metrics = final_evaluation(best, data["X_test"], data["y_test"], data["label_encoder"])
+    final_metrics, final_run_id = final_evaluation(
+        best,
+        data["X_test"],
+        data["y_test"],
+        data["label_encoder"],
+    )
     if final_metrics is not None:
         print(f"[6/6] Final test metrics: {final_metrics}")
     else:
@@ -502,7 +509,10 @@ def main():
     save_best_model_local(best, data["label_encoder"])
 
     # 7. Save a simple markdown summary for 3 baseline models + champion final metrics.
-    report_path = os.path.join(Config.BASE_DIR, "reports", "evaluation_summary.md")
+    summary_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    summary_run_id = final_run_id or (best["run_id"] if best else "no_run_id")
+    report_filename = f"evaluation_summary_{summary_timestamp}_{summary_run_id}.md"
+    report_path = os.path.join(Config.BASE_DIR, "reports", report_filename)
     write_evaluation_summary_md(
         candidates,
         best,
@@ -510,6 +520,10 @@ def main():
         report_path,
         sensitivity_summary=sensitivity_summary,
     )
+
+    if final_run_id and os.path.exists(report_path):
+        with mlflow.start_run(run_id=final_run_id):
+            mlflow.log_artifact(report_path, "reports")
 
     # Summary.
     if best:

@@ -146,7 +146,6 @@ services:
   # ML Trainer — Compute environment for model training
   # ============================================================
 
-  # TODO : export report
   ml-trainer:
     build:
       context: .

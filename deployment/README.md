@@ -14,19 +14,19 @@ This directory contains deployment scripts, configurations, and monitoring setup
 ### Cloud Deployment on Google Cloud Platform (GCP)
 
 The model is deployed exclusively on Google Cloud Platform using the following GCP services:
-- **Cloud Run**: Serverless containerized deployment for the API and frontend
-- **Vertex AI**: Model serving, versioning, and model registry
-- **Cloud Storage**: Model artifact storage and DVC remote storage
-- **Cloud Monitoring**: Performance and health monitoring
-- **Cloud Logging**: Centralized logging and log analysis
-- **Cloud Build**: CI/CD pipeline for automated builds and deployments
-- **Artifact Registry**: Container image storage and versioning
-- **Cloud SQL**: Managed PostgreSQL database for production
+- **GCP Cloud Run**: Serverless containerized deployment for the API and frontend
+- **MLflow**: Model serving, versioning, and model registry
+- **GCP Cloud Storage**: Bucket for Model artifact storage and DVC remote storage
+- **GCP Cloud Monitoring**: Performance and health monitoring
+- **GCP Cloud Logging**: Centralized logging and log analysis
+- **Github Actions**: CI/CD pipeline for automated builds and deployments
+- **GCP Artifact Registry**: Container image storage and versioning
+- **GCP Cloud SQL**: Managed PostgreSQL database for production
 
 ### Deployment Automation
 
 - **Terraform**: Infrastructure as Code for provisioning GCP resources
-- **Cloud Build**: GCP-native CI/CD pipeline for automated deployment
+- **Github Actions**: GCP-native CI/CD pipeline for automated deployment
 - **GitHub Actions**: Triggers Cloud Build on code commits and model registry updates
 
 ## Deployment Steps

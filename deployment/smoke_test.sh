@@ -15,11 +15,11 @@ terraform apply -auto-approve -target=module.docker_repo
 cd ../../..
 
 echo "=== 2. Build & push test-app ==="
-docker build -t ${REPO}/test-app:latest docker/test-app/
+docker buildx build --platform linux/amd64,linux/arm64 --push -t ${REPO}/test-app:latest docker/test-app/
 docker push ${REPO}/test-app:latest
 
 echo "=== 3. Build & push mlflow ==="
-docker build -t ${REPO}/mlflow:latest docker/mlflow/
+docker buildx build --platform linux/amd64,linux/arm64 --push -t ${REPO}/mlflow:latest docker/mlflow/
 docker push ${REPO}/mlflow:latest
 
 echo "=== 4. Deploy ==="

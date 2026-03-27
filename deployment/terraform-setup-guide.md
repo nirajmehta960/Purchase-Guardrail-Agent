@@ -14,7 +14,7 @@ No Python venv needed — Terraform is a standalone binary. No `.env` files eith
 
 ---
 
-## Step 0 — Authenticate with GCP
+## Authenticate with GCP
 
 Run these once on your machine. This logs you in and sets the active project.
 
@@ -31,49 +31,16 @@ gcloud auth application-default login
 
 ---
 
-## Step 1 — Clone your repo and navigate to deployment
+## Step 1 — Clone SavVio repo and navigate to deployment
 
 ```bash
-git clone https://github.com/<your-org>/SavVio.git
+git clone https://github.com/nirajmehta960/SavVio.git
 cd SavVio/deployment
 ```
 
 ---
 
-## Step 2 — Download both artifacts from Claude
-
-From the Claude conversation, download these two files:
-
-1. **First artifact** (`SavVio Terraform Infrastructure`) → Save as `deployment/terraform_all.tf`
-   - This is a reference file. You don't run it directly — it's for reading.
-
-2. **Second artifact** (`Terraform README + split script`) → Save as `deployment/split_terraform.sh`
-   - This is the script that creates all the actual files.
-
-Your folder should look like:
-
-```
-SavVio/
-└── deployment/
-    ├── split_terraform.sh      ← you just downloaded this
-    └── terraform_all.tf        ← reference only (optional)
-```
-
----
-
-## Step 3 — Run the split script to generate all Terraform files
-
-```bash
-cd SavVio/deployment
-
-# Make the script executable
-chmod +x split_terraform.sh
-
-# Run it
-bash split_terraform.sh
-```
-
-This creates the entire folder structure:
+## Step 2 — Terraform folder structure
 
 ```
 deployment/
@@ -115,20 +82,30 @@ deployment/
 ```
 
 ---
+### File Walkthrough
 
-## Step 4 — Create the Terraform state bucket (one-time only)
+| File | What it does | When you edit it |
+|------|-------------|-----------------|
+| `terraform.tfvars` | Environment-specific values (region, DB size, images) | When changing config for an environment |
+| `variables.tf` | Declares what variables exist | When adding a new configurable value |
+| `main.tf` (in env folder) | Wires modules together | When adding/removing infrastructure |
+| `modules/*/main.tf` | Reusable resource definitions | When changing how a resource type works |
+| `backend.tf` | Where Terraform state is stored | Rarely — only if changing state bucket |
+---
 
-Terraform needs a place to store its state file. This bucket must exist before `terraform init`. Only one person on the team runs this — once ever.
+## Step 3 — Create the Terraform state bucket (one-time only)
+
+Terraform needs a place to store its state file. This bucket must exist before `terraform init`. Only needs to be run once — once ever.
 
 ```bash
 gsutil mb -p savvio-ai -l us-east1 gs://savvio-ai-tf-state
 ```
 
-If you get a "bucket already exists" error, that's fine — someone on the team already created it.
+If you get a "bucket already exists" error, verify if someone already created it.
 
 ---
 
-## Step 5 — Deploy the dev environment
+## Step 4 — Deploy the dev environment
 
 ```bash
 cd SavVio/deployment/terraform/environments/dev
@@ -149,7 +126,7 @@ Terraform will show you a plan and ask `Do you want to perform these actions?`. 
 
 ---
 
-## Step 6 — Verify the outputs
+## Step 5 — Verify the outputs
 
 After `terraform apply` completes, it prints output values:
 
@@ -169,48 +146,7 @@ You can re-print these anytime:
 terraform output
 ```
 
----
-
-## Step 7 — Enable pgvector extension (one-time after DB is up)
-
-Terraform creates the PostgreSQL instance, but the `vector` extension needs a SQL command. Run this once after the database is provisioned:
-
-```bash
-# Connect via Cloud SQL proxy
-gcloud sql connect savvio-dev-db-instance --user=dev-db-admin --database=savvio-dev-db
-
-# At the psql prompt, run:
-CREATE EXTENSION IF NOT EXISTS vector;
-
-# Verify it worked
-SELECT extname FROM pg_extension WHERE extname = 'vector';
-
-# Exit
-\q
-```
-
-It will prompt you for the DB password. To retrieve it:
-
-```bash
-gcloud secrets versions access latest --secret="savvio-dev-db-password"
-```
-
----
-
-## Step 8 — Configure DVC remote (in your data pipeline)
-
-Now that the bucket exists, point DVC at it:
-
-```bash
-cd SavVio/data-pipeline
-
-dvc remote add -d gcs gs://savvio-dev-dvc-data
-dvc remote default gcs
-```
-
----
-
-## Step 9 — Deploy prod (when ready)
+## Step 6 — Deploying prod (when ready)
 
 Same process, different folder:
 
@@ -277,12 +213,3 @@ Type `yes` when prompted. This deletes everything: Cloud Run services, Cloud SQL
 
 ---
 
-## File Cheat Sheet
-
-| File | What it does | When you edit it |
-|------|-------------|-----------------|
-| `terraform.tfvars` | Environment-specific values (region, DB size, images) | When changing config for an environment |
-| `variables.tf` | Declares what variables exist | When adding a new configurable value |
-| `main.tf` (in env folder) | Wires modules together | When adding/removing infrastructure |
-| `modules/*/main.tf` | Reusable resource definitions | When changing how a resource type works |
-| `backend.tf` | Where Terraform state is stored | Rarely — only if changing state bucket |

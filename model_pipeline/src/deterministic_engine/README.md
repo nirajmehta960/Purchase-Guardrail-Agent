@@ -92,10 +92,10 @@ trivially cheap purchases (low PIR) never trigger RED.
 financially stressed but the product costs $5, it won't trigger RED. This prevents the engine
 from blocking trivial purchases for users who happen to have poor finances.
 
-### YELLOW rules (2+ rules must trigger for YELLOW)
+### YELLOW rules (≥1 rule must trigger for YELLOW)
 
 YELLOW means genuine concern — the user should pause and think. Unlike RED (where any single
-rule is sufficient), YELLOW requires **at least 2 rules to fire simultaneously**.
+rule is sufficient), YELLOW triggers when **at least 1 rule fires**.
 
 | Rule | Conditions | Groups crossed | Explanation |
 |------|-----------|---------------|-------------|
@@ -107,14 +107,14 @@ rule is sufficient), YELLOW requires **at least 2 rules to fire simultaneously**
 
 ### GREEN (default)
 
-If no RED rules fire AND fewer than 2 YELLOW rules fire, the label is GREEN.
+If no RED rules fire AND no YELLOW rules fire, the label is GREEN.
 
 ### Evaluation order
 
 ```
 1. Evaluate all 4 RED rules (short-circuit: first RED rule that fires → return RED)
 2. Evaluate all 5 YELLOW rules (count how many fire)
-3. If 2+ YELLOW rules fired → return YELLOW
+3. If ≥1 YELLOW rule fired → return YELLOW
 4. Otherwise → return GREEN
 ```
 

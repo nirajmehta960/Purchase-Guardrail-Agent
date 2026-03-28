@@ -19,24 +19,31 @@ SavVio/
     ├── src/
     │   ├── run_pipeline.py             # End-to-end ML pipeline entrypoint
     │   ├── config.py                   # Centralized configuration
+    │   ├── push-to-registry.py         # GCP Artifact Registry push script
     │   ├── data/
     │   │   ├── db_loader.py            # Reads from PostgreSQL
     │   │   └── validate_data.py        # Schema validation
     │   ├── features/
-    │   │   ├── feature_engineering.py  # Imputation, encoding, scaling, orchestration
-    │   │   ├── affordability_features.py   # 6 computed financial features
-    │   │   └── training_data_generator.py  # Scenario generation + labeling
+    │   │   ├── feature_engineering.py   # Orchestrator: build_training_data()
+    │   │   ├── affordability.py         # 6 computed financial features (shared)
+    │   │   ├── financial_features.py    # Inference-time affordability wrapper
+    │   │   ├── product_features.py      # 7 product quality features (Layer 2)
+    │   │   ├── review_features.py       # 6 review reliability features (Layer 2)
+    │   │   ├── feature_preprocessing.py # FeaturePipeline: impute, encode, scale, drop
+    │   │   └── training_data_generator.py  # Stratified scenario sampling
     │   ├── deterministic_engine/
-    │   │   └── decision_logic.py       # Authoritative GREEN/YELLOW/RED rules
+    │   │   ├── financial_engine.py      # Layer 1: financial GREEN/YELLOW/RED rules
+    │   │   ├── downgrade_engine.py      # Layer 2: product/review downgrade rules
+    │   │   └── labeling_pipeline.py     # Orchestrates Layer 1 + Layer 2 labeling
     │   ├── core_models/
-    │   │   ├── train.py                # XGBoost, LightGBM, XGB-Linear, LogReg
-    │   │   └── evaluate.py             # Metrics, visualizations, MLflow logging
-    │   ├── tuning/
-    │   │   └── optuna_tuner.py         # Bayesian hyperparameter optimization
+    │   │   ├── train.py                 # XGBoost, LightGBM, XGB-Linear
+    │   │   ├── evaluate.py              # Metrics, visualizations, MLflow logging
+    │   │   ├── optuna_tuner.py          # Bayesian hyperparameter optimization
+    │   │   └── sensitivity_analysis.py  # Optuna-based param importance analysis
     │   ├── guards/
-    │   │   └── bias_detection.py       # Fairlearn slice-based fairness analysis
+    │   │   └── bias_detection.py        # Fairlearn demographic parity + equalized odds
     │   └── llm/
-    │       └── prompt_engin.py         # LLM wrapping + guardrails
+    │       └── prompt_engin.py          # LLM wrapping + guardrails
     └── tests/
 ```
 
@@ -48,14 +55,14 @@ SavVio/
 |-------|--------------|--------------|------------|
 | Data Loading | DVC, GCS, Pandas | Polars, LakeFS | Data version + schema check |
 | Feature Engineering | Pandas, NumPy, scikit-learn | Polars, Feature-engine | Feature schema validation |
-| Deterministic Engine | Pure Python | — | Unit tests must pass |
+| Deterministic Engine | Pure Python (2 layers) | — | Unit tests must pass |
 | Model Training | XGBoost, LightGBM, scikit-learn | — | Reproducible training run |
 | Hyperparameter Tuning | Optuna | RandomizedSearchCV | Best-run tracking required |
 | Validation & Metrics | sklearn.metrics, Matplotlib | Seaborn, Plotly | Minimum F1 / AUC threshold |
-| Bias Detection | Fairlearn, Pandas groupby | AIF360, TFMA | Block on severe disparity |
+| Bias Detection | Fairlearn | AIF360, TFMA | Block on severe disparity |
 | Bias Mitigation | Fairlearn, imbalanced-learn | scikit-learn threshold | Re-evaluate until gates pass |
 | Model Selection | MLflow UI | Custom dashboards | Bias mitigation gate must pass |
-| Sensitivity & Explainability | SHAP, LIME | Permutation Importance | Stability report required |
+| Sensitivity & Explainability | Optuna importance, Matplotlib | SHAP, LIME (planned) | Stability report required |
 | Experiment Tracking | MLflow | Weights & Biases | Run metadata completeness |
 | Model Registry Push | GCP Artifact Registry, Vertex AI | MLflow Registry | Push only on all gates pass |
 | CI/CD Automation | GitHub Actions, Docker | Cloud Build, Jenkins | src ↔ test ↔ DB ↔ ML pipeline |
@@ -69,33 +76,29 @@ SavVio/
 ```
 1.  Load Data (PostgreSQL via data pipeline)
         ↓
-2.  Feature Engineering + Scenario Generation
+2.  Feature Engineering + Scenario Generation + Layer 1/Layer 2 Deterministic Labels
         ↓
-3.  Deterministic Engine → GREEN / YELLOW / RED labels
+3.  3-Way Stratified Split (train 60% / val 20% / test 20%)
         ↓
-4.  3-Way Stratified Split (train 60% / val 20% / test 20%)
+4.  Baseline Training (XGBoost, LightGBM, XGB-Linear)
         ↓
-5.  Baseline Training (XGBoost, LightGBM, XGB-Linear, Logistic Regression)
+5.  Hyperparameter Tuning (Optuna on best baseline)
         ↓
-6.  Hyperparameter Tuning (Optuna on best baseline)
+6.  Validation on Validation Set (per-candidate metrics + visualizations)
         ↓
-7.  Validation on Validation Set (per-candidate metrics + visualizations)
+7.  Model Selection (F1 ranking + bias gate)
         ↓
-8.  Bias Detection — Post-Training (slice analysis on validation set)
+8.  Final Evaluation on Held-Out Test Set
         ↓
-9.  Model Selection (F1 ranking + bias gate)
+9.  Sensitivity Analysis (Optuna hyperparameter importance)
         ↓
-10. Final Evaluation on Held-Out Test Set
+10. Experiment Tracking (MLflow — all runs, artifacts, comparisons)
         ↓
-11. Sensitivity & Explainability (SHAP / LIME)
+11. Model Registry Push (MLflow registry + GCP Artifact Registry)
         ↓
-12. Experiment Tracking (MLflow — all runs, artifacts, comparisons)
+12. CI/CD Automation (Dockerized)
         ↓
-13. Model Registry Push (MLflow registry + GCP Artifact Registry)
-        ↓
-14. CI/CD Automation (Dockerized)
-        ↓
-15. LLM Wrapping + NeMo Guardrails
+13. LLM Wrapping + NeMo Guardrails
 ```
 
 ---
@@ -154,12 +157,21 @@ SavVio/
 
 ### Phase 2 — Feature Engineering
 
-**Objective:** Transform raw DB tables into a model-ready feature matrix with deterministic GREEN/YELLOW/RED labels.
+**Objective:** Transform raw DB tables into a model-ready feature matrix with deterministic GREEN/YELLOW/RED labels via a two-layer labeling system.
+
+**Source Files:**
+- `features/feature_engineering.py` — Orchestrator: `build_training_data()`, `generate_training_data()`, `transform_features()`
+- `features/affordability.py` — Canonical 6 financial feature computation (shared by training + inference)
+- `features/financial_features.py` — Inference-time single-pair wrapper returning `AffordabilityResult`
+- `features/product_features.py` — 7 product quality features for Layer 2 downgrade engine
+- `features/review_features.py` — 6 review reliability features for Layer 2 downgrade engine
+- `features/feature_preprocessing.py` — `FeaturePipeline` class (impute → encode → scale → drop)
+- `features/training_data_generator.py` — Stratified scenario sampling across income × price brackets
 
 **Pipeline:**
-1. `generate_training_data()` — Load data, create scenarios via stratified sampling, label with deterministic engine
-2. `transform_features()` — Impute missing values, encode categoricals, scale numerics, drop non-feature columns
-3. `build_feature_matrix()` — Orchestrator that calls 1 then 2 and returns `(X, y, scenarios_raw)`
+1. `generate_training_data()` — Load data from PostgreSQL, sample pairs via `generate_scenarios()`, compute 6 financial features, apply Layer 1 + Layer 2 deterministic labels
+2. `transform_features()` — Run the `FeaturePipeline` (impute → encode → scale → drop non-features)
+3. `build_training_data()` — Orchestrator that calls 1 then 2 and returns `(X, y, scenarios_raw)`
 
 **Feature Groups:**
 
@@ -167,34 +179,84 @@ SavVio/
 |-------|----------|--------|
 | Financial (DB) | `discretionary_income`, `debt_to_income_ratio`, `saving_to_income_ratio`, `monthly_expense_burden_ratio`, `emergency_fund_months` | financial_profiles table |
 | Product (DB) | `price`, `average_rating`, `rating_number`, `rating_variance` | products table |
-| Computed (6) | `affordability_score`, `price_to_income_ratio`, `residual_utility_score`, `savings_to_price_ratio`, `net_worth_indicator`, `credit_risk_indicator` | affordability_features.py |
+| Computed Financial (6) | `affordability_score`, `price_to_income_ratio`, `residual_utility_score`, `savings_to_price_ratio`, `net_worth_indicator`, `credit_risk_indicator` | `affordability.py` |
+| Computed Product (7) | `value_density`, `review_confidence`, `rating_polarization`, `quality_risk_score`, `cold_start_flag`, `price_category_rank`, `category_rating_deviation` | `product_features.py` |
+| Computed Review (6) | `verified_purchase_ratio`, `helpful_concentration`, `sentiment_spread`, `review_depth_score`, `reviewer_diversity`, `extreme_rating_ratio` | `review_features.py` |
 | Categorical | `employment_status`, `has_loan`, `region` | financial_profiles table |
 
 **Scenario Generation:**
 - Stratified sampling across 9 (income × price) bracket cells for balanced representation
+- Income brackets: low ($0–$3K), mid ($3K–$7K), high ($7K+)
+- Price brackets: budget ($100–$500), mid ($500–$1.5K), premium ($1.5K+)
 - 50,000 scenarios by default (configurable via `Config.N_SCENARIOS`)
 - Each scenario = one (user, product) pair with computed features + deterministic label
+- Label column: `final_recommendation` (GREEN/YELLOW/RED after both Layer 1 + Layer 2)
+
+**FeaturePipeline (`feature_preprocessing.py`):**
+
+A unified sklearn `Pipeline` persisted as a single artifact (`feature_pipeline.pkl`):
+
+| Step | Class | What it does |
+|------|-------|--------------|
+| 1. Imputer | `MissingValueImputer` | Median for financial/product numerics, 0 for `rating_variance`, median for computed features, 'Unknown' for categoricals |
+| 2. Encoder | `CategoricalEncoder` | `OrdinalEncoder` on categorical columns, unknown categories → -1 |
+| 3. Scaler | `NumericScaler` | `StandardScaler` on all numeric features |
+| 4. Dropper | `FeatureDropper` | Drop IDs, text blobs, labels, and `product_price` before training |
 
 **Tasks:**
-- Handle missing values — median imputation for financial numerics, 0 for rating_variance, 'Unknown' for categoricals
-- Encode categorical features via OrdinalEncoder (saved as artifact for inference)
-- Scale numeric features via StandardScaler (saved as artifact for inference)
-- Save raw scenarios as versioned CSV artifact
+- [x] Handle missing values — median imputation for financial numerics, 0 for rating_variance, 'Unknown' for categoricals
+- [x] Encode categorical features via OrdinalEncoder (saved as artifact for inference)
+- [x] Scale numeric features via StandardScaler (saved as artifact for inference)
+- [x] Save raw scenarios as versioned CSV artifact
+- [x] Compute 7 product features and 6 review features for Layer 2 downgrade
+- [x] Implement stratified sampling across income × price brackets
 
 **Tools:**
 
 | Tool | Purpose |
 |------|---------|
 | Pandas / NumPy | Feature construction |
-| scikit-learn | OrdinalEncoder, StandardScaler |
+| scikit-learn | OrdinalEncoder, StandardScaler, Pipeline |
+| joblib | Pipeline artifact serialization |
 
 ---
 
 ### Phase 3 — Deterministic Decision Engine
 
-**Location:** `deterministic_engine/decision_logic.py`
+**Location:** `deterministic_engine/` — three source files:
+- `financial_engine.py` — Layer 1: financial GREEN/YELLOW/RED rules
+- `downgrade_engine.py` — Layer 2: product/review-based downgrade (GREEN→YELLOW, YELLOW→RED)
+- `labeling_pipeline.py` — Orchestrates Layer 1 → Layer 2 for batch labeling
 
-The deterministic engine is a pure-financial multi-condition labeling system. It is built **before** model training because it generates the labels (GREEN/YELLOW/RED) that the ML model trains on. Its output is authoritative — neither the ML model nor the LLM layer can override it.
+The deterministic engine is a **two-layer** rule-based labeling system. It is built **before** model training because it generates the labels (GREEN/YELLOW/RED) that the ML model trains on. Its output is authoritative — neither the ML model nor the LLM layer can override it.
+
+**Architecture:**
+
+```
+User + Product
+     │
+     ▼
+┌──────────────────────────────┐
+│  Layer 1: Financial Engine   │  Uses 11 financial features (5 DB + 6 computed).
+│  (financial_engine.py)       │  Evaluates 4 RED rules, then 5 YELLOW rules.
+│                              │  Output: GREEN / YELLOW / RED
+└──────────────┬───────────────┘
+               │
+               ▼
+┌──────────────────────────────┐
+│  Layer 2: Downgrade Engine   │  Uses 7 product + 6 review features.
+│  (downgrade_engine.py)       │  Can only downgrade by 1 step (GREEN→YELLOW, YELLOW→RED).
+│                              │  Requires BOTH product AND review rules to fire.
+└──────────────┬───────────────┘
+               │
+               ▼
+         Final Label
+    (GREEN / YELLOW / RED)
+```
+
+---
+
+#### Layer 1 — Financial Engine (`financial_engine.py`)
 
 **Design Principle:** Every rule combines signals from at least TWO independent correlation groups to avoid false triggers from a single underlying cause.
 
@@ -213,45 +275,77 @@ The deterministic engine is a pure-financial multi-condition labeling system. It
 
 ### RED Rules (4 compound AND rules)
 
-Each rule crosses at least 2 correlation groups and includes a `price_to_income_ratio` escape hatch so trivial purchases never trigger RED. RED returns immediately — no further evaluation.
+Each rule crosses at least 2 correlation groups and includes a `price_to_income_ratio` escape hatch so trivial purchases never trigger RED. RED returns immediately on the first rule that fires — no further evaluation.
 
 | Rule | Groups Crossed | Condition |
 |------|----------------|-----------|
-| RED 1 — Can't afford from any angle | 1 + 2 | `affordability_score < 0` AND `savings_to_price_ratio < 1.5` AND `residual_utility_score < 1.0` AND `price_to_income_ratio > 0.10` |
-| RED 2 — Maxed budget, significant purchase | 3 + 1 + 2 | `monthly_expense_burden_ratio > 0.80` AND `price_to_income_ratio > 0.20` AND `emergency_fund_months < 3.0` AND `savings_to_price_ratio < 3.0` |
+| RED 1 — Can't afford from any angle | 1 + 2 | `affordability_score < 0` AND `savings_to_price_ratio < 1.5` AND `price_to_income_ratio > 0.10` |
+| RED 2 — Maxed budget, significant purchase | 3 + 1 + 2 | `monthly_expense_burden_ratio > 0.80` AND `price_to_income_ratio > 0.20` AND `emergency_fund_months < 3.0` |
 | RED 3 — Underwater, no surplus | 4 + 1 + 2 | `net_worth_indicator < -2.0` AND `affordability_score < 0` AND `price_to_income_ratio > 0.15` AND `emergency_fund_months < 3.0` |
-| RED 4 — Paycheck-to-paycheck | 2 + 3 | `emergency_fund_months < 1.0` AND `residual_utility_score < 0.5` AND `debt_to_income_ratio > 0.30` AND `price_to_income_ratio > 0.10` |
+| RED 4 — Paycheck-to-paycheck | 2 + 3 + 1 | `emergency_fund_months < 1.0` AND `debt_to_income_ratio > 0.30` AND `price_to_income_ratio > 0.10` |
 
-### YELLOW Rules (5 compound AND rules, require ≥2 to trigger)
+### YELLOW Rules (5 compound AND rules, require ≥1 to trigger)
 
-Each rule crosses at least 2 correlation groups. YELLOW triggers when 2 or more rules fire.
+Each rule crosses at least 2 correlation groups. YELLOW triggers when **at least 1 rule fires**.
 
 | Rule | Groups Crossed | Condition |
 |------|----------------|-----------|
-| YELLOW 1 — Income pressure | 1 + 2 | `affordability_score < 0` AND `price_to_income_ratio > 0.25` AND `savings_to_price_ratio < 10.0` |
-| YELLOW 2 — Savings strain | 2 + 1 | `savings_to_price_ratio < 5.0` AND `residual_utility_score < 3.0` AND `price_to_income_ratio > 0.10` |
-| YELLOW 3 — Debt stress | 3 + 2 | `debt_to_income_ratio > 0.30` AND `emergency_fund_months < 4.0` AND `price_to_income_ratio > 0.10` |
-| YELLOW 4 — Low resilience | 2 + 1 | `emergency_fund_months < 3.0` AND `saving_to_income_ratio < 0.25` AND `affordability_score < 0` |
-| YELLOW 5 — Weak profile | 4 + 1 + 2 | `credit_risk_indicator < 0.35` AND `net_worth_indicator < 1.0` AND `price_to_income_ratio > 0.15` AND `savings_to_price_ratio < 10.0` |
+| YELLOW 1 — Income pressure | 1 + 2 | `affordability_score < 0` AND `price_to_income_ratio > 0.25` AND `savings_to_price_ratio < 5.0` |
+| YELLOW 2 — Savings strain | 2 + 1 | `savings_to_price_ratio < 5.0` AND `price_to_income_ratio > 0.10` |
+| YELLOW 3 — Debt stress | 3 + 1 + 2 | `monthly_expense_burden_ratio > 0.70` AND `price_to_income_ratio > 0.10` AND `savings_to_price_ratio < 5.0` |
+| YELLOW 4 — Low resilience | 2 + 1 | `emergency_fund_months < 3.0` AND `affordability_score < 0` |
+| YELLOW 5 — Weak profile | 4 + 1 + 2 | `credit_risk_indicator < 0.35` AND `net_worth_indicator < 1.0` AND `price_to_income_ratio > 0.15` AND `savings_to_price_ratio < 5.0` |
 
 ### GREEN — Default
 
-No RED rules fired and fewer than 2 YELLOW rules accumulated.
+No RED rules fired and no YELLOW rules triggered.
 
-### Edge Cases
+### Error Handling
 
-- Missing financial fields → default YELLOW
-- NaN or None values → safe defaults (0.0 for most, 0.5 for credit_risk_indicator)
-- Conflicting rules → more conservative class wins
+- Missing financial fields (None) → `_safe()` raises `ValueError`
+- NaN values → `_safe()` raises `ValueError`
+- The engine requires all 11 features to be present — missing data must be handled upstream in feature engineering
+
+---
+
+#### Layer 2 — Downgrade Engine (`downgrade_engine.py`)
+
+Layer 2 takes the Layer 1 financial label and can **only downgrade** it by at most one step based on product quality and review reliability concerns. It **cannot upgrade** a label.
+
+**Downgrade trigger condition:** Requires **BOTH** at least one product rule trigger **AND** at least one review rule trigger.
+
+**Product Rules (PR1–PR3)** — Use 7 product features:
+
+| Rule | Conditions | What it catches |
+|------|------------|-----------------|
+| PR1 | `category_rating_deviation < −0.5` AND `review_confidence < 0.3` | Below-category-average rating with insufficient review evidence |
+| PR2 | `category_rating_deviation < −0.8` AND `price_category_rank > 0.7` | Worst-rated in category while priced as premium |
+| PR3 | `rating_polarization > 0.6` AND `cold_start_flag == 1` AND `price_category_rank > 0.5` | Polarized early reviews on an expensive, new product |
+
+**Review Rules (RR1–RR3)** — Use 6 review features:
+
+| Rule | Conditions | What it catches |
+|------|------------|-----------------|
+| RR1 | `verified_purchase_ratio < 0.3` AND `extreme_rating_ratio > 0.8` AND `review_depth_score < 0.2` | Fake review pattern (shallow, extreme, unverified) |
+| RR2 | `verified_purchase_ratio < 0.4` AND `helpful_concentration > 0.7` AND `reviewer_diversity < 0.5` | Helpfulness concentrated on small, unverified reviewer set |
+| RR3 | `sentiment_spread < −0.3` AND `review_depth_score < 0.3` AND `verified_purchase_ratio < 0.5` | Negative, shallow, unverified reviews |
+
+**Impact:** In the current dataset (50K scenarios), ~224 rows (0.4%) are downgraded by Layer 2.
+
+---
 
 ### Tasks
 
-- [x] Implement RED rules — compound AND logic with PIR escape hatch
-- [x] Implement YELLOW rules — compound AND logic, ≥2 required to trigger
+- [x] Implement Layer 1 RED rules — compound AND logic with PIR escape hatch
+- [x] Implement Layer 1 YELLOW rules — compound AND logic, ≥1 required to trigger
 - [x] Implement GREEN default assignment
-- [x] Handle NaN/None via `_safe()` helper
-- [x] Use engine output to generate labels for ML model training
-- [ ] Write unit tests for all rule conditions and edge cases
+- [x] Handle NaN/None via `_safe()` helper (raises ValueError)
+- [x] Implement Layer 2 downgrade engine — product + review rules
+- [x] Implement `labeling_pipeline.py` orchestrating Layer 1 → Layer 2
+- [x] Use engine output to generate `final_recommendation` labels for ML training
+- [x] Write unit tests for financial engine rules and edge cases
+- [x] Write unit tests for downgrade engine rules
+- [x] Write unit tests for labeling pipeline orchestration
 - [ ] Verify engine output cannot be overridden by ML or LLM layer
 
 ---
@@ -267,14 +361,13 @@ No RED rules fired and fewer than 2 YELLOW rules accumulated.
 | XGBoost (tree booster) | Nonlinear ensemble | Primary candidate |
 | LightGBM | Nonlinear ensemble | Secondary candidate |
 | XGBoost (linear booster) | Linear ensemble | Fast linear baseline |
-| Logistic Regression | Linear model | Sanity-check baseline |
 
 **Tasks:**
 - Set fixed random seeds across NumPy, scikit-learn, and XGBoost via `Config.RANDOM_STATE`
 - Create stratified 3-way split: train (60%) / validation (20%) / test (20%)
-- Train all 4 candidates with default hyperparameters as baselines
+- Train all 3 candidates with default hyperparameters as baselines
 - Use `eval_set` with validation data + early stopping (10 rounds) for tree-based models
-- Filter invalid hyperparameters per model type automatically
+- Filter invalid hyperparameters per model type automatically via `VALID_PARAMS` in `train.py`
 - Log each baseline run to MLflow: model type, params, validation metrics, artifacts
 - Compare baseline results in MLflow UI
 
@@ -284,9 +377,9 @@ No RED rules fired and fewer than 2 YELLOW rules accumulated.
 
 | Tool | Purpose |
 |------|---------|
-| XGBoost | Primary nonlinear baseline |
+| XGBoost | Primary nonlinear baseline + linear booster variant |
 | LightGBM | Secondary nonlinear baseline |
-| scikit-learn | Logistic Regression, preprocessing, pipeline |
+| scikit-learn | Preprocessing, pipeline |
 | MLflow | Baseline run logging |
 
 ---
@@ -458,25 +551,31 @@ No RED rules fired and fewer than 2 YELLOW rules accumulated.
 
 ### Phase 10 — Sensitivity & Explainability
 
-**Objective:** Understand how model behavior changes with respect to input features and hyperparameter variation.
+**Objective:** Understand how model behavior changes with respect to hyperparameter variation and input features.
 
-**Tasks:**
-- Compute global feature importance from XGBoost built-in scores
-- Run SHAP on selected model — generate global summary plot and local force plots
-- Run LIME on 3–5 representative predictions per class (Green / Yellow / Red)
-- Generate hyperparameter sensitivity curves (F1 vs. key hyperparameters) from Optuna study
-- Identify features that cause instability across financial and product slices
-- Document top 5–10 driving features for Green/Yellow/Red classification
-- Log all SHAP plots, LIME explanations, and sensitivity charts to MLflow
-- Write stability notes flagging inconsistent features across slices
+**Implemented — Optuna-Based Hyperparameter Sensitivity (`sensitivity_analysis.py`):**
+- Analyze completed Optuna study trials for the tuned champion model
+- Compute ranked hyperparameter importance via `optuna.importance.get_param_importances()`
+- Generate importance bar plot (top-K parameters)
+- Generate parameter-vs-objective scatter plots (F1 vs. each top parameter)
+- Save JSON report with study name, trial count, and ranked importances
+- Results saved to `reports/sensitivity/` and logged to MLflow evaluation summary
+- Configurable via `Config.SENSITIVITY_ANALYSIS_ENABLED`, `Config.SENSITIVITY_MIN_COMPLETED_TRIALS`, `Config.SENSITIVITY_TOP_K_PARAMS`
+- Requires minimum completed trials (default: 10) to produce meaningful analysis
+
+**Not Yet Implemented:**
+- SHAP global summary and local force plots
+- LIME local explanations per class
+- Feature-level instability analysis across slices
 
 **Tools:**
 
 | Tool | Purpose |
 |------|---------|
-| SHAP | Global and local feature contribution explanations |
-| LIME | Local interpretable explanations |
-| Permutation Importance | Fast sensitivity baseline |
+| Optuna importance | Hyperparameter sensitivity ranking |
+| Matplotlib | Importance bar plots + scatter plots |
+| SHAP (planned) | Global and local feature contribution explanations |
+| LIME (planned) | Local interpretable explanations |
 
 ---
 
@@ -672,16 +771,20 @@ pytest model_pipeline/tests
 
 | Test File | What It Tests |
 |-----------|--------------|
-| `test_load_data.py` | Schema checks, data loading, join logic |
-| `test_features.py` | Feature construction, encoding, scaling, scenario generation |
-| `test_train.py` | All 4 model types, param filtering, early stopping, seed reproducibility |
-| `test_evaluate.py` | Metric computation, multi-class AUC, visualization generation |
-| `test_bias_slicing.py` | Slice metric computation, disparity detection, pass/fail logic |
-| `test_optuna_tuner.py` | Study creation, objective functions, timeout, unsupported model error |
-| `test_sensitivity.py` | SHAP output shape, LIME stability |
-| `test_registry.py` | Registry push, rollback pointer |
-| `test_decision_logic.py` | All 4 RED rules, all 5 YELLOW rules, GREEN default, edge cases |
-| `test_llm_wrapper.py` | Guardrail enforcement, prompt output validation |
+| `data/test_data_loader.py` | Data loading from PostgreSQL |
+| `data/test_validate_data.py` | Schema and data validation checks |
+| `features/test_feature_engineering.py` | End-to-end feature engineering orchestration |
+| `features/test_financial_features.py` | 6 financial feature computation |
+| `features/test_product_features.py` | 7 product feature computation |
+| `features/test_review_features.py` | 6 review feature computation |
+| `features/test_feature_preprocessing.py` | FeaturePipeline: imputation, encoding, scaling |
+| `features/test_affordability_preprocessing_consistency.py` | Cross-module consistency checks |
+| `deterministic_engine/test_financial_engine.py` | Layer 1: all 4 RED rules, all 5 YELLOW rules, GREEN default, edge cases |
+| `deterministic_engine/test_downgrade_engine.py` | Layer 2: product rules PR1–PR3, review rules RR1–RR3, downgrade logic |
+| `deterministic_engine/test_labeling_pipeline.py` | Layer 1 + Layer 2 orchestration |
+| `core_models/test_evaluate.py` | Metric computation, multi-class AUC, visualization generation |
+| `core_models/test_optuna_tuner.py` | Study creation, objective functions, timeout, unsupported model error |
+| `guards/test_bias_detection.py` | Fairlearn bias metrics (demographic parity, equalized odds) |
 
 ---
 
@@ -742,7 +845,8 @@ Two additional algorithms were evaluated during planning but excluded:
 - [x] Validation metrics computed on hold-out set
 - [x] Visualizations produced: confusion matrix, ROC curve, PR curve, calibration curve
 - [x] Experiments tracked in MLflow with full artifact logging
-- [ ] Sensitivity and explainability analysis completed (SHAP / LIME)
+- [x] Sensitivity analysis completed (Optuna-based hyperparameter importance)
+- [ ] SHAP / LIME explainability analysis
 - [ ] Post-training slice-based bias analysis completed
 - [ ] Bias mitigation steps documented where disparities found
 - [x] Model selection performed after bias checking

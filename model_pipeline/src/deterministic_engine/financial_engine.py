@@ -63,8 +63,8 @@ class DecisionEngine:
             and includes a price_to_income_ratio escape so trivial purchases
             never trigger RED.
     YELLOW: 5 compound AND rules — each crosses at least 2 groups.
-            YELLOW triggers when >= 2 rules trigger.
-    GREEN:  default when no RED triggers and fewer than 2 YELLOW rules trigger.
+            YELLOW triggers when >= 1 rule triggers.
+    GREEN:  default when no RED triggers and no YELLOW rules trigger.
     """
 
     @staticmethod
@@ -96,24 +96,22 @@ class DecisionEngine:
         # --- Per-pair computed features (from financial_features.py) ---
         affordability = self._safe(financial.get("affordability_score"), "affordability_score")
         pir = self._safe(financial.get("price_to_income_ratio"), "price_to_income_ratio")
-        rus = self._safe(financial.get("residual_utility_score"), "residual_utility_score")
         spr = self._safe(financial.get("savings_to_price_ratio"), "savings_to_price_ratio")
         nwi = self._safe(financial.get("net_worth_indicator"), "net_worth_indicator")
         credit = self._safe(financial.get("credit_risk_indicator"), "credit_risk_indicator")
 
         # --- Per-entity DB features (from financial_features.py) ---
         dti = self._safe(financial.get("debt_to_income_ratio"), "debt_to_income_ratio")
-        stir = self._safe(financial.get("saving_to_income_ratio"), "saving_to_income_ratio")
         meb = self._safe(financial.get("monthly_expense_burden_ratio"), "monthly_expense_burden_ratio")
         efm = self._safe(financial.get("emergency_fund_months"), "emergency_fund_months")
 
         # Evaluate RED Rules
-        red_result = self._evaluate_red_rules(affordability, pir, rus, spr, nwi, meb, efm, dti)
+        red_result = self._evaluate_red_rules(affordability, pir, spr, nwi, meb, efm, dti)
         if red_result:
             return red_result
 
         # Evaluate YELLOW Rules
-        yellow_result = self._evaluate_yellow_rules(affordability, pir, rus, spr, nwi, credit, dti, stir, efm, meb)
+        yellow_result = self._evaluate_yellow_rules(affordability, pir, spr, nwi, credit, efm, meb)
         if yellow_result:
             return yellow_result
 
@@ -121,7 +119,7 @@ class DecisionEngine:
         return DecisionResult("GREEN", ["green:all_clear"], [],
             explanation="Affordable purchase with healthy financial position.")
 
-    def _evaluate_red_rules(self, affordability, pir, rus, spr, nwi, meb, efm, dti) -> Optional[DecisionResult]:
+    def _evaluate_red_rules(self, affordability, pir, spr, nwi, meb, efm, dti) -> Optional[DecisionResult]:
         """
         Evaluate RED rules: Purchase would cause financial harm.
         All conditions within each rule must be true (AND logic).
@@ -156,7 +154,7 @@ class DecisionEngine:
 
         return None
 
-    def _evaluate_yellow_rules(self, affordability, pir, rus, spr, nwi, credit, dti, stir, efm, meb) -> Optional[DecisionResult]:
+    def _evaluate_yellow_rules(self, affordability, pir, spr, nwi, credit, efm, meb) -> Optional[DecisionResult]:
         """
         Evaluate YELLOW rules: Genuine concern — user should pause and think.
         YELLOW now triggers when >= 1 rule triggers.

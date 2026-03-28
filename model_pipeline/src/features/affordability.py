@@ -28,7 +28,7 @@ def compute_affordability_values(
     expenses = user_financial_profile.get("monthly_expenses", 0.0)
     emi = user_financial_profile.get("monthly_emi", 0.0)
     loan_amount = user_financial_profile.get("loan_amount", 0.0)
-    credit_score = user_financial_profile.get("credit_score", 0)
+    credit_score = user_financial_profile.get("credit_score")
 
     # Spend prior approved purchases from discretionary income first, then savings.
     di_used = min(max(discretionary, 0.0), cumulative_spend)
@@ -47,7 +47,7 @@ def compute_affordability_values(
 
     savings_to_price = round(savings / product_price, 4) if product_price > 0 else None
     net_worth = round((savings - loan_amount) / income, 4) if income > 0 else None
-    credit_risk = round((credit_score - 299) / 550, 4) if credit_score else None
+    credit_risk = round((credit_score - 299) / 550, 4) if credit_score is not None else None
 
     return {
         "affordability_score": affordability_score,
@@ -74,7 +74,7 @@ def add_affordability_features(
                 "monthly_expenses": row.get("monthly_expenses", 0.0),
                 "monthly_emi": row.get("monthly_emi", 0.0),
                 "loan_amount": row.get("loan_amount", 0.0),
-                "credit_score": row.get("credit_score", 0),
+                "credit_score": row.get("credit_score"),
             },
             product_price=float(row.get(product_price_col, 0.0) or 0.0),
             cumulative_spend=0.0,

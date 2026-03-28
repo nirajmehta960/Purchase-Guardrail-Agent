@@ -134,5 +134,10 @@ model_pipeline/artifacts/
 
 # Experiments and tests
 model_pipeline/experiments/
+
+# Documentation
+docs/
+
+# Deployment
 deployment/docker/
 deployment/smoke_test.sh

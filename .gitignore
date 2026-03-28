@@ -132,8 +132,12 @@ data_pipeline/config/
 config/
 model_pipeline/artifacts/
 
-# Jupyter Notebooks
+# Experiments and tests
 model_pipeline/experiments/
 
 # Documentation
 docs/
+
+# Deployment
+deployment/docker/
+deployment/smoke_test.sh

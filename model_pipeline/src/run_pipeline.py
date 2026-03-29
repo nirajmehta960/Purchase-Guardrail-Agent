@@ -11,6 +11,7 @@ Orchestrates the full model training flow:
 Usage:
     python run_pipeline.py
 """
+from llm.llm_wrapper import LLMWrapper
 
 import os
 import logging
@@ -33,6 +34,12 @@ from core_models.sensitivity_analysis import analyze_optuna_sensitivity
 
 logger = logging.getLogger(__name__)
 
+def simple_llm(prompt):
+    """
+    Temporary LLM function (for testing)
+    Later we will replace with real LLM (Groq/OpenAI)
+    """
+    return "This purchase decision is based on your financial condition and product cost."
 
 def write_evaluation_summary_md(candidates, best, final_metrics, output_path, sensitivity_summary=None):
     """Write a simple markdown summary for 3 baseline models + champion."""
@@ -455,6 +462,9 @@ def main():
     initialize()
     print("[1/6] Initialization complete.")
 
+    # Initialize LLM Wrapper
+    llm_wrapper = LLMWrapper(simple_llm)
+
     # 2. Build features, encode labels, 3-way split.
     print("[2/6] Preparing data (load/encode/split)...")
     data = prepare_data()
@@ -510,6 +520,76 @@ def main():
         report_path,
         sensitivity_summary=sensitivity_summary,
     )
+
+    # -------------------------------
+    # LLM TEST (Phase 14 + Phase 15)
+    # -------------------------------
+    if best:
+        print("\n[LLM TEST] Generating explanation...")
+
+        # Get real prediction from model
+        sample_index = 0
+        sample_input = data["X_test"].iloc[[sample_index]]
+
+        pred_encoded = best["model"].predict(sample_input)[0]
+        decision = data["label_encoder"].inverse_transform([pred_encoded])[0]
+
+        # Get model confidence
+        if hasattr(best["model"], "predict_proba"):
+            probs = best["model"].predict_proba(sample_input)[0]
+            ml_confidence = max(probs)
+        else:
+            ml_confidence = 0.5  # fallback
+
+        # Get raw scenario data (same index)
+        sample_row = data["scenarios_raw"].iloc[sample_index]
+
+        # Generate LLM explanation
+        sample_output = llm_wrapper.generate_recommendation(
+            decision=decision,
+            financial_features={
+                "affordability_score": sample_row.get("affordability_score"),
+                "price_to_income_ratio": sample_row.get("price_to_income_ratio"),
+                "savings_to_price_ratio": sample_row.get("savings_to_price_ratio")
+            },
+            product_features={
+                "price": sample_row.get("price"),
+                "category": sample_row.get("category")
+            },
+            ml_confidence=ml_confidence
+        )
+
+        # Print output
+        print("\n[LLM TEST OUTPUT]")
+        print(f"Decision: {sample_output['decision']}")
+        print(f"Explanation: {sample_output['explanation']}")
+        print(f"Latency: {sample_output['latency']:.4f} sec")
+        print(f"Guardrail Triggered: {sample_output['guardrail_triggered']}")
+
+        # -------------------------------
+        # Simple Monitoring Alerts
+        # -------------------------------
+        if sample_output["latency"] > 2:
+        print("[WARNING] High LLM latency detected")
+
+        if sample_output["guardrail_triggered"]:
+        print("[WARNING] Guardrail triggered for this response")
+
+        # -------------------------------
+        # Log LLM metrics to MLflow
+        # -------------------------------
+        try:
+            with mlflow.start_run(run_name="LLM_explanation_test"):
+                mlflow.log_param("llm_decision", sample_output["decision"])
+                mlflow.log_metric("llm_latency", sample_output["latency"])
+                mlflow.log_metric("llm_guardrail_triggered", int(sample_output["guardrail_triggered"]))
+                mlflow.log_metric("llm_explanation_length", sample_output["explanation_length"])
+                mlflow.log_text(sample_output["explanation"], "llm_explanation.txt")
+        except Exception as e:
+            print(f"[LLM LOGGING ERROR] {e}")
+
+    else:
+        print("\n[LLM TEST] Skipped because no best model was selected.")
 
     # Summary.
     if best:

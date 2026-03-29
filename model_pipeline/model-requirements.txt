@@ -101,4 +101,4 @@ python-json-logger>=2.0.7
 # -----------------------------------------------------------------------------
 tqdm>=4.66.1  # Progress bars
 tabulate>=0.9.0  # Pretty-print tables
-sqlalchemy<2.0
+sqlalchemy>=2.0

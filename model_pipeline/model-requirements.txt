@@ -18,7 +18,6 @@ optuna-integration[mlflow]
 
 # For PostgreSQL
 psycopg2-binary
-sqlalchemy
 
 # -----------------------------------------------------------------------------
 # Google Cloud Platform

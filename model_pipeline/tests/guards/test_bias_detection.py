@@ -1,5 +1,9 @@
 import sys
 import os
+from unittest.mock import MagicMock
+
+# Fix sqlalchemy __spec__ issue in CI environment
+sys.modules['sqlalchemy'] = MagicMock()
 
 # Add src/ to path so 'guards' package is findable
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../src")))

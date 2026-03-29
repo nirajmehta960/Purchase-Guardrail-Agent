@@ -7,12 +7,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import config
 from features.affordability import add_affordability_features
 from features.financial_features import compute_affordability
-from features.preprocessing import FeaturePipeline
+from features.feature_preprocessing import FeaturePipeline
 
 
 

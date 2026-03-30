@@ -1,9 +1,65 @@
 import re
 import time
+import os
+import requests
+
+
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+GROQ_MODEL = "llama-3.1-8b-instant"
+
+
+def call_groq(prompt: str) -> str:
+    """
+    Calls Groq API with retry logic.
+    Uses llama-3.1-8b-instant (free tier, very fast).
+    """
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 200,
+        "temperature": 0.3,
+    }
+
+    max_retries = 3
+    delay = 2
+
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=30,
+            )
+            if response.status_code == 429:
+                print(f"[LLM] Rate limited. Retrying in {delay} sec...")
+                time.sleep(delay)
+                delay *= 2
+                continue
+            response.raise_for_status()
+            data = response.json()
+            if "choices" not in data:
+                print(f"[LLM] Unexpected response: {data}")
+                raise KeyError("choices")
+            return data["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            print(f"[LLM ERROR] Attempt {attempt + 1}: {e}")
+            time.sleep(delay)
+            delay *= 2
+
+    return "Unable to generate explanation safely."
+
 
 class LLMWrapper:
-    def __init__(self, llm_client):
-        self.llm = llm_client
+    def __init__(self, llm_client=None):
+        # Use Groq LLM by default
+        self.llm = llm_client if llm_client is not None else call_groq
 
     def generate_recommendation(
         self,

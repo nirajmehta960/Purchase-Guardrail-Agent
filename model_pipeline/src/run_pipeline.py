@@ -18,6 +18,7 @@ import logging
 import joblib
 import numpy as np
 from datetime import datetime
+from dotenv import load_dotenv
 
 import mlflow
 from sklearn.model_selection import train_test_split
@@ -32,15 +33,10 @@ from core_models.evaluate import evaluate_model
 from core_models.optuna_tuner import tune_best_candidate
 from core_models.sensitivity_analysis import analyze_optuna_sensitivity
 
+# Load environment variables from .env file
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "../../.env"))
+
 logger = logging.getLogger(__name__)
-
-
-def simple_llm(prompt):
-    """
-    Temporary LLM function (for testing).
-    Later we will replace with real LLM (Groq/OpenAI).
-    """
-    return "This purchase decision is based on your financial condition and product cost."
 
 
 def write_evaluation_summary_md(candidates, best, final_metrics, output_path, sensitivity_summary=None):
@@ -438,8 +434,8 @@ def main():
     initialize()
     print("[1/6] Initialization complete.")
 
-    # Initialize LLM Wrapper.
-    llm_wrapper = LLMWrapper(simple_llm)
+    # Initialize LLM Wrapper with real OpenRouter LLM.
+    llm_wrapper = LLMWrapper()
 
     # 2. Build features, encode labels, 3-way split.
     print("[2/6] Preparing data (load/encode/split)...")
@@ -584,6 +580,7 @@ def main():
         try:
             with mlflow.start_run(run_name="LLM_explanation_test"):
                 mlflow.log_param("llm_decision", sample_output["decision"])
+                mlflow.log_param("llm_model", "mistralai/mistral-7b-instruct:free")
                 mlflow.log_metric("llm_latency", sample_output["latency"])
                 mlflow.log_metric("llm_guardrail_triggered", int(sample_output["guardrail_triggered"]))
                 mlflow.log_metric("llm_explanation_length", sample_output["explanation_length"])

@@ -294,31 +294,33 @@ Provision all required cloud resources by applying the Terraform configuration.
 ## Phase 3 — Backend: API & Inference Layer
 
 ### Objective
-Expose the model through a production-grade REST API. The user provides a natural language prompt — the LLM extracts product information from the prompt, which then flows through the deterministic engine and ML model to produce a recommendation.
+Expose the SavVio model pipeline through a production-grade FastAPI REST API. The API acts as an orchestration layer that receives user context and natural language prompts, looks up data from PostgreSQL, and correctly chains the deterministic rules engine, ML model, and LLM generative pipeline to produce an authoritative recommendation.
 
 ### Tasks
 - Build FastAPI application in `deployment/api/main.py`
-- Define Pydantic request schema in `deployment/api/schemas.py`:
-  - **Request:** natural language user prompt (string)
-  - **Response:** recommendation color (Green/Yellow/Red), confidence score, natural language explanation
-- Implement `/predict` endpoint in `deployment/api/inference.py` with the following strict call order:
-  1. Receive natural language user prompt
-  2. Pass prompt to **LLM Wrapper** (`llm_wrapper.py`) → extract product signals and financial context from prompt
-  3. Pass extracted signals through **Deterministic Engine** (`decision_logic.py`) → authoritative Green/Yellow/Red color output
-  4. Pass extracted signals to **ML Model** → confidence score and ranking support only (cannot override engine color)
-  5. Pass deterministic color + ML confidence back to **LLM Wrapper** → generate natural language explanation, enforced by NeMo Guardrails
-- Enforce rule: LLM output must never contradict or override the deterministic engine's color classification
-- Add `/health` endpoint for liveness checks and deployment verification
-- Test `/predict` and `/health` endpoints locally before containerization
+- Define Pydantic models in `deployment/api/schemas.py`:
+  - **Request:** Natural language user prompt and `user_id`, or direct `product_id` for evaluation
+  - **Response:** Authoritative recommendation color (Green/Yellow/Red), confidence score, triggered rules, and natural language explanation
+- Implement `deployment/api/model_loader.py` to create a `ModelManager` singleton that persistently loads the XGBoost artifact, PostgreSQL DB engine, Label Encoder, and initialized LLM provider for fast iterative inferencing.
+- Implement inference orchestrator in `deployment/api/inference.py` with the following strict sequence:
+  1. Load the user's financial profile from the `financial_profiles` database table using `user_id`.
+  2. Parse intent and resolve the product from the user's natural language using `sentence-transformers` via pgvector similarity search in the `products` table.
+  3. Compute user affordability, product risk, and review risk features.
+  4. Pass features through the **Deterministic Engine (Layer 1 & Layer 2)** to compute an authoritative Green/Yellow/Red color output and note any downgrades.
+  5. Pass features to the **XGBoost ML Model** to get a confidence score (cannot override engine color).
+  6. Pass color, score, and context to the **LLM Pipeline** for natural language explanation generation and final verification via guardrails.
+- Add robust exceptions, unit tests in `deployment/tests/` using Pytest, and CORS configuration.
+- Implement `/health` endpoint for liveness checks and tracking loaded resources.
 
 ### Tools
 
 | Tool | Purpose |
 |---|---|
-| FastAPI | API serving and request routing |
-| Python | Inference logic and engine integration |
+| FastAPI & Uvicorn | High-performance API serving and routing |
 | Pydantic | Request/response schema validation |
-| NeMo Guardrails | LLM safety enforcement at output boundary |
+| sentence-transformers | Natural language to pgvector product resolution |
+| XGBoost & MLflow | Local model artifact hydration and scoring |
+| Pytest | Comprehensive unit testing of orchestrator and mocked endpoints |
 
 ---
 

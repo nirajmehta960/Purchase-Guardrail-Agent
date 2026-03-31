@@ -71,30 +71,31 @@ RED_TEMPLATES = [
 # ---------------------------------------------------------------------------
 
 RULE_EXPLANATIONS = {
-    # Layer 1 — Financial Engine RED rules
-    "RED_1": "this purchase exceeds what your income and savings can comfortably cover",
-    "RED_2": "your monthly expenses are already very high relative to income, and "
-             "this purchase would further stretch your budget",
-    "RED_3": "your current debt position means this purchase could put you in a "
-             "difficult financial spot",
-    "RED_4": "your emergency fund is very thin, and taking on this expense could "
-             "leave you without a financial safety net",
+    # Layer 1 — Financial Engine RED rules (keys match financial_engine.py triggered_rules strings)
+    "red:cant_afford_from_any_angle":       "this purchase exceeds what your income and savings can comfortably cover",
+    "red:maxed_budget_significant_purchase": "your monthly expenses are already very high relative to income, and "
+                                             "this purchase would further stretch your budget",
+    "red:underwater_no_surplus_significant": "your current debt position means this purchase could put you in a "
+                                             "difficult financial spot",
+    "red:paycheck_to_paycheck_wipes_net":   "your emergency fund is very thin, and taking on this expense could "
+                                             "leave you without a financial safety net",
 
     # Layer 1 — Financial Engine YELLOW rules
-    "YELLOW_1": "this purchase would push your discretionary spending into "
-                "uncomfortable territory",
-    "YELLOW_2": "your savings relative to this purchase price suggest it's a "
-                "significant expense for you",
-    "YELLOW_3": "your monthly obligations are already high, and this would add "
-                "more pressure",
-    "YELLOW_4": "your emergency fund could use some building up before taking on "
-                "additional expenses",
-    "YELLOW_5": "a few indicators in your financial profile suggest some caution "
-                "with larger purchases right now",
+    "yellow:income_pressure": "this purchase would push your discretionary spending into uncomfortable territory",
+    "yellow:savings_strain":  "your savings relative to this purchase price suggest it's a significant expense for you",
+    "yellow:debt_stress":     "your monthly obligations are already high, and this would add more pressure",
+    "yellow:low_resilience":  "your emergency fund could use some building up before taking on additional expenses",
+    "yellow:weak_profile":    "a few indicators in your financial profile suggest some caution with larger purchases right now",
 
-    # Layer 2 — Downgrade Engine
-    "downgrade_product": "the product's quality signals raise some concerns",
-    "downgrade_review": "the product's review patterns suggest mixed feedback",
+    # Layer 2 — Downgrade Engine product rules
+    "PR1:underrated_unverified":     "the product's quality signals raise some concerns",
+    "PR2:worst_premium_in_category": "the product's quality signals raise some concerns",
+    "PR3:polarized_new_expensive":   "the product's quality signals raise some concerns",
+
+    # Layer 2 — Downgrade Engine review rules
+    "RR1:fake_review_pattern":           "the product's review patterns suggest mixed feedback",
+    "RR2:unverified_opinion_domination": "the product's review patterns suggest mixed feedback",
+    "RR3:negative_shallow_unverified":   "the product's review patterns suggest mixed feedback",
 }
 
 # Fallback for unknown rules

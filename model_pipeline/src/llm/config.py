@@ -29,7 +29,7 @@ class LLMConfig:
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-    ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-4.5-sonnet")
+    ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
 
     # ---------------------------------------------------------------------------
     # Product Resolution (pgvector similarity search)

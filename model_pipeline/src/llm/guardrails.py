@@ -47,9 +47,14 @@ _INTERNAL_TERMS = [
     "deterministic engine", "deterministic", "decision engine",
     "financial engine", "downgrade engine",
     "rule red", "rule yellow", "rule green",
+    # Old placeholder rule names
     "red_1", "red_2", "red_3", "red_4",
     "yellow_1", "yellow_2", "yellow_3", "yellow_4", "yellow_5",
-    "pr1", "pr2", "pr3", "rr1", "rr2", "rr3",
+    # Actual engine rule keys (must never leak to user)
+    "red:cant_afford", "red:maxed_budget", "red:underwater", "red:paycheck_to_paycheck",
+    "yellow:income_pressure", "yellow:savings_strain", "yellow:debt_stress",
+    "yellow:low_resilience", "yellow:weak_profile",
+    "pr1:", "pr2:", "pr3:", "rr1:", "rr2:", "rr3:",
     "lightgbm", "xgboost", "lgbm", "ml model",
     "confidence score", "predict_proba", "pgvector",
     "embedding", "sentence-transformer", "cosine similarity",

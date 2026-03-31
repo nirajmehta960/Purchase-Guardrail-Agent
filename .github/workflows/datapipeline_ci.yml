@@ -31,6 +31,8 @@ jobs:
 
       - name: Run unit tests
         working-directory: data_pipeline
+        env:
+          PYTHONPATH: dags/src:dags
         run: |
           python -m pytest \
             tests/bias/ \

@@ -71,6 +71,7 @@ jobs:
         working-directory: model_pipeline
         run: |
           pip install --upgrade pip
+          pip install -e ../savviocore   # install savviocore from root
           pip install -e .
           if [ -f model-requirements.txt ]; then pip install -r model-requirements.txt; fi
           pip install --force-reinstall "sqlalchemy>=2.0"

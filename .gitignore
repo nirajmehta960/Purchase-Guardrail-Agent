@@ -98,6 +98,8 @@ htmlcov/
 *.tfstate.*
 .terraform/
 .terraform.lock.hcl
+!deployment/terraform/modules/secrets/
+
 
 # Kubernetes
 *.kubeconfig

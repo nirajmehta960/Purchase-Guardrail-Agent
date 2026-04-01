@@ -100,7 +100,6 @@ htmlcov/
 .terraform.lock.hcl
 !deployment/terraform/modules/secrets/
 
-
 # Kubernetes
 *.kubeconfig
 
@@ -120,6 +119,7 @@ data_pipeline/config/
 *.pem
 *.key
 *.crt
+!deployment/terraform/modules/secrets/
 
 # Compiled files
 *.pyc

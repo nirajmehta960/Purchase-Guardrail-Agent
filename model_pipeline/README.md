@@ -77,7 +77,7 @@ SavVio/
 | Experiment Tracking | MLflow | Weights & Biases | Run metadata completeness |
 | Model Registry Push | GCP Artifact Registry, Vertex AI | MLflow Registry | Push only on all gates pass |
 | CI/CD Automation | GitHub Actions, Docker | Cloud Build, Jenkins | src ↔ test ↔ DB ↔ ML pipeline |
-| LLM Integration | Google Gemini (google-genai), sentence-transformers, pgvector | OpenAI, Claude | Guardrail checks (6) must pass |
+| LLM Integration | OpenRouter (Gemini 2.0), sentence-transformers, pgvector | OpenAI, Claude | Guardrail checks (G1-G6) must pass |
 | Monitoring & Dashboard | Evidently, Arize | WhyLabs, GCP Monitoring | Drift + latency alerts |
 
 ---
@@ -731,36 +731,35 @@ GitHub Actions / Cloud Build  [Dockerized]
 The LLM has **two distinct roles** — it is NOT just an output wrapper:
 
 ```
-User: "Can I buy the Sony WH-1000XM5?"
+User Query ("Should I buy this $1,500 laptop?")
          │
          ▼
 ┌─── LLM Role 1: Intent Parser ───┐
-│  Parse intent → purchase_query   │
-│  Extract product → "Sony WH-..." │
+│  Parse intent → purchase_query   │  Hybrid LLM + Regex Logic
+│  Extract product → "laptop"      │
 └──────────────┬───────────────────┘
                │
                ▼
 ┌─── Product Resolver ────────────┐
-│  Embed query (all-MiniLM-L6-v2) │
-│  pgvector similarity search     │
-│  → product_id matched           │
+│  Embed query (pgvector)         │  Cosine similarity search
+│  Match → product_id: 8214        │  against products catalog
 └──────────────┬──────────────────┘
                │
                ▼
     [API Layer runs Engines + ML]
-    (Steps 3–6 from deployment)
+    (Financial rules + XGBoost Score)
                │
                ▼
 ┌─── LLM Role 2: Response Gen ───┐
-│  Deterministic color + ML conf  │
-│  → Conversational recommendation│
+│  Combine Engine + ML + Context  │  Fiduciary-grounded
+│  → Conversational recommend     │  conversational advice
 └──────────────┬─────────────────┘
                │
                ▼
-┌─── Guardrails (6 checks) ──────┐
-│  G1: Color contradiction        │
-│  G2: Hallucinated figures        │
-│  G3: Out-of-scope advice         │
+┌─── Fiduciary Guardrails ───────┐
+│  G1: Color contradiction        │  Ensures LLM never
+│  G2: Hallucinated figures        │  violates the authoritative
+│  G3: Out-of-scope advice         │  deterministic core.
 │  G4: Internal leakage            │
 │  G5: Tone mismatch               │
 │  G6: Length check                │
@@ -771,16 +770,12 @@ User: "Can I buy the Sony WH-1000XM5?"
 ```
 
 **Source Files:**
-- `llm/config.py` — Provider selection, API keys, embedding config, guardrail thresholds
-- `llm/llm_provider.py` — Strategy-pattern abstraction: `MockProvider`, `GeminiProvider`, `OpenAIProvider`, `ClaudeProvider`
-- `llm/intent_parser.py` — Role 1: regex-based (mock) or LLM-based intent detection + product extraction
-- `llm/product_resolver.py` — pgvector cosine similarity search against `product_embeddings` table
-- `llm/response_generator.py` — Role 2: template-based (mock) or LLM-based response generation
-- `llm/guardrails.py` — 6 code-level safety checks with NeMo-ready interface
-- `llm/prompt_engin.py` — Legacy facade for backward compatibility with `run_pipeline.py`
-- `llm/prompts/system_prompt.py` — SavVio persona definition + 5 critical rules (v1.0)
-- `llm/prompts/intent_prompt.py` — Intent extraction prompt template (v1.0)
-- `llm/prompts/response_templates.py` — GREEN/YELLOW/RED templates + rule-to-explanation mappings
+- `llm/README.md` — Detailed LLM sub-package documentation
+- `llm/llm_provider.py` — Strategy-pattern abstraction: `OpenRouterProvider` (Hub), `GeminiProvider`, `MockProvider`
+- `llm/intent_parser.py` — Hybrid intent detection + extraction (LLM + Regex fallbacks)
+- `llm/product_resolver.py` — pgvector cosine similarity search against `products` catalog
+- `llm/response_generator.py` — Multi-stage conversational generation grounded in financial context
+- `llm/guardrails.py` — 6 code-level safety checks ensuring fiduciary compliance
 
 **Provider Configuration:**
 
@@ -800,14 +795,15 @@ User: "Can I buy the Sony WH-1000XM5?"
 
 | Check | What It Catches |
 |-------|-----------------|
-| G1 — Color contradiction | Response says "buy" when color is RED, or "don't buy" when GREEN |
-| G2 — Hallucinated figures | Dollar amounts in response not present in input context |
-| G3 — Out-of-scope advice | Investment tips, credit card suggestions, stock advice |
-| G4 — Internal leakage | Mentions of "deterministic engine", "LightGBM", rule names, pgvector |
-| G5 — Tone mismatch | GREEN response uses alarm words; RED uses encouragement words |
-| G6 — Length check | Response exceeds configured max word count (default: 150) |
+| **G1 — Color contradiction** | Responses that encourage a purchase when the engine labeled it RED. |
+| **G2 — Hallucinated figures** | Any price or income figures mentioned that don't match the input profile. |
+| **G3 — Out-of-scope advice** | Refuses to give investment, tax, or legal advice. |
+| **G4 — Internal leakage** | Filters out mentions of internal rules (e.g., `RED 1`) or technical terms (`pgvector`). |
+| **G5 — Tone mismatch** | Ensures empathy for RED/YELLOW and objective support for GREEN. |
+| **G6 — Length check** | Strict word count limits to keep conversation concise and mobile-friendly. |
 
-**NeMo Guardrails:** Deferred to deployment phase. The `guardrails.py` module is structured with a clean interface so NeMo can be plugged in later via a `NeMoGuardrailsAdapter` without changing calling code.
+**Provider Hub:**
+SavVio uses **OpenRouter** as its primary production hub, providing access to `gemini-2.0-flash` with high reliability and zero-SDK dependency. Direct SDK providers (`google-genai`, `openai`, `anthropic`) are maintained as high-performance fallbacks.
 
 **Tasks:**
 - [x] Design provider-agnostic LLM abstraction (strategy pattern)
@@ -960,15 +956,15 @@ Two additional algorithms were evaluated during planning but excluded:
 - [x] Experiments tracked in MLflow with full artifact logging
 - [x] Sensitivity analysis completed (Optuna-based hyperparameter importance)
 - [ ] SHAP / LIME explainability analysis
-- [ ] Post-training slice-based bias analysis completed
-- [ ] Bias mitigation steps documented where disparities found
+- [x] Post-training slice-based bias analysis completed (Fairlearn)
+- [x] Bias mitigation steps documented where disparities found
 - [x] Model selection performed after bias checking
-- [ ] Best model pushed to GCP Artifact Registry or Vertex AI
-- [ ] CI/CD pipeline: trigger → train → validate → bias → push
-- [ ] Automated validation gate implemented
-- [ ] Automated bias detection gate implemented
-- [ ] Notifications and alerts configured
-- [ ] Rollback mechanism implemented
+- [x] Best model pushed to MLflow Registry and GCP Artifact Registry
+- [x] CI/CD pipeline: trigger → train → validate → bias → push
+- [x] Automated validation gate implemented
+- [x] Automated bias detection gate implemented
+- [x] Notifications and alerts configured
+- [x] Rollback mechanism implemented
 - [x] Full pipeline containerized in Docker
 
 ### SavVio-Specific
@@ -979,10 +975,10 @@ Two additional algorithms were evaluated during planning but excluded:
 - [x] Optuna configured for hyperparameter search (Bayesian + pruning)
 - [x] Bias detection confirmed as post-training (on validation set)
 - [x] MLflow experiment tracking fully implemented
-- [ ] CI/CD connects src ↔ test ↔ DB ↔ ML (Dockerized)
+- [x] CI/CD connects src ↔ test ↔ DB ↔ ML (Dockerized)
 - [x] LLM integration implemented (dual-role: intent parsing + response generation)
 - [x] Prompt templates version-controlled (system_prompt v1.0, intent_prompt v1.0, response_templates v1.0)
 - [x] Gemini provider verified (12/12 live API checks passed)
 - [x] 6 code-level guardrails implemented and tested (77 unit tests passing)
-- [ ] NeMo Guardrails integration (deferred to deployment phase)
+- [x] NeMo-ready Guardrails abstraction (deferred full NeMo to production config)
 - [ ] Monitoring and dashboard deployed

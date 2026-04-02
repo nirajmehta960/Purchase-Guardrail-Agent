@@ -50,14 +50,12 @@ jobs:
           python -c "from preprocess.run_preprocessing import run_pipeline; run_pipeline()"
           python -c "from features.run_features import main; main()"
 
-      - name: Set up src package
-        working-directory: data_pipeline
-        run: |
-          cp -r dags/src src
       - name: Run unit tests
-        working-directory: data_pipeline/dags
+        working-directory: data_pipeline
         env:
-          PYTHONPATH: src:.
+          # dags/        → allows 'from src.ingestion ...' (src pkg lives at dags/src/)
+          # dags/src/    → allows bare 'from ingestion ...' imports used inside src modules
+          PYTHONPATH: ${{ github.workspace }}/data_pipeline/dags:${{ github.workspace }}/data_pipeline/dags/src
         run: |
           python -m pytest \
             tests/bias/ \

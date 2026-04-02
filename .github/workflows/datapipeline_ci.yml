@@ -30,7 +30,10 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -e ../savviocore
-          pip install -e .
+          # Note: 'pip install -e .' is intentionally omitted.
+          # data_pipeline/pyproject.toml has no [project.dependencies], so the
+          # editable install adds nothing useful but may corrupt sys.path by
+          # inserting the project root instead of dags/ into site-packages .pth.
           if [ -f data-requirements.txt ]; then pip install -r data-requirements.txt; fi
           pip install pytest pytest-cov
 
@@ -50,12 +53,21 @@ jobs:
           python -c "from preprocess.run_preprocessing import run_pipeline; run_pipeline()"
           python -c "from features.run_features import main; main()"
 
+      - name: Debug sys.path
+        working-directory: data_pipeline
+        env:
+          PYTHONPATH: ${{ github.workspace }}/data_pipeline/dags
+        run: |
+          python -c "import sys; [print(p) for p in sys.path]"
+          python -c "import src; print('src OK:', src.__file__)"
+          python -c "from src.ingestion.config import ENVIRONMENT; print('src.ingestion OK')"
+
       - name: Run unit tests
         working-directory: data_pipeline
         env:
-          # Only add dags/ so Python finds 'src' as a proper package at dags/src/
-          # Adding dags/src/ as well causes a namespace collision: Python sees
-          # the name 'src' from two path entries and treats it as non-package.
+          # Only dags/ in PYTHONPATH — Python finds 'src' as a proper package (dags/src/).
+          # conftest.py also adds dags/ (and ONLY dags/) to sys.path.
+          # Having dags/src/ in the path too triggers a namespace package collision.
           PYTHONPATH: ${{ github.workspace }}/data_pipeline/dags
         run: |
           python -m pytest \

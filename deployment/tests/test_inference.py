@@ -73,12 +73,12 @@ class TestModelManager:
         assert confidence == 0.85
 
     def test_predict_no_model_returns_default(self):
-        """With no model loaded, predict() should return GREEN with 0.0 confidence."""
+        """With no model loaded, predict() should return GREEN with no confidence."""
         from deployment.api.model_loader import ModelManager
         manager = ModelManager()
         label, confidence = manager.predict(np.array([[1, 2, 3]]))
         assert label == "GREEN"
-        assert confidence == 0.0
+        assert confidence is None
 
     def test_predict_confidence_range(self):
         """Confidence should always be in [0, 1]."""
@@ -101,14 +101,17 @@ class TestModelManager:
 
     def test_llm_provider_defaults_to_mock(self):
         """When LLM provider init fails, should fall back to mock."""
+        from unittest.mock import patch
         from deployment.api.model_loader import ModelManager
         manager = ModelManager()
-        manager._init_llm_provider()
+        with patch("llm.llm_provider.get_provider", side_effect=RuntimeError("no key")):
+            manager._init_llm_provider()
         assert manager.llm_provider is not None
         assert manager.llm_provider.provider_name == "mock"
 
     def test_health_check_helpers(self):
         """check_db_connection and get_llm_provider_name should work."""
+        from unittest.mock import patch
         from deployment.api.model_loader import ModelManager
         manager = ModelManager()
 
@@ -118,6 +121,7 @@ class TestModelManager:
         # No provider → "none"
         assert manager.get_llm_provider_name() == "none"
 
-        # After init → "mock"
-        manager._init_llm_provider()
+        # Force fallback to mock regardless of configured LLM provider.
+        with patch("llm.llm_provider.get_provider", side_effect=RuntimeError("no key")):
+            manager._init_llm_provider()
         assert manager.get_llm_provider_name() == "mock"

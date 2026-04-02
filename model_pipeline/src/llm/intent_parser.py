@@ -1,256 +1,224 @@
 """
-Intent Parser — LLM Role 1: Natural Language Understanding.
-
-Parses user queries like "Can I buy the Sony WH-1000XM5?" to extract:
-    - intent: purchase_query, general_question, or out_of_scope
-    - product_reference: the product name/title the user is asking about
-    - user_context: any additional context ("I have some money saved up...")
-
-Uses regex/keyword-based parsing when the MockProvider is active,
-and structured LLM generation when a real provider is configured.
-
-Usage:
-    from llm.intent_parser import parse_user_input
-    from llm.llm_provider import get_provider
-
-    provider = get_provider()
-    result = parse_user_input("Can I buy the iPhone 15?", provider)
-    # → ParsedIntent(intent="purchase_query", product_reference="iPhone 15", ...)
+Parse natural-language purchase queries into intent + product reference.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass
-
-from llm.llm_provider import LLMProvider, MockProvider
-from llm.prompts.intent_prompt import INTENT_EXTRACTION_PROMPT, INTENT_SCHEMA
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
 
+def extract_price_hint(text: str) -> Optional[float]:
+    """Parse a dollar amount like $350 or $1,200.99 from the user message."""
+    if not text:
+        return None
+    m = re.search(r"\$\s*([\d,]+(?:\.\d{1,2})?)", text)
+    if m:
+        try:
+            return float(m.group(1).replace(",", ""))
+        except ValueError:
+            return None
+    return None
+
+
+def clean_product_reference(ref: Optional[str]) -> Optional[str]:
+    """Remove a leading price so catalog search uses product words (e.g. 'headphones' not '$350 headphones')."""
+    if not ref:
+        return None
+    s = ref.strip()
+    s = re.sub(r"^\s*\$\s*[\d,]+(?:\.\d{1,2})?\s+", "", s)
+    s = re.sub(r"^\s*[\d,]+(?:\.\d{1,2})?\s+", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s if len(s) >= 2 else None
+
+
 @dataclass
 class ParsedIntent:
-    """Result of parsing a user's natural language input."""
-    intent: str             # "purchase_query" | "general_question" | "out_of_scope"
-    product_reference: str | None   # Extracted product text, e.g., "Sony WH-1000XM5"
-    user_context: str | None        # Extra context the user shared
-    confidence: float               # 0.0–1.0 confidence in the parse
+    """Result of parse_user_input."""
+
+    intent: str  # "purchase_query" | "out_of_scope"
+    product_reference: Optional[str] = None
+    user_context: Optional[str] = None
+    # Dollar amount from the query (e.g. $350) — used to match catalog price or hypothetical buy
+    price_hint: Optional[float] = None
 
 
-# ---------------------------------------------------------------------------
-# Purchase-intent keyword patterns
-# ---------------------------------------------------------------------------
+def _heuristic_parse(query: str) -> ParsedIntent:
+    """Regex/heuristic fallback when LLM is unavailable or returns junk."""
+    q = (query or "").strip()
+    if not q:
+        return ParsedIntent(intent="out_of_scope", product_reference=None)
 
-# Patterns that indicate the user wants to evaluate a purchase.
-# Each pattern captures the product reference as a named group.
-_PURCHASE_PATTERNS: list[re.Pattern] = [
-    # "Can I buy <product>?"
-    re.compile(
-        r"(?:can|could|may)\s+I\s+(?:buy|purchase|afford|get)\s+(?:the\s+|a\s+|an\s+)?(?P<product>.+?)[\?\.\!]?\s*$",
+    lower = q.lower()
+    # Obvious non-purchase chit-chat
+    if re.match(r"^(hi|hello|hey|thanks|thank you|ok|okay)\b", lower) and len(q) < 40:
+        return ParsedIntent(intent="out_of_scope", product_reference=None)
+
+    # Extract quoted strings
+    m = re.search(r"['\"]([^'\"]{2,80})['\"]", q)
+    if m:
+        return ParsedIntent(intent="purchase_query", product_reference=m.group(1).strip())
+
+    # "$2,500 Peloton worth it?" — take the product words after the price, stop before " worth " or ? / end.
+    # Must run before any pattern that matches the word "worth" in "worth it?" (which would capture "it").
+    m = re.search(
+        r"\$[\d,]+(?:\.\d{1,2})?\s+([A-Za-z][^?$]*?)(?=\s+worth\b|\s*\?|!|\.|$)",
+        q,
         re.IGNORECASE,
-    ),
-    # "Should I buy <product>?"
-    re.compile(
-        r"should\s+I\s+(?:buy|purchase|get)\s+(?:the\s+|a\s+|an\s+)?(?P<product>.+?)[\?\.\!]?\s*$",
-        re.IGNORECASE,
-    ),
-    # "Is it worth buying <product>?"
-    re.compile(
-        r"is\s+(?:it|the)\s+(?:worth|okay|ok)\s+(?:to\s+)?(?:buy|purchase|get)(?:ing)?\s+(?:the\s+|a\s+|an\s+)?(?P<product>.+?)[\?\.\!]?\s*$",
-        re.IGNORECASE,
-    ),
-    # "I want to buy <product>"
-    re.compile(
-        r"I\s+(?:want|need|plan|would\s+like)\s+to\s+(?:buy|purchase|get)\s+(?:the\s+|a\s+|an\s+)?(?P<product>.+?)[\?\.\!]?\s*$",
-        re.IGNORECASE,
-    ),
-    # "I'm thinking of buying <product>"
-    re.compile(
-        r"(?:I(?:'m|am)\s+)?thinking\s+(?:of|about)\s+(?:buy|purchas|gett)ing\s+(?:the\s+|a\s+|an\s+)?(?P<product>.+?)[\?\.\!,]?\s*$",
-        re.IGNORECASE,
-    ),
-    # "What do you think about buying <product>?"
-    re.compile(
-        r"what\s+do\s+you\s+think\s+(?:about|of)\s+(?:buy|purchas|gett)ing\s+(?:the\s+|a\s+|an\s+)?(?P<product>.+?)[\?\.\!]?\s*$",
-        re.IGNORECASE,
-    ),
-]
-
-# Context pattern: "I have some money saved up and am thinking of buying <product>"
-_CONTEXT_PATTERN = re.compile(
-    r"^(?P<context>.+?)(?:and\s+(?:am|I'm)\s+(?:thinking|considering))",
-    re.IGNORECASE,
-)
-
-# Loose keyword check — fallback for queries that don't match exact patterns
-_PURCHASE_KEYWORDS = {
-    "buy", "purchase", "afford", "get", "worth", "buying", "purchasing",
-}
-
-# Financial question keywords (for general_question classification)
-_FINANCE_KEYWORDS = {
-    "savings", "budget", "income", "expenses", "financial", "money",
-    "debt", "loan", "credit", "finances", "spending",
-}
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-def parse_user_input(query: str, provider: LLMProvider) -> ParsedIntent:
-    """
-    Parse a user's natural language query to extract intent and product reference.
-
-    When using MockProvider: uses regex/keyword-based parsing.
-    When using a real provider: sends the query to the LLM for structured extraction.
-    """
-    query = query.strip()
-    if not query:
-        return ParsedIntent(
-            intent="out_of_scope",
-            product_reference=None,
-            user_context=None,
-            confidence=1.0,
-        )
-
-    # Use regex-based parsing for mock provider (deterministic, testable)
-    if isinstance(provider, MockProvider):
-        return _parse_with_regex(query)
-
-    # Use LLM-based parsing for real providers
-    return _parse_with_llm(query, provider)
-
-
-# ---------------------------------------------------------------------------
-# Regex-based parsing (MockProvider)
-# ---------------------------------------------------------------------------
-
-def _parse_with_regex(query: str) -> ParsedIntent:
-    """Regex/keyword-based intent parsing — deterministic, no API calls."""
-
-    # Extract user context if present (e.g., "I have some money saved up and...")
-    user_context = None
-    context_match = _CONTEXT_PATTERN.search(query)
-    if context_match:
-        user_context = context_match.group("context").strip().rstrip(",")
-
-    # Try each purchase pattern
-    for pattern in _PURCHASE_PATTERNS:
-        match = pattern.search(query)
-        if match:
-            product = match.group("product").strip()
-            product = _clean_product_reference(product)
-            if product:
-                logger.info("Intent parsed: purchase_query, product='%s'", product)
-                return ParsedIntent(
-                    intent="purchase_query",
-                    product_reference=product,
-                    user_context=user_context,
-                    confidence=0.95,
-                )
-
-    # Fallback: check for loose purchase keywords + extract product
-    query_words = set(query.lower().split())
-    if query_words & _PURCHASE_KEYWORDS:
-        product = _extract_product_fallback(query)
-        if product:
-            logger.info("Intent parsed (fallback): purchase_query, product='%s'", product)
-            return ParsedIntent(
-                intent="purchase_query",
-                product_reference=product,
-                user_context=user_context,
-                confidence=0.70,
-            )
-
-    # Check for general financial question
-    if query_words & _FINANCE_KEYWORDS:
-        logger.info("Intent parsed: general_question")
-        return ParsedIntent(
-            intent="general_question",
-            product_reference=None,
-            user_context=None,
-            confidence=0.80,
-        )
-
-    # Default: out of scope
-    logger.info("Intent parsed: out_of_scope")
-    return ParsedIntent(
-        intent="out_of_scope",
-        product_reference=None,
-        user_context=None,
-        confidence=0.80,
     )
+    if m:
+        ref = m.group(1).strip()
+        ref = re.sub(r"\s+", " ", ref)
+        if len(ref) >= 2:
+            return ParsedIntent(intent="purchase_query", product_reference=ref)
+
+    # "buy a X" / "afford X" — do not use the word "worth" here; it matches "worth it?" and yields "it".
+    m = re.search(
+        r"(?:buy|afford|purchase|get|considering)\s+(?:a|an|the)?\s*([^?.!]{2,100})",
+        q,
+        re.IGNORECASE,
+    )
+    if m:
+        ref = m.group(1).strip()
+        ref = re.sub(r"\s+", " ", ref)
+        # Trim trailing price-only noise
+        ref = re.sub(r"\s*for\s*\$.*$", "", ref, flags=re.IGNORECASE)
+        if ref:
+            return ParsedIntent(intent="purchase_query", product_reference=ref)
+
+    # Dollar amount + product chunk (fallback if no "worth" in the question)
+    m = re.search(r"\$[\d,]+(?:\.\d{2})?\s+(.{3,80})", q)
+    if m:
+        ref = m.group(1).strip()
+        ref = re.sub(r"\s+worth(\s+it)?\s*[\?!.]?\s*$", "", ref, flags=re.IGNORECASE)
+        ref = re.sub(r"\s+", " ", ref).strip()
+        if len(ref) >= 2:
+            return ParsedIntent(intent="purchase_query", product_reference=ref)
+
+    # Last resort: strip question words and use remainder
+    cleaned = re.sub(
+        r"^(should i|can i|is it|is a|would it be|do you think i should)\s+",
+        "",
+        lower,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\?$", "", cleaned).strip()
+    if len(cleaned) >= 3:
+        return ParsedIntent(intent="purchase_query", product_reference=cleaned[:120])
+
+    return ParsedIntent(intent="out_of_scope", product_reference=None)
 
 
-def _clean_product_reference(product: str) -> str:
-    """Clean up extracted product text — remove trailing punctuation, articles, noise."""
-    product = product.strip().rstrip("?.!,;:")
-    # Remove trailing "what do you think" / "what do you think savvio" etc.
-    product = re.sub(
-        r",?\s*what\s+do\s+you\s+think.*$", "", product, flags=re.IGNORECASE
-    ).strip()
-    # Remove trailing savvio mentions
-    product = re.sub(r",?\s*savvio\s*$", "", product, flags=re.IGNORECASE).strip()
-    return product
+def _parse_llm_json(text: str) -> Optional[dict]:
+    """Extract JSON object from LLM output."""
+    text = text.strip()
+    # Strip markdown fences
+    if "```" in text:
+        parts = text.split("```")
+        for p in parts:
+            p = p.strip()
+            if p.startswith("json"):
+                p = p[4:].strip()
+            if p.startswith("{"):
+                text = p
+                break
+    m = re.search(r"\{[\s\S]*\}", text)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return None
 
 
-def _extract_product_fallback(query: str) -> str | None:
+def parse_user_input(query: str, llm_provider: Any) -> ParsedIntent:
     """
-    Fallback product extraction: strip purchase keywords and common words
-    to isolate the likely product name.
+    Classify intent and extract a product name/reference for catalog lookup.
+
+    Uses LLM when provider supports generate(); falls back to heuristics.
     """
-    # Remove common question/purchase framing words
-    noise_words = {
-        "can", "could", "should", "may", "would", "i", "you", "think",
-        "buy", "purchase", "afford", "get", "buying", "purchasing",
-        "getting", "the", "a", "an", "this", "that", "is", "it",
-        "worth", "okay", "ok", "do", "want", "need", "to", "of",
-        "about", "am", "thinking", "considering", "what", "savvio",
-        "please", "me", "my", "have", "some", "money", "saved", "up",
-        "and", "for",
-    }
-    words = query.strip().rstrip("?.!,").split()
-    product_words = [w for w in words if w.lower() not in noise_words]
-    product = " ".join(product_words).strip()
-    return product if len(product) >= 2 else None
+    q = (query or "").strip()
+    if not q:
+        return ParsedIntent(intent="out_of_scope")
 
+    prompt = f"""Analyze this user message for a financial purchase-advisor app.
 
-# ---------------------------------------------------------------------------
-# LLM-based parsing (real providers)
-# ---------------------------------------------------------------------------
+Return ONLY valid JSON (no markdown) with keys:
+- "intent": either "purchase_query" (user wants to evaluate buying something) or "out_of_scope" (greetings, unrelated topics, general chat).
+- "product_reference": short string naming the product or category to search — words only, no leading dollar amounts (null if unclear).
+- "price_hint": number if the user gave a price like $350, else null.
+- "user_context": optional short note about timing or constraints (or null).
 
-def _parse_with_llm(query: str, provider: LLMProvider) -> ParsedIntent:
-    """Parse user intent using a real LLM provider."""
-    prompt = INTENT_EXTRACTION_PROMPT.format(query=query)
+User message: {q!r}
+"""
 
     try:
-        result = provider.generate_structured(
-            system_prompt="You are a precise intent extraction system.",
-            user_message=prompt,
-            schema=INTENT_SCHEMA,
-        )
-
-        intent = result.get("intent", "out_of_scope")
-        product_ref = result.get("product_reference")
-        user_context = result.get("user_context")
-
-        # Validate intent value
-        valid_intents = {"purchase_query", "general_question", "out_of_scope"}
-        if intent not in valid_intents:
-            logger.warning("LLM returned invalid intent '%s', defaulting to out_of_scope", intent)
-            intent = "out_of_scope"
-
-        logger.info("Intent parsed (LLM): %s, product='%s'", intent, product_ref)
-        return ParsedIntent(
-            intent=intent,
-            product_reference=product_ref,
-            user_context=user_context,
-            confidence=0.90,
-        )
-
+        raw = llm_provider.generate(prompt, max_tokens=256, temperature=0.1)
+        data = _parse_llm_json(raw)
+        if data:
+            intent = str(data.get("intent", "out_of_scope")).lower()
+            if intent not in ("purchase_query", "out_of_scope"):
+                intent = "purchase_query" if data.get("product_reference") else "out_of_scope"
+            if intent == "out_of_scope":
+                return ParsedIntent(intent="out_of_scope")
+            pref = data.get("product_reference")
+            if isinstance(pref, str):
+                pref = pref.strip() or None
+                if pref and pref.lower() in ("unknown", "unknown product", "none", "n/a"):
+                    pref = None
+            else:
+                pref = None
+            uctx = data.get("user_context")
+            if isinstance(uctx, str):
+                uctx = uctx.strip() or None
+            else:
+                uctx = None
+            ph = data.get("price_hint")
+            price_hint: Optional[float] = None
+            if isinstance(ph, (int, float)):
+                price_hint = float(ph)
+            elif isinstance(ph, str):
+                try:
+                    price_hint = float(ph.replace(",", "").replace("$", "").strip())
+                except ValueError:
+                    price_hint = None
+            if intent == "purchase_query" and not pref:
+                h = _heuristic_parse(q)
+                return _merge_price_and_clean(q, h)
+            pref = clean_product_reference(pref) or pref
+            merged = ParsedIntent(intent=intent, product_reference=pref, user_context=uctx, price_hint=price_hint)
+            return _merge_price_and_clean(q, merged)
     except Exception as e:
-        logger.error("LLM intent parsing failed: %s — falling back to regex", e)
-        return _parse_with_regex(query)
+        logger.debug("LLM intent parse failed, using heuristic: %s", e)
+
+    return _merge_price_and_clean(q, _heuristic_parse(q))
+
+
+def _merge_price_and_clean(query: str, parsed: ParsedIntent) -> ParsedIntent:
+    """Attach price from the raw query; strip $ amounts from product_reference for search."""
+    ph = extract_price_hint(query)
+    if ph is not None:
+        parsed.price_hint = ph
+    if parsed.product_reference:
+        cleaned = clean_product_reference(parsed.product_reference)
+        if cleaned:
+            parsed.product_reference = cleaned
+    # Heuristic misfires can leave "it" / "this" when the real product follows "$price Brand"
+    if (
+        parsed.product_reference
+        and parsed.product_reference.lower() in ("it", "this", "that")
+        and ph is not None
+    ):
+        m = re.search(
+            r"\$[\d,]+(?:\.\d{1,2})?\s+([A-Za-z][^?$]*?)(?=\s+worth\b|\s*\?|!|\.|$)",
+            query,
+            re.IGNORECASE,
+        )
+        if m:
+            parsed.product_reference = re.sub(r"\s+", " ", m.group(1).strip())
+    return parsed

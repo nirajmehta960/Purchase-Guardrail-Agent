@@ -3,6 +3,7 @@ SavVio FastAPI Application — Production Inference API.
 
 Exposes the SavVio recommendation engine as a REST API:
     GET  /health   — Liveness check (model, DB, LLM status)
+    GET  /products — Browse catalog (price band + search) for product picker
     POST /predict  — Full inference pipeline (prompt → recommendation)
     GET  /user/{user_id}/evaluate?product_id=...  — Direct product evaluation
 
@@ -11,7 +12,7 @@ Startup:
     the LLM provider on startup via the ModelManager singleton.
 
 Usage:
-    uvicorn deployment.api.main:app --host 0.0.0.0 --port 8080 --reload
+    uvicorn deployment.api.main:app --host 0.0.0.0 --port 3500 --reload
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import asynccontextmanager
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,6 +33,9 @@ from deployment.api.schemas import (
     HealthResponse,
     PredictRequest,
     PredictResponse,
+    ProductListItem,
+    ProductListResponse,
+    UserProfileResponse,
 )
 
 # ---------------------------------------------------------------------------
@@ -135,6 +140,74 @@ async def general_exception_handler(request: Request, exc: Exception):
 # Endpoints
 # ---------------------------------------------------------------------------
 
+@app.get(
+    "/user/{user_id}/profile",
+    response_model=UserProfileResponse,
+    tags=["User"],
+)
+async def get_user_profile(user_id: str):
+    """Return the user's financial profile from PostgreSQL for the dashboard."""
+    from deployment.api.inference import _load_user_financial_profile
+
+    if not model_manager.db_engine:
+        raise HTTPException(
+            status_code=503,
+            detail="Database unavailable.",
+        )
+
+    row = _load_user_financial_profile(user_id, model_manager.db_engine)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No financial profile found for user_id={user_id!r}.",
+        )
+
+    return UserProfileResponse(**row)
+
+
+@app.get(
+    "/products",
+    response_model=ProductListResponse,
+    tags=["Catalog"],
+)
+async def browse_products(
+    q: Optional[str] = Query(None, description="Substring filter on product_name (ILIKE)."),
+    price_min: Optional[float] = Query(None, description="Minimum price; defaults from PRODUCT_BROWSE_PRICE_MIN."),
+    price_max: Optional[float] = Query(None, description="Maximum price; defaults from PRODUCT_BROWSE_PRICE_MAX."),
+    limit: int = Query(
+        APIConfig.PRODUCT_BROWSE_DEFAULT_LIMIT,
+        ge=1,
+        le=APIConfig.PRODUCT_BROWSE_MAX_LIMIT,
+    ),
+    offset: int = Query(0, ge=0),
+):
+    """List products for catalog selection — enables Layer 2 + review signals when used with /predict."""
+    from deployment.api.products_catalog import list_products as fetch_products
+
+    if not model_manager.db_engine:
+        raise HTTPException(status_code=503, detail="Database unavailable.")
+
+    lim = min(limit, APIConfig.PRODUCT_BROWSE_MAX_LIMIT)
+    rows, total, pmin_applied, pmax_applied = fetch_products(
+        model_manager.db_engine,
+        q=q,
+        price_min=price_min,
+        price_max=price_max,
+        limit=lim,
+        offset=offset,
+        default_price_min=APIConfig.PRODUCT_BROWSE_PRICE_MIN,
+        default_price_max=APIConfig.PRODUCT_BROWSE_PRICE_MAX,
+    )
+    return ProductListResponse(
+        items=[ProductListItem(**r) for r in rows],
+        total=total,
+        price_min_applied=pmin_applied,
+        price_max_applied=pmax_applied,
+        limit=lim,
+        offset=offset,
+    )
+
+
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
 async def health_check():
     """Liveness check — verifies model loaded, DB connected, LLM provider active.
@@ -215,7 +288,7 @@ async def evaluate_product(
 
 
 # ---------------------------------------------------------------------------
-# Run with: uvicorn deployment.api.main:app --host 0.0.0.0 --port 8080
+# Run with: uvicorn deployment.api.main:app --host 0.0.0.0 --port 3500
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":

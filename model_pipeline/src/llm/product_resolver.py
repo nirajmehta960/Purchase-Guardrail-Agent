@@ -1,173 +1,184 @@
 """
-Product Resolver — pgvector similarity search for product identification.
+Resolve product references to database rows (ILIKE search or by ID).
 
-Resolves a text product reference (e.g., "Sony WH-1000XM5") to an actual
-product_id in the database by embedding the query text and searching the
-product_embeddings table via cosine similarity.
-
-Uses the same embedding model (all-MiniLM-L6-v2, 384-dim) as the data pipeline
-(data_pipeline/dags/src/database/vector_embed.py) to ensure embedding space
-consistency.
-
-Usage:
-    from llm.product_resolver import resolve_product
-    from savviocore.database.db_connection import get_engine
-
-    engine = get_engine()
-    match = resolve_product("Sony WH-1000XM5", engine)
-    if match:
-        print(f"Found: {match.product_name} (${match.price}), similarity={match.similarity_score:.3f}")
+When the user gives a price (e.g. $350 headphones), we score catalog rows by
+name overlap *and* price closeness so we do not match a random cheap item.
+If nothing fits, return None so inference can evaluate a hypothetical purchase
+at the stated price.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
+from typing import Any, Optional
 
 from sqlalchemy import text
 
-from llm.config import LLMConfig
-
 logger = logging.getLogger(__name__)
 
-# Singleton for the embedding model — loaded once, reused.
-_embedding_model = None
-
-
-def _get_embedding_model():
-    """Load the sentence-transformer model once (lazy singleton)."""
-    global _embedding_model
-    if _embedding_model is None:
-        from sentence_transformers import SentenceTransformer
-
-        logger.info("Loading embedding model: %s", LLMConfig.EMBEDDING_MODEL)
-        _embedding_model = SentenceTransformer(LLMConfig.EMBEDDING_MODEL)
-    return _embedding_model
+# Max relative price gap between user-stated price and catalog row (e.g. 0.35 => ±35%)
+_MAX_PRICE_MISMATCH = 0.38
 
 
 @dataclass
 class ProductMatch:
-    """A product matched via vector similarity search."""
     product_id: str
     product_name: str
     price: float
-    category: str
-    similarity_score: float
 
 
-def resolve_product(
-    product_text: str,
-    engine,
-    top_k: int | None = None,
-    threshold: float | None = None,
-) -> ProductMatch | None:
-    """
-    Resolve a text product reference to an actual product_id via embedding search.
-
-    Args:
-        product_text: The product name/description extracted from the user query.
-        engine: SQLAlchemy engine connected to the SavVio database.
-        top_k: Number of candidate matches to retrieve (default: LLMConfig.TOP_K_PRODUCTS).
-        threshold: Minimum cosine similarity to accept (default: LLMConfig.SIMILARITY_THRESHOLD).
-
-    Returns:
-        ProductMatch if a product is found above the threshold, else None.
-    """
-    if not product_text or not product_text.strip():
-        logger.warning("Empty product text — cannot resolve.")
+def resolve_product_by_id(product_id: str, db_engine: Any) -> Optional[ProductMatch]:
+    """Exact lookup by products.product_id."""
+    if not product_id or db_engine is None:
         return None
-
-    top_k = top_k or LLMConfig.TOP_K_PRODUCTS
-    threshold = threshold if threshold is not None else LLMConfig.SIMILARITY_THRESHOLD
-
-    # Step 1: embed the query
-    model = _get_embedding_model()
-    query_embedding = model.encode(
-        product_text,
-        normalize_embeddings=True,
-    ).tolist()
-
-    # Step 2: pgvector cosine similarity search
     sql = text("""
-        SELECT pe.product_id,
-               p.product_name,
-               p.price,
-               p.category,
-               1 - (pe.embedding <=> CAST(:query_embedding AS vector)) AS similarity
-        FROM product_embeddings pe
-        JOIN products p ON pe.product_id = p.product_id
-        ORDER BY pe.embedding <=> CAST(:query_embedding AS vector)
-        LIMIT :top_k
-    """)
-
-    embedding_str = str(query_embedding)
-
-    try:
-        with engine.connect() as conn:
-            rows = conn.execute(
-                sql, {"query_embedding": embedding_str, "top_k": top_k}
-            ).fetchall()
-    except Exception as e:
-        logger.error("Product search query failed: %s", e)
-        return None
-
-    if not rows:
-        logger.info("No products found for query: '%s'", product_text)
-        return None
-
-    # Step 3: check against threshold
-    best = rows[0]
-    similarity = float(best[4])
-
-    if similarity < threshold:
-        logger.info(
-            "Best match '%s' (similarity=%.3f) below threshold %.3f",
-            best[1], similarity, threshold,
-        )
-        return None
-
-    match = ProductMatch(
-        product_id=str(best[0]),
-        product_name=str(best[1]),
-        price=float(best[2]),
-        category=str(best[3]) if best[3] else "Unknown",
-        similarity_score=similarity,
-    )
-
-    logger.info(
-        "Product resolved: '%s' → '%s' (id=%s, similarity=%.3f)",
-        product_text, match.product_name, match.product_id, match.similarity_score,
-    )
-    return match
-
-
-def resolve_product_by_id(product_id: str, engine) -> ProductMatch | None:
-    """
-    Direct DB lookup when the caller already has a product_id (no vector search).
-
-    Used when the API receives an explicit product_id in the request.
-    """
-    sql = text("""
-        SELECT product_id, product_name, price, category
+        SELECT product_id, product_name, price
         FROM products
-        WHERE product_id = :product_id
+        WHERE product_id = :pid
+        LIMIT 1
     """)
-
     try:
-        with engine.connect() as conn:
-            row = conn.execute(sql, {"product_id": product_id}).fetchone()
+        with db_engine.connect() as conn:
+            row = conn.execute(sql, {"pid": product_id.strip()}).fetchone()
     except Exception as e:
-        logger.error("Product lookup failed for id=%s: %s", product_id, e)
+        logger.error("resolve_product_by_id failed: %s", e)
         return None
-
-    if not row:
-        logger.info("No product found for id=%s", product_id)
+    if row is None:
         return None
-
     return ProductMatch(
         product_id=str(row[0]),
         product_name=str(row[1]),
-        price=float(row[2]),
-        category=str(row[3]) if row[3] else "Unknown",
-        similarity_score=1.0,  # exact match
+        price=float(row[2] or 0),
     )
+
+
+def _tokenize(s: str) -> list[str]:
+    s = re.sub(r"[^\w\s]", " ", (s or "").lower())
+    return [t for t in s.split() if len(t) > 1]
+
+
+def _is_noise_token(t: str) -> bool:
+    """Skip pure numbers / prices — they widen ILIKE matches incorrectly."""
+    if re.match(r"^[\d,]+\.?\d*$", t):
+        return True
+    if len(t) < 3 and t.isdigit():
+        return True
+    return False
+
+
+def _name_overlap_score(ref_tokens: set[str], name: str) -> float:
+    name_tokens = set(_tokenize(name))
+    if not ref_tokens:
+        return 0.0
+    return len(ref_tokens & name_tokens) / max(len(ref_tokens), 1)
+
+
+def _price_score(price: float, hint: Optional[float]) -> float:
+    if hint is None or hint <= 0:
+        return 1.0
+    err = abs(float(price) - hint) / max(hint, 1.0)
+    return max(0.0, 1.0 - err / max(_MAX_PRICE_MISMATCH, 0.01))
+
+
+def resolve_product(
+    product_reference: str,
+    db_engine: Any,
+    price_hint: Optional[float] = None,
+    limit_scan: int = 120,
+) -> Optional[ProductMatch]:
+    """
+    Find a product by fuzzy name + optional price alignment.
+
+    If ``price_hint`` is set and every candidate's price is far from it, returns
+    None (caller should run a hypothetical evaluation at ``price_hint``).
+    """
+    if not product_reference or db_engine is None:
+        return None
+
+    ref = product_reference.strip()
+    if not ref:
+        return None
+
+    sql_like = text("""
+        SELECT product_id, product_name, price
+        FROM products
+        WHERE product_name ILIKE :pat
+        ORDER BY rating_number DESC NULLS LAST
+        LIMIT 8
+    """)
+
+    candidates: list[tuple] = []
+
+    try:
+        with db_engine.connect() as conn:
+            rows = conn.execute(sql_like, {"pat": f"%{ref}%"}).fetchall()
+            candidates.extend(rows)
+
+            if not candidates:
+                tokens = [t for t in _tokenize(ref) if not _is_noise_token(t)]
+                for tok in tokens[:6]:
+                    rows = conn.execute(sql_like, {"pat": f"%{tok}%"}).fetchall()
+                    candidates.extend(rows[:12])
+
+            if not candidates:
+                return None
+
+            seen: set[str] = set()
+            unique: list[tuple] = []
+            for r in candidates:
+                pid = str(r[0])
+                if pid not in seen:
+                    seen.add(pid)
+                    unique.append(r)
+
+            ref_tokens = set(t for t in _tokenize(ref) if not _is_noise_token(t))
+
+            best: Optional[tuple] = None
+            best_score = -1.0
+            for r in unique[:limit_scan]:
+                name = str(r[1])
+                price = float(r[2] or 0)
+                ns = _name_overlap_score(ref_tokens, name)
+                ps = _price_score(price, price_hint)
+                if price_hint is not None:
+                    combined = 0.55 * ns + 0.45 * ps
+                else:
+                    combined = ns if ref_tokens else 0.5
+                if combined > best_score:
+                    best_score = combined
+                    best = r
+
+            if best is None:
+                return None
+
+            price = float(best[2] or 0)
+            best_name = str(best[1])
+            name_match = _name_overlap_score(ref_tokens, best_name) if ref_tokens else 1.0
+
+            if price_hint is not None and ref_tokens and name_match < 0.12:
+                logger.info(
+                    "No catalog row matches product words — hypothetical mode (hint=%.2f)",
+                    price_hint,
+                )
+                return None
+
+            if price_hint is not None and price_hint > 0:
+                rel_err = abs(price - price_hint) / price_hint
+                if rel_err > _MAX_PRICE_MISMATCH:
+                    logger.info(
+                        "Rejecting catalog match due to price vs hint: catalog=%.2f hint=%.2f",
+                        price,
+                        price_hint,
+                    )
+                    return None
+
+            return ProductMatch(
+                product_id=str(best[0]),
+                product_name=str(best[1]),
+                price=price,
+            )
+    except Exception as e:
+        logger.error("resolve_product failed: %s", e)
+        return None

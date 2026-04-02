@@ -1,205 +1,217 @@
 """
-Response Generator — LLM Role 2: Conversational Recommendation Output.
-
-Takes the deterministic engine result, ML confidence scores, and triggered rules,
-then generates a user-facing natural language recommendation.
-
-Uses template-based responses for MockProvider (deterministic, safe)
-and real LLM generation for other providers (with guardrail verification).
-
-Usage:
-    from llm.response_generator import generate_response, RecommendationContext
-
-    context = RecommendationContext(
-        product_name="Sony WH-1000XM5",
-        product_price=349.99,
-        recommendation_color="GREEN",
-        ...
-    )
-    response = generate_response(context, provider)
+Generate natural-language explanations aligned with deterministic engine output.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
-from llm.config import LLMConfig
-from llm.llm_provider import LLMProvider, MockProvider
-from llm.prompts.response_templates import (
-    GREEN_TEMPLATES,
-    YELLOW_TEMPLATES,
-    RED_TEMPLATES,
-    get_concern_summary,
-)
-from llm.prompts.system_prompt import SYSTEM_PROMPT
+from llm.prompts.response_templates import COLOR_INTROS
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class RecommendationContext:
-    """All the context needed to generate a recommendation response."""
-
-    # Product info
     product_name: str
     product_price: float
-
-    # Deterministic engine output
-    recommendation_color: str                  # GREEN / YELLOW / RED
-    original_color: str = ""                   # Pre-downgrade color (if different)
-    was_downgraded: bool = False
-    triggered_rules: list[str] = field(default_factory=list)
-
-    # ML model output
-    confidence_scores: dict[str, float] = field(default_factory=dict)
-
-    # User context from intent parsing
-    user_context: str | None = None
-
-    # Financial highlights (for grounding the LLM response)
+    recommendation_color: str  # GREEN / YELLOW / RED
+    original_color: str
+    was_downgraded: bool
+    triggered_rules: List[str] = field(default_factory=list)
+    confidence_scores: Dict[str, float] = field(default_factory=dict)
+    ml_confidence: Optional[float] = None  # None => classifier not used
+    # When ml_confidence is None: why (clearer than "not loaded" for every case)
+    ml_unavailable_reason: Optional[str] = None  # "no_model" | "no_pipeline" | "scoring_error"
+    hypothetical_purchase: bool = False
+    user_context: Optional[str] = None
     affordability_score: float = 0.0
+    affordability_score_unreliable: bool = False
     savings_to_price_ratio: float = 0.0
     emergency_fund_months: float = 0.0
     debt_to_income_ratio: float = 0.0
+    # Additional profile fields for richer LLM explanations
+    monthly_income: float = 0.0
+    monthly_expense_burden_ratio: float = 0.0  # MEB — expenses as % of income
+    price_to_income_ratio: float = 0.0          # PIR — price as % of monthly income
+    credit_score: Optional[int] = None          # Raw FICO score (300–850)
+    # Up to 5 formatted review snippets — e.g. '[4★] Great sound: battery lasts forever...'
+    # Empty list when product has no reviews or is a hypothetical evaluation.
+    review_snippets: List[str] = field(default_factory=list)
 
 
-def generate_response(
-    context: RecommendationContext,
-    provider: LLMProvider,
-) -> str:
-    """
-    Generate a user-facing natural language recommendation.
+def _color_key(color: str) -> str:
+    c = (color or "YELLOW").upper()
+    if c not in ("GREEN", "YELLOW", "RED"):
+        return "YELLOW"
+    return c
 
-    Args:
-        context: Full recommendation context from the inference pipeline.
-        provider: The LLM provider to use for generation.
-
-    Returns:
-        A natural language recommendation string.
-    """
-    # Use templates for MockProvider — guaranteed safe and deterministic
-    if isinstance(provider, MockProvider):
-        return _generate_from_template(context)
-
-    # Use real LLM for other providers
-    return _generate_with_llm(context, provider)
-
-
-# ---------------------------------------------------------------------------
-# Template-based generation (MockProvider)
-# ---------------------------------------------------------------------------
 
 def _generate_from_template(context: RecommendationContext) -> str:
-    """Generate a response using pre-written templates."""
-    color = context.recommendation_color.upper()
-
-    # Build the concern summary from triggered rules
-    concern_summary = get_concern_summary(
-        context.triggered_rules, context.was_downgraded
+    """Non-LLM fallback — still aligned with signal."""
+    ck = _color_key(context.recommendation_color)
+    intro_tpl = COLOR_INTROS.get(ck, COLOR_INTROS["YELLOW"])
+    intro = intro_tpl.format(
+        product_name=context.product_name,
+        product_price=context.product_price,
     )
 
-    # Select template based on color
-    if color == "GREEN":
-        templates = GREEN_TEMPLATES
-    elif color == "YELLOW":
-        templates = YELLOW_TEMPLATES
-    elif color == "RED":
-        templates = RED_TEMPLATES
+    lines = [intro, ""]
+    if context.hypothetical_purchase:
+        lines.append(
+            "- **Note:** No catalog match — evaluating affordability at **your stated price** "
+            f"for **{context.product_name}**."
+        )
+    if context.ml_confidence is not None:
+        # Two decimals: sub-1% scores (common on uncertain rows) otherwise show as 0.0%.
+        lines.append(
+            f"- **Signal:** {context.recommendation_color} "
+            f"(ML confidence: {context.ml_confidence:.2%})."
+        )
+        if context.hypothetical_purchase and context.ml_confidence < 0.15:
+            lines.append(
+                "- **Note:** With **no catalog product row**, review/product features are neutralized for ML; "
+                "the classifier probability can be **low or flat** even when the rules engine says GREEN."
+            )
     else:
-        logger.warning("Unknown color '%s', defaulting to YELLOW", color)
-        templates = YELLOW_TEMPLATES
-
-    # Use the first template (deterministic for tests)
-    template = templates[0]
-
-    try:
-        response = template.format(
-            product_name=context.product_name,
-            product_price=context.product_price,
-            savings_to_price_ratio=context.savings_to_price_ratio,
-            emergency_fund_months=context.emergency_fund_months,
-            debt_to_income_ratio=context.debt_to_income_ratio,
-            affordability_score=context.affordability_score,
-            concern_summary=concern_summary,
-        )
-    except KeyError as e:
-        logger.warning("Template formatting error: %s — using fallback", e)
-        response = _fallback_response(context, concern_summary)
-
-    logger.info("Generated template response for %s recommendation", color)
-    return response
-
-
-def _fallback_response(context: RecommendationContext, concern_summary: str) -> str:
-    """Minimal fallback response when template formatting fails."""
-    color = context.recommendation_color.upper()
-    if color == "GREEN":
-        return (
-            f"Purchasing {context.product_name} at ${context.product_price:.2f} "
-            f"looks comfortable for your financial profile."
-        )
-    elif color == "RED":
-        return (
-            f"I'd recommend holding off on {context.product_name} at "
-            f"${context.product_price:.2f} right now. {concern_summary}"
+        reason = context.ml_unavailable_reason or ""
+        if reason == "no_model":
+            tail = (
+                "no **trained model artifact** found (set `MODEL_ARTIFACT_DIR` or run the training pipeline). "
+                "Recommendation is from the **rules engine**."
+            )
+        elif reason == "no_pipeline":
+            tail = (
+                "**Feature pipeline** (`FEATURE_PIPELINE_PATH` / `feature_pipeline.pkl`) missing — ML score skipped. "
+                "Recommendation is from the **rules engine**."
+            )
+        elif reason == "scoring_error":
+            tail = "ML scoring failed (see API logs); recommendation is from the **rules engine**."
+        else:
+            tail = (
+                "ML score unavailable — recommendation is from the **deterministic rules engine**."
+            )
+        lines.append(f"- **Signal:** {context.recommendation_color} — {tail}")
+    if context.affordability_score_unreliable:
+        lines.append(
+            "- **Affordability score:** calculation error (inputs out of safe range); "
+            f"**Savings-to-price ratio:** {context.savings_to_price_ratio:.2f}."
         )
     else:
-        return (
-            f"Consider carefully before purchasing {context.product_name} at "
-            f"${context.product_price:.2f}. {concern_summary}"
+        lines.append(
+            f"- **Affordability score:** {context.affordability_score:.2f}; "
+            f"**Savings-to-price ratio:** {context.savings_to_price_ratio:.2f}."
         )
-
-
-# ---------------------------------------------------------------------------
-# LLM-based generation (real providers)
-# ---------------------------------------------------------------------------
-
-def _generate_with_llm(
-    context: RecommendationContext, provider: LLMProvider
-) -> str:
-    """Generate a response using a real LLM provider."""
-    color = context.recommendation_color.upper()
-    confidence = context.confidence_scores.get(color, 0.0)
-
-    # Build the grounding context for the LLM
-    downgrade_note = ""
+    lines.append(
+        f"- **Emergency fund:** ~{context.emergency_fund_months:.1f} months; "
+        f"**Debt-to-income:** {context.debt_to_income_ratio:.2%}."
+    )
+    if context.triggered_rules:
+        lines.append("- **Rules considered:** " + "; ".join(context.triggered_rules[:8]))
     if context.was_downgraded:
-        downgrade_note = (
-            f"\nNote: The recommendation was adjusted from {context.original_color} to "
-            f"{color} due to product quality and review concerns."
+        lines.append(
+            "- **Note:** Product and review signals caused a **one-step downgrade** from the pure financial assessment."
+        )
+    if context.review_snippets:
+        lines.append("")
+        lines.append("**What customers say:**")
+        for snippet in context.review_snippets:
+            lines.append(f"  - {snippet}")
+    if context.user_context:
+        lines.append(f"- **Your note:** {context.user_context}")
+
+    lines.append("")
+    if ck == "GREEN":
+        lines.append(
+            "If this remains within your monthly plan, you can proceed — still track discretionary spend."
+        )
+    elif ck == "YELLOW":
+        lines.append(
+            "Consider waiting a pay cycle, comparing alternatives, or reducing other discretionary spend first."
+        )
+    else:
+        lines.append(
+            "Prioritize essentials, debt minimums, and emergency savings before this purchase."
         )
 
-    rules_text = ", ".join(context.triggered_rules) if context.triggered_rules else "None"
+    return "\n".join(lines)
 
-    user_message = (
-        f"Generate a purchase recommendation for the user.\n\n"
-        f"FINANCIAL CONTEXT:\n"
-        f"- Recommendation: {color} (confidence: {confidence:.0%})\n"
-        f"- Product: {context.product_name} at ${context.product_price:.2f}\n"
-        f"- Affordability score: ${context.affordability_score:.2f} "
-        f"(positive = can afford from discretionary income)\n"
-        f"- Savings can cover this purchase "
-        f"{context.savings_to_price_ratio:.1f}x over\n"
-        f"- Emergency fund: {context.emergency_fund_months:.1f} months remaining\n"
-        f"- Debt-to-income ratio: {context.debt_to_income_ratio:.0%}\n"
-        f"- Concerns flagged: {rules_text}\n"
-        f"{downgrade_note}\n"
+
+def generate_response(context: RecommendationContext, llm_provider: Any) -> str:
+    """
+    Ask the LLM to produce an explanation that respects the authoritative color.
+
+    On failure, uses _generate_from_template.
+    """
+    ck = _color_key(context.recommendation_color)
+    rules_txt = "; ".join(context.triggered_rules[:12]) if context.triggered_rules else "(none listed)"
+
+    if context.review_snippets:
+        reviews_block = "Customer voice (most helpful reviews):\n" + "\n".join(
+            f"  {s}" for s in context.review_snippets
+        )
+        reviews_instruction = (
+            "- Weave 1–2 specific details from the customer reviews into your explanation "
+            "so the user understands what real buyers experienced with this product. "
+            "If reviews are positive, note what customers praise. "
+            "If reviews are mixed or negative, flag the concerns honestly."
+        )
+    else:
+        reviews_block = "Customer voice: no reviews available for this product."
+        reviews_instruction = "- Do not fabricate customer opinions; note that no reviews are available."
+
+    afs_line = (
+        "Affordability score: [calculation error — do not quote]"
+        if context.affordability_score_unreliable
+        else f"Affordability score (monthly discretionary minus price): {context.affordability_score:+.2f}"
+    )
+    dti_pct = context.debt_to_income_ratio * 100
+    meb_pct = context.monthly_expense_burden_ratio * 100
+    pir_pct = context.price_to_income_ratio * 100
+    credit_line = (
+        f"Credit score: {context.credit_score} (300–850 scale; below 580 = poor, 580–669 = fair, 670+ = good)"
+        if context.credit_score is not None
+        else "Credit score: not available"
     )
 
-    if context.user_context:
-        user_message += f"\nUser also mentioned: {context.user_context}\n"
+    prompt = f"""You are SavVio, a fiduciary financial advisor. Your job is to explain a purchase recommendation clearly, using the exact numbers provided.
+
+DECISION: {context.recommendation_color} — do NOT contradict this.
+{"Do NOT suggest buying, going ahead, or that this is safe." if context.recommendation_color == "RED" else ""}
+{"Do NOT tell the user to avoid the purchase or that it is risky." if context.recommendation_color == "GREEN" else ""}
+
+PRODUCT: {context.product_name}
+PRICE: ${context.product_price:,.2f}{"  (hypothetical — no catalog match, price is user-stated)" if context.hypothetical_purchase else ""}
+
+FINANCIAL PROFILE (use these exact values — never invent numbers):
+- Monthly income: ${context.monthly_income:,.0f}
+- This purchase = {pir_pct:.0f}% of monthly income
+- Monthly expense burden: {meb_pct:.0f}% of income already committed to expenses
+- {afs_line}
+- Savings cover price: {context.savings_to_price_ratio:.1f}x
+- Emergency fund: {context.emergency_fund_months:.1f} months (target: 3–6 months)
+- Debt-to-income: {dti_pct:.0f}%
+- {credit_line}
+- Rules that triggered: {rules_txt}
+{f"- User added context: {context.user_context}" if context.user_context else ""}
+
+{reviews_block}
+
+REQUIRED OUTPUT STRUCTURE — write exactly these 3 parts, no headers, no JSON:
+1. OPENING (1–2 sentences): State the {context.recommendation_color} verdict and the single strongest reason, using at least one specific number.
+2. FINANCIAL PICTURE (2–3 sentences): Explain what 2–3 of the financial numbers above mean for this user in plain English. Make it feel personal — e.g. "On a $1,110 income, this $600 purchase would consume more than half your monthly earnings."
+3. {"PRODUCT VOICE (1–2 sentences): Reference what real buyers say — quote or paraphrase a specific detail from the customer reviews above." if context.review_snippets else "PRODUCT NOTE (1 sentence): Note that no customer reviews are available for this product."}
+4. ACTION (1 sentence): One concrete next step the user can take right now.
+
+Use **bold** for key numbers. Write warmly but honestly. Do not use bullet points."""
 
     try:
-        response = provider.generate(
-            system_prompt=SYSTEM_PROMPT,
-            user_message=user_message,
-            temperature=LLMConfig.TEMPERATURE,
-            max_tokens=LLMConfig.MAX_TOKENS,
-        )
-        logger.info("Generated LLM response for %s recommendation (%s)", color, provider.provider_name)
-        return response
-
+        raw = llm_provider.generate(prompt, max_tokens=700, temperature=0.35)
+        if raw and len(raw.strip()) > 20:
+            return raw.strip()
     except Exception as e:
-        logger.error("LLM response generation failed: %s — falling back to template", e)
-        return _generate_from_template(context)
+        logger.warning("LLM response generation failed: %s", e)
+
+    return _generate_from_template(context)

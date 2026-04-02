@@ -60,6 +60,58 @@ class PredictRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Layer 2 — product / review signals for UI (matches feature engineering)
+# ---------------------------------------------------------------------------
+
+
+class ProductSignalsView(BaseModel):
+    """Listing stats + engineered product features used in Layer 2 / ML."""
+
+    average_rating: Optional[float] = None
+    rating_count: Optional[int] = None
+    rating_variance: Optional[float] = None
+    category: Optional[str] = None
+    price: Optional[float] = None
+    price_position_in_category: Optional[str] = None
+    rating_vs_category: Optional[str] = None
+    cold_start: Optional[bool] = None
+    value_density: Optional[float] = None
+    review_confidence: Optional[float] = None
+    rating_polarization: Optional[float] = None
+    quality_risk_score: Optional[float] = None
+    price_category_rank: Optional[float] = None
+    category_rating_deviation: Optional[float] = None
+
+
+class ReviewSignalsView(BaseModel):
+    """Aggregated review features (same signals as training)."""
+
+    verified_purchase_ratio: Optional[float] = None
+    helpful_concentration: Optional[float] = None
+    sentiment_spread: Optional[float] = None
+    review_depth_score: Optional[float] = None
+    reviewer_diversity: Optional[float] = None
+    extreme_rating_ratio: Optional[float] = None
+    sentiment_interpretation: Optional[str] = None
+
+
+class FinancialFeaturesView(BaseModel):
+    """Layer 1 financial inputs: 5 DB profile ratios + 6 affordability features."""
+
+    discretionary_income: Optional[float] = None
+    debt_to_income_ratio: Optional[float] = None
+    saving_to_income_ratio: Optional[float] = None
+    monthly_expense_burden_ratio: Optional[float] = None
+    emergency_fund_months: Optional[float] = None
+    affordability_score: Optional[float] = None
+    price_to_income_ratio: Optional[float] = None
+    residual_utility_score: Optional[float] = None
+    savings_to_price_ratio: Optional[float] = None
+    net_worth_indicator: Optional[float] = None
+    credit_risk_indicator: Optional[float] = None
+
+
+# ---------------------------------------------------------------------------
 # Response Schemas
 # ---------------------------------------------------------------------------
 
@@ -69,11 +121,19 @@ class PredictResponse(BaseModel):
         ...,
         description="Recommendation color: GREEN, YELLOW, or RED.",
     )
-    confidence: float = Field(
-        ...,
-        ge=0.0,
-        le=1.0,
-        description="ML model confidence score for the recommendation (0–1).",
+    confidence: Optional[float] = Field(
+        default=None,
+        description=(
+            "ML model confidence for the label (0–1) when the classifier is loaded; "
+            "null if the model is not available (deterministic engine still applies)."
+        ),
+    )
+    ml_unavailable_reason: Optional[str] = Field(
+        default=None,
+        description=(
+            "When confidence is null: no_model, no_pipeline, or scoring_error — "
+            "for clearer UI than a generic 'not loaded' message."
+        ),
     )
     explanation: str = Field(
         ...,
@@ -98,6 +158,66 @@ class PredictResponse(BaseModel):
     guardrail_passed: bool = Field(
         default=True,
         description="Whether the LLM response passed all 6 safety guardrail checks.",
+    )
+    evaluation_mode: str = Field(
+        default="catalog",
+        description="'catalog' if a product row was matched; 'hypothetical' if only price + description from the query.",
+    )
+    layer2_evaluated: bool = Field(
+        default=False,
+        description="True when Layer 2 (DowngradeEngine) ran with product + review features.",
+    )
+    review_count: int = Field(
+        default=0,
+        description="Number of review rows loaded for this product_id (0 if none).",
+    )
+    layer2_product_triggers: list[str] = Field(
+        default_factory=list,
+        description="Product-side downgrade rule ids evaluated (may be empty).",
+    )
+    layer2_review_triggers: list[str] = Field(
+        default_factory=list,
+        description="Review-side downgrade rule ids evaluated (may be empty).",
+    )
+    product_signals: Optional[ProductSignalsView] = Field(
+        default=None,
+        description="Product listing + engineered product features when Layer 2 ran.",
+    )
+    review_signals: Optional[ReviewSignalsView] = Field(
+        default=None,
+        description="Engineered review aggregate features when Layer 2 ran.",
+    )
+    affordability_score: Optional[float] = Field(
+        default=None,
+        description="discretionary − price for this evaluation (Layer 1 inputs).",
+    )
+    affordability_score_unreliable: bool = Field(
+        default=False,
+        description="True when raw affordability was outside safe bounds (clamped for rules).",
+    )
+    emergency_fund_months: Optional[float] = Field(
+        default=None,
+        description="User emergency fund runway (months) from profile — for UI summaries.",
+    )
+    debt_to_income_ratio: Optional[float] = Field(
+        default=None,
+        description="User debt-to-income ratio 0–1 from profile — for UI summaries.",
+    )
+    financial_features: Optional[FinancialFeaturesView] = Field(
+        default=None,
+        description="Full Layer 1 feature snapshot (user profile + purchase pair).",
+    )
+    layer1_recommendation: Optional[str] = Field(
+        default=None,
+        description="Deterministic engine label before Layer 2 downgrade (GREEN/YELLOW/RED).",
+    )
+    ml_predicted_label: Optional[str] = Field(
+        default=None,
+        description="ML classifier label when scoring succeeds (informational only).",
+    )
+    ml_model_name: str = Field(
+        default="SavVio classifier",
+        description="Display name for ML layer in UI.",
     )
 
 
@@ -129,3 +249,57 @@ class ErrorResponse(BaseModel):
     """Structured error response."""
     error: str = Field(..., description="Error type.")
     detail: str = Field(..., description="Human-readable error message.")
+
+
+# ---------------------------------------------------------------------------
+# Product catalog (browse)
+# ---------------------------------------------------------------------------
+
+
+class ProductListItem(BaseModel):
+    """One row from the products table for picker UI."""
+
+    product_id: str
+    product_name: str
+    price: Optional[float] = None
+    average_rating: Optional[float] = None
+    rating_number: Optional[float] = None
+
+
+class ProductListResponse(BaseModel):
+    """Paginated product list for catalog selection."""
+
+    items: list[ProductListItem] = Field(default_factory=list)
+    total: int = Field(0, description="Total rows matching filters (before limit/offset).")
+    price_min_applied: float = Field(..., description="Lower bound used for this query.")
+    price_max_applied: float = Field(..., description="Upper bound used for this query.")
+    limit: int = Field(..., description="Page size.")
+    offset: int = Field(0, description="Skip rows.")
+
+
+# ---------------------------------------------------------------------------
+# User profile (dashboard)
+# ---------------------------------------------------------------------------
+
+
+class UserProfileResponse(BaseModel):
+    """Financial profile row for dashboard display."""
+
+    user_id: str
+    monthly_income: Optional[float] = None
+    monthly_expenses: Optional[float] = None
+    savings_balance: Optional[float] = None
+    has_loan: Optional[int] = None
+    loan_amount: Optional[float] = None
+    monthly_emi: Optional[float] = None
+    loan_interest_rate: Optional[float] = None
+    loan_term_months: Optional[float] = None
+    credit_score: Optional[int] = None
+    employment_status: Optional[str] = None
+    region: Optional[str] = None
+    liquid_savings: Optional[float] = None
+    discretionary_income: Optional[float] = None
+    debt_to_income_ratio: Optional[float] = None
+    saving_to_income_ratio: Optional[float] = None
+    monthly_expense_burden_ratio: Optional[float] = None
+    emergency_fund_months: Optional[float] = None

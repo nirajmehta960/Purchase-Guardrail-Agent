@@ -12,6 +12,9 @@ requires-python = ">=3.9"
 where = ["dags"]
 
 [tool.pytest.ini_options]
-# Add data_pipeline/dags/ to sys.path so 'src' is importable as a proper package.
-# This runs before any conftest.py or plugin, preventing namespace package collisions.
+# Add data_pipeline/dags/ to sys.path (pytest 7+ built-in mechanism).
+# Runs before conftest.py — ensures 'src' package is on the path early.
 pythonpath = ["dags"]
+# importlib mode: avoids inserting data_pipeline/ into sys.path[0], which
+# would cause pytest's prepend mode to shadow our PYTHONPATH additions.
+addopts = "--import-mode=importlib"

@@ -46,8 +46,7 @@ jobs:
           PYTHONPATH: dags/src:dags
         run: |
           python -c "from ingestion.run_ingestion import run_ingestion; run_ingestion()"
-          echo "=== Files after ingestion ==="
-          find dags -name "financial_data.csv" 2>/dev/null || echo "financial_data.csv not found anywhere"
+          cp -r dags/src/data/raw/. dags/data/raw/
           python -c "from preprocess.run_preprocessing import run_pipeline; run_pipeline()"
           python -c "from features.run_features import main; main()"
 

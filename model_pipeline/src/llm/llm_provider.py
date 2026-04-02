@@ -76,6 +76,15 @@ class BaseLLMProvider(ABC):
 
 
 # ---------------------------------------------------------------------------
+# Backward compatibility
+# ---------------------------------------------------------------------------
+# Older code paths (and some modules in this repo) import `LLMProvider` from
+# this module. The current abstraction is `BaseLLMProvider`, so we alias it.
+# This avoids runtime ImportError in the API inference pipeline.
+LLMProvider = BaseLLMProvider
+
+
+# ---------------------------------------------------------------------------
 # Mock provider — deterministic stub for tests / no-key environments.
 # ---------------------------------------------------------------------------
 

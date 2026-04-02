@@ -33,6 +33,11 @@ The FastAPI application follows a clean request flow:
    - Runs **Layer 1** (Deterministic Affordability Engine).
    - Runs **Layer 2** (Downgrade Engine based on Product/Review ML Features).
    - Generates confidence scores via XGBoost (`ModelManager`).
+     - Confidence is derived from class probabilities (`predict_proba`).
+     - The loader uses the MLflow `pyfunc` model for `predict`, but it also reloads the native XGBoost/LightGBM
+       flavor to reliably obtain `predict_proba`.
+     - If the artifact cannot provide `predict_proba`, the API will still respond with a recommendation but
+       `confidence` may be `null` (check server logs for the scoring reason).
    - Requests a response generation block from the LLM based on specific inputs.
    - Triggers LLM Guardrails to ensure output safety.
 3. **`model_loader.py`** manages singletons (the Database Engine, the XGBoost MLflow artifact, the Label Encoder, and Precomputed category statistics) to stay loaded in memory for fast performance.
@@ -65,6 +70,7 @@ The server initializes everything and will typically output:
 ```log
 [INFO] Loading model manager resources...
 [INFO] Loaded model via mlflow.pyfunc from: .../model_pipeline/models/artifacts
+[INFO] Native LightGBM model available for predict_proba (.../model_pipeline/models/artifacts)
 [INFO] Database connected (env=dev)
 [INFO] LLM provider initialized: mock
 [INFO] Model manager fully loaded.

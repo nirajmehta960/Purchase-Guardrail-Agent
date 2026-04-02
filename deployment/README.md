@@ -40,7 +40,7 @@ The model is deployed exclusively on Google Cloud Platform using the following G
 13. [Phase 8 — Drift Detection](#phase-8--drift-detection)
 14. [Phase 9 — Testing](#phase-9--testing)
 15. [Phase 10 — Monitoring Dashboard](#phase-10--monitoring-dashboard)
-16. [Phase 11 — Frontend (Streamlit UI)](#phase-11--frontend-streamlit-ui)
+16. [Phase 11 — Production Frontend (React/Vite)](#phase-11--production-frontend-reactvite)
 17. [Deliverable Checklist](#deliverable-checklist)
 
 ---
@@ -54,9 +54,9 @@ This phase covers the **deployment** of the production-ready SavVio model onto G
 
 | Layer | Responsibility |
 |---|---|
-| Deterministic Engine | Authoritative Green/Yellow/Red classification via financial rule engine |
-| ML Model | Confidence scoring and ranking support — cannot override engine output |
-| LLM + Guardrails | Extracts product information from user prompt, generates natural language recommendation with NeMo safety enforcement |
+| Deterministic Engine | Authoritative Green/Yellow/Red classification via financial rule engine (Financial Engine) |
+| ML Model Layer | Confidence scoring and ranking support — providing a "Second Opinion" to the engine |
+| LLM Advocate | Parses natural language intent, resolves products, and generates conversational recommendations with fiduciary guardrails |
 
 ---
 
@@ -68,30 +68,28 @@ This phase covers the **deployment** of the production-ready SavVio model onto G
 User Prompt (natural language input)
         ↓
 ┌─────────────────────────────────────┐
-│          FastAPI /predict           │  ← Receives request, routes to LLM Wrapper for input parsing
+│          FastAPI /predict           │  ← Orchestration layer (Port 3500)
 └─────────────────────────────────────┘
         ↓
 ┌─────────────────────────────────────┐
-│          LLM Wrapper                │  ← Extracts product info from user prompt
-│         NeMo Guardrails             │  ← Hallucination + safety enforcement
+│          LLM Intent Parser          │  ← Extracts product info & user context
 └─────────────────────────────────────┘
         ↓
 ┌─────────────────────────────────────┐
-│       Deterministic Engine          │  ← Hard financial rules
+│       Deterministic Engine          │  ← Hard financial rules (RUS, PIR, etc.)
 │     Green / Yellow / Red            │  ← Authoritative output
 └─────────────────────────────────────┘
         ↓
 ┌─────────────────────────────────────┐
-│          ML Model Layer             │  ← Confidence + ranking
-│    XGBoost (loaded from Registry)   │  ← Cannot override engine
+│          ML Model Layer             │  ← Confidence scoring (XGBoost)
 └─────────────────────────────────────┘
         ↓
 ┌─────────────────────────────────────┐
-│        LLM Wrapper                  │  ← Natural language recommendation
-│         NeMo Guardrails             │  ← Final safety enforcement
+│        LLM Response Gen             │  ← Conversational recommendation
+│       Custom Guardrails             │  ← 6-point fiduciary safety checks
 └─────────────────────────────────────┘
         ↓
-  User-facing Recommendation (Streamlit UI)
+   User-facing Advocate UI (React/Vite)
 ```
 
 ### Deployment Infrastructure
@@ -131,38 +129,24 @@ GCP Cloud Run  (live endpoint)
 ## 3. Repository Structure
 
 ```
-SavVio/
 ├── deployment/
 │   ├── README.md                          # This file
 │   ├── requirements.txt                   # Python dependencies for inference
 │   ├── infrastructure/
-│   │   └── terraform/
-│   │       ├── main.tf                    # Cloud Run + Artifact Registry + IAM
-│   │       ├── variables.tf               # Input variables
-│   │       └── outputs.tf                 # Output values (endpoint URL, etc.)
+│   │   └── terraform/                     # Cloud Run + AR + IAM
 │   ├── api/
-│   │   ├── main.py                        # FastAPI app — /predict endpoint
-│   │   ├── inference.py                   # Model loading + inference logic
-│   │   └── schemas.py                     # Request / response Pydantic schemas
-│   ├── deterministic_engine/
-│   │   └── decision_logic.py              # Green/Yellow/Red rule engine (carried from model-dev)
-│   ├── llm_wrapper/
-│   │   └── llm_wrapper.py                 # LLM + NeMo Guardrails integration
+│   │   ├── main.py                        # FastAPI app (Port 3500)
+│   │   ├── inference.py                   # Model pipeline orchestration
+│   │   └── products_catalog.py            # Static product metadata
+│   ├── frontend/                          # Production React/Vite App
+│   │   ├── src/                           # Components (AiChat, Dashboard)
+│   │   ├── vite.config.ts                 # Proxy settings for /api
+│   │   └── README.md                      # Frontend-specific docs
 │   ├── docker/
-│   │   └── Dockerfile                     # Full inference stack containerization
-│   ├── monitoring/
-│   │   ├── drift_detector.py              # Evidently drift checks
-│   │   ├── dashboard.py                   # Monitoring dashboard
-│   │   └── alert_config.yaml             # Latency and drift alert thresholds
+│   │   └── Dockerfile                     # Multi-stage production build
 │   └── tests/
-│       ├── test_api.py                    # Endpoint correctness + response validation
-│       ├── test_inference.py              # Model loading + prediction tests
-│       ├── test_decision_logic.py         # Deterministic engine rule tests
-│       ├── test_drift_detector.py         # Drift detection threshold tests
-│       └── test_llm_wrapper.py            # Guardrail enforcement tests
-│
-├── frontend/
-│   └── app.py                             # Streamlit frontend UI
+│       ├── test_api.py                    # Endpoint validation
+│       └── test_inference.py              # Pipeline orchestration tests
 │
 ├── .github/
 │   └── workflows/
@@ -200,7 +184,7 @@ SavVio/
          ↓
 10. Validate deployed system
          ↓
-11. Deploy Streamlit frontend
+11. Deploy Production Frontend (React/Vite)
 ```
 
 ---
@@ -219,7 +203,7 @@ SavVio/
 | Drift Detection | Evidently | WhyLabs, Arize | Drift threshold checks |
 | Testing | pytest | unittest | All tests pass |
 | Monitoring Dashboard | Streamlit, Cloud Logging | Grafana | Dashboard live |
-| Frontend | Streamlit | — | UI live and connected to API |
+| Frontend | React, Vite, Tailwind | — | UI live and connected to API |
 
 ---
 
@@ -314,12 +298,10 @@ Expose the SavVio model pipeline through a production-grade FastAPI REST API. Th
 
 ### Tools
 
-| Tool | Purpose |
-|---|---|
-| FastAPI & Uvicorn | High-performance API serving and routing |
+| FastAPI & Uvicorn | High-performance API serving on Port 3500 |
 | Pydantic | Request/response schema validation |
 | sentence-transformers | Natural language to pgvector product resolution |
-| XGBoost & MLflow | Local model artifact hydration and scoring |
+| LLM Pipeline | Intent parsing, resolution, and response generation |
 | Pytest | Comprehensive unit testing of orchestrator and mocked endpoints |
 
 ---
@@ -559,38 +541,37 @@ Build a live monitoring dashboard to visualize system performance, prediction di
 
 ---
 
-## Phase 11 — Frontend (Streamlit UI)
+## Phase 11 — Production Frontend (React/Vite)
 
 ### Objective
-Build a user-facing Streamlit interface that allows users to enter a natural language prompt and receive a Green/Yellow/Red recommendation with a natural language explanation.
+Build a high-performance, premium user interface that surfaces the AI Advocate's recommendations and financial health visualizations.
 
 ### Tasks
-- Build Streamlit app in `frontend/app.py`
-- Implement user input form:
-  - Text input field for natural language prompt (e.g. "I want to buy AirPods Pro for $249, I earn $4000/month and have $800 in savings")
-- Connect frontend to the live `/predict` FastAPI endpoint on Cloud Run
-- Display recommendation output:
-  - Green/Yellow/Red signal with color-coded visual indicator
-  - ML confidence score
-  - Natural language explanation from LLM wrapper
-- Handle API errors gracefully — display user-friendly error messages if endpoint is unavailable
-- Handle edge cases:
-  - Empty prompt → prompt user to enter input
-  - API timeout → display retry message
-- Style the UI to be clean and readable
-- Test frontend locally:
+- Build React application in `deployment/frontend` using **Vite**.
+- Implement **AI Advocate Hub**:
+  - Conversational chat interface for natural language purchase queries.
+  - Dynamic theme coloring based on Green/Yellow/Red recommendation status.
+- Implement **Financial Dashboard**:
+  - Recharts visualizations for income, savings, and "What-If" scenarios.
+- Connect to the FastAPI backend via Vite proxy:
+  - Development: `/api` proxies to `localhost:3500`.
+  - Production: Points to the Cloud Run service endpoint.
+- Graceful error handling for API timeouts and invalid inputs.
+- Test frontend production build:
   ```bash
-  streamlit run frontend/app.py
+  npm run build
+  npm run preview
   ```
-- Verify frontend connects correctly to live Cloud Run endpoint
-- Deploy frontend to Cloud Run or as a separate Streamlit Cloud instance
+- Verify end-to-end flow from UI input to LLM-explained recommendation.
 
 ### Tools
 
 | Tool | Purpose |
 |---|---|
-| Streamlit | Frontend UI framework |
-| requests | API calls to FastAPI /predict endpoint |
+| React & Vite | Core frontend framework and build tool |
+| Tailwind CSS | Premium styling and layout |
+| TanStack Query | Server-state management and caching |
+| Recharts | Financial health visualizations |
 
 ---
 
@@ -620,5 +601,5 @@ Build a user-facing Streamlit interface that allows users to enter a natural lan
 - [ ] NeMo Guardrails integrated and tested with adversarial prompts
 - [ ] Monitoring dashboard built and deployed
 - [ ] Drift detection covers Green/Yellow/Red output distribution shifts
-- [ ] Streamlit frontend live and connected to Cloud Run endpoint
+- [ ] Production frontend (React/Vite) live and connected to Cloud Run endpoint
 - [ ] CI/CD gate sequence: unit tests → build → smoke test → push → deploy → live check → latency check

@@ -53,7 +53,7 @@ jobs:
       - name: Set up src package
         working-directory: data_pipeline
         run: |
-          ln -sf dags/src src 2>/dev/null || true
+          cp -r dags/src src
       - name: Run unit tests
         working-directory: data_pipeline
         env:

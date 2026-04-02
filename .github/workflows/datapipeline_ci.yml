@@ -55,9 +55,9 @@ jobs:
         run: |
           cp -r dags/src src
       - name: Run unit tests
-        working-directory: data_pipeline
+        working-directory: data_pipeline/dags
         env:
-          PYTHONPATH: dags/src:dags
+          PYTHONPATH: src:.
         run: |
           python -m pytest \
             tests/bias/ \

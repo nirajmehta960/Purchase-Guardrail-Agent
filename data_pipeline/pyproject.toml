@@ -10,3 +10,8 @@ requires-python = ">=3.9"
 
 [tool.setuptools.packages.find]
 where = ["dags"]
+
+[tool.pytest.ini_options]
+# Add data_pipeline/dags/ to sys.path so 'src' is importable as a proper package.
+# This runs before any conftest.py or plugin, preventing namespace package collisions.
+pythonpath = ["dags"]

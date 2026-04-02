@@ -35,11 +35,11 @@ jobs:
           pip install pytest pytest-cov
 
       - name: Run data pipeline
-        working-directory: data_pipeline
+        working-directory: data_pipeline/dags
         env:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
           GCP_CREDENTIALS_PATH: ${{ env.GOOGLE_APPLICATION_CREDENTIALS }}
-          PYTHONPATH: dags/src:dags
+          PYTHONPATH: src:${{ github.workspace }}/data_pipeline/dags/src
         run: |
           python -c "from ingestion.run_ingestion import run_ingestion; run_ingestion()"
           python -c "from preprocess.run_preprocessing import run_pipeline; run_pipeline()"

@@ -53,9 +53,10 @@ jobs:
       - name: Run unit tests
         working-directory: data_pipeline
         env:
-          # dags/        → allows 'from src.ingestion ...' (src pkg lives at dags/src/)
-          # dags/src/    → allows bare 'from ingestion ...' imports used inside src modules
-          PYTHONPATH: ${{ github.workspace }}/data_pipeline/dags:${{ github.workspace }}/data_pipeline/dags/src
+          # Only add dags/ so Python finds 'src' as a proper package at dags/src/
+          # Adding dags/src/ as well causes a namespace collision: Python sees
+          # the name 'src' from two path entries and treats it as non-package.
+          PYTHONPATH: ${{ github.workspace }}/data_pipeline/dags
         run: |
           python -m pytest \
             tests/bias/ \

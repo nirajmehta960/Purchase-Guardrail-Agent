@@ -43,7 +43,18 @@ SavVio/
     │   ├── guards/
     │   │   └── bias_detection.py        # Fairlearn demographic parity + equalized odds
     │   └── llm/
-    │       └── prompt_engin.py          # LLM wrapping + guardrails
+    │       ├── __init__.py              # Package exports
+    │       ├── config.py               # LLM configuration (provider, keys, thresholds)
+    │       ├── llm_provider.py         # Provider abstraction (Mock / OpenAI / Gemini / Claude)
+    │       ├── intent_parser.py        # Role 1: NLU — intent detection + product extraction
+    │       ├── product_resolver.py     # pgvector similarity search for product resolution
+    │       ├── response_generator.py   # Role 2: conversational recommendation generation
+    │       ├── guardrails.py           # Output safety verification (6 code-level checks)
+    │       ├── prompt_engin.py         # Legacy interface (backward compatible facade)
+    │       └── prompts/
+    │           ├── system_prompt.py     # SavVio persona + critical response rules (v1.0)
+    │           ├── intent_prompt.py     # Intent extraction prompt template (v1.0)
+    │           └── response_templates.py # GREEN/YELLOW/RED templates + rule explanations
     └── tests/
 ```
 
@@ -66,7 +77,7 @@ SavVio/
 | Experiment Tracking | MLflow | Weights & Biases | Run metadata completeness |
 | Model Registry Push | GCP Artifact Registry, Vertex AI | MLflow Registry | Push only on all gates pass |
 | CI/CD Automation | GitHub Actions, Docker | Cloud Build, Jenkins | src ↔ test ↔ DB ↔ ML pipeline |
-| LLM Wrapping | NeMo Guardrails, LangChain | Guardrails AI | Hallucination + safety gate |
+| LLM Integration | Google Gemini (google-genai), sentence-transformers, pgvector | OpenAI, Claude | Guardrail checks (6) must pass |
 | Monitoring & Dashboard | Evidently, Arize | WhyLabs, GCP Monitoring | Drift + latency alerts |
 
 ---
@@ -98,7 +109,7 @@ SavVio/
         ↓
 12. CI/CD Automation (Dockerized)
         ↓
-13. LLM Wrapping + NeMo Guardrails
+13. LLM Integration (Intent Parsing + Response Generation + Guardrails)
 ```
 
 ---
@@ -118,7 +129,7 @@ SavVio/
 11. [Phase 11 — Experiment Tracking](#phase-11--experiment-tracking)
 12. [Phase 12 — Model Registry Push](#phase-12--model-registry-push)
 13. [Phase 13 — CI/CD Automation](#phase-13--cicd-automation)
-14. [Phase 14 — LLM Wrapping & Guardrails](#phase-14--llm-wrapping--guardrails)
+14. [Phase 14 — LLM Integration](#phase-14--llm-integration)
 15. [Phase 15 — Monitoring & Dashboard](#phase-15--monitoring--dashboard)
 16. [Phase 16 — Testing](#phase-16--testing)
 17. [Phase 17 — Operational Risks & Guardrails](#phase-17--operational-risks--guardrails)
@@ -632,7 +643,7 @@ Experiment: Financial_Wellbeing_Prediction
 2. **GCP Artifact Registry** — Push model binary for production deployment (automated via CI/CD)
 
 **Tasks:**
-- Confirm model passed all gates: validation ✅ and bias ✅
+- Confirm model passed all gates: validation (passed) and bias (passed)
 - Register model in MLflow via `mlflow.register_model()`
 - Serialize model artifact via joblib
 - Push to GCP Artifact Registry
@@ -711,26 +722,128 @@ GitHub Actions / Cloud Build  [Dockerized]
 
 ---
 
-### Phase 14 — LLM Wrapping & Guardrails
+### Phase 14 — LLM Integration
 
-**Objective:** Wrap ML and deterministic outputs with an LLM for natural language delivery, enforced by safety guardrails and prompt engineering.
+**Objective:** Integrate an LLM into SavVio for two roles: (1) understanding natural language user queries and extracting product references, and (2) generating conversational purchase recommendations grounded in the deterministic engine's authoritative output.
+
+**Architecture:**
+
+The LLM has **two distinct roles** — it is NOT just an output wrapper:
+
+```
+User: "Can I buy the Sony WH-1000XM5?"
+         │
+         ▼
+┌─── LLM Role 1: Intent Parser ───┐
+│  Parse intent → purchase_query   │
+│  Extract product → "Sony WH-..." │
+└──────────────┬───────────────────┘
+               │
+               ▼
+┌─── Product Resolver ────────────┐
+│  Embed query (all-MiniLM-L6-v2) │
+│  pgvector similarity search     │
+│  → product_id matched           │
+└──────────────┬──────────────────┘
+               │
+               ▼
+    [API Layer runs Engines + ML]
+    (Steps 3–6 from deployment)
+               │
+               ▼
+┌─── LLM Role 2: Response Gen ───┐
+│  Deterministic color + ML conf  │
+│  → Conversational recommendation│
+└──────────────┬─────────────────┘
+               │
+               ▼
+┌─── Guardrails (6 checks) ──────┐
+│  G1: Color contradiction        │
+│  G2: Hallucinated figures        │
+│  G3: Out-of-scope advice         │
+│  G4: Internal leakage            │
+│  G5: Tone mismatch               │
+│  G6: Length check                │
+└────────────────────────────────┘
+               │
+               ▼
+    User sees recommendation
+```
+
+**Source Files:**
+- `llm/config.py` — Provider selection, API keys, embedding config, guardrail thresholds
+- `llm/llm_provider.py` — Strategy-pattern abstraction: `MockProvider`, `GeminiProvider`, `OpenAIProvider`, `ClaudeProvider`
+- `llm/intent_parser.py` — Role 1: regex-based (mock) or LLM-based intent detection + product extraction
+- `llm/product_resolver.py` — pgvector cosine similarity search against `product_embeddings` table
+- `llm/response_generator.py` — Role 2: template-based (mock) or LLM-based response generation
+- `llm/guardrails.py` — 6 code-level safety checks with NeMo-ready interface
+- `llm/prompt_engin.py` — Legacy facade for backward compatibility with `run_pipeline.py`
+- `llm/prompts/system_prompt.py` — SavVio persona definition + 5 critical rules (v1.0)
+- `llm/prompts/intent_prompt.py` — Intent extraction prompt template (v1.0)
+- `llm/prompts/response_templates.py` — GREEN/YELLOW/RED templates + rule-to-explanation mappings
+
+**Provider Configuration:**
+
+| Provider | Env Var | Package | Model Default |
+|----------|---------|---------|---------------|
+| Mock (default) | `LLM_PROVIDER=mock` | None | Template-based |
+| Google Gemini | `LLM_PROVIDER=gemini` | `google-genai` | `gemini-2.5-flash` |
+| OpenAI | `LLM_PROVIDER=openai` | `openai` | `gpt-4.1` |
+| Anthropic Claude | `LLM_PROVIDER=claude` | `anthropic` | `claude-4.5-sonnet` |
+
+**Product Resolution:**
+- Uses the same embedding model (`all-MiniLM-L6-v2`, 384-dim) as the data pipeline's `vector_embed.py`
+- Searches `product_embeddings` table via pgvector cosine similarity
+- Configurable similarity threshold (default: 0.3) and top-k results (default: 5)
+
+**Guardrail Checks (6):**
+
+| Check | What It Catches |
+|-------|-----------------|
+| G1 — Color contradiction | Response says "buy" when color is RED, or "don't buy" when GREEN |
+| G2 — Hallucinated figures | Dollar amounts in response not present in input context |
+| G3 — Out-of-scope advice | Investment tips, credit card suggestions, stock advice |
+| G4 — Internal leakage | Mentions of "deterministic engine", "LightGBM", rule names, pgvector |
+| G5 — Tone mismatch | GREEN response uses alarm words; RED uses encouragement words |
+| G6 — Length check | Response exceeds configured max word count (default: 150) |
+
+**NeMo Guardrails:** Deferred to deployment phase. The `guardrails.py` module is structured with a clean interface so NeMo can be plugged in later via a `NeMoGuardrailsAdapter` without changing calling code.
 
 **Tasks:**
-- Design system prompt template including: financial signals, decision class (Green/Yellow/Red), product context
-- Implement `llm_wrapper.py` — takes deterministic engine output + ML confidence → generates natural language recommendation
-- Enforce that LLM output never contradicts the deterministic engine color class
-- Integrate NeMo Guardrails — define rails for: hallucinated financial figures, out-of-scope advice, unsafe outputs
-- Test guardrails with adversarial prompts — confirm rails block unsafe completions
-- Version-control all prompt templates alongside model artifacts
-- Document all prompt engineering decisions and guardrail configuration
+- [x] Design provider-agnostic LLM abstraction (strategy pattern)
+- [x] Implement MockProvider with template-based responses
+- [x] Implement GeminiProvider using `google-genai` SDK (v1.69+)
+- [x] Implement OpenAI and Claude provider stubs
+- [x] Build intent parser with regex (mock) and LLM-based extraction
+- [x] Build product resolver using pgvector similarity search
+- [x] Build response generator with template fallbacks
+- [x] Implement 6 code-level guardrail checks
+- [x] Design system prompt with 5 critical rules
+- [x] Design intent extraction prompt template
+- [x] Create GREEN/YELLOW/RED response templates with rule explanations
+- [x] Version-control all prompt templates (v1.0)
+- [x] Preserve backward compatibility via `prompt_engin.py` facade
+- [x] Verify with Gemini API (12/12 checks passed)
+- [x] Write unit tests (77 tests, all passing)
+- [ ] Integrate NeMo Guardrails (deferred to deployment phase)
+
+**Verification:**
+```bash
+# Run unit tests (no API calls, mock provider)
+PYTHONPATH=src python -m pytest tests/llm/ -v
+
+# Run live Gemini verification (requires GEMINI_API_KEY in .env)
+python verify_llm.py
+```
 
 **Tools:**
 
 | Tool | Purpose |
 |------|---------|
-| NeMo Guardrails | LLM safety and hallucination prevention |
-| LangChain / LlamaIndex | Prompt orchestration |
-| Evidently / Arize | Output monitoring and drift detection |
+| Google Gemini (`google-genai`) | Primary LLM provider for intent parsing and response generation |
+| sentence-transformers | Product text embedding for pgvector search |
+| pgvector | Vector similarity search for product resolution |
+| Code-level guardrails | 6 safety checks (NeMo-ready interface for future integration) |
 
 ---
 
@@ -867,6 +980,9 @@ Two additional algorithms were evaluated during planning but excluded:
 - [x] Bias detection confirmed as post-training (on validation set)
 - [x] MLflow experiment tracking fully implemented
 - [ ] CI/CD connects src ↔ test ↔ DB ↔ ML (Dockerized)
-- [ ] LLM wrapping implemented with NeMo Guardrails
-- [ ] Prompt templates version-controlled
+- [x] LLM integration implemented (dual-role: intent parsing + response generation)
+- [x] Prompt templates version-controlled (system_prompt v1.0, intent_prompt v1.0, response_templates v1.0)
+- [x] Gemini provider verified (12/12 live API checks passed)
+- [x] 6 code-level guardrails implemented and tested (77 unit tests passing)
+- [ ] NeMo Guardrails integration (deferred to deployment phase)
 - [ ] Monitoring and dashboard deployed

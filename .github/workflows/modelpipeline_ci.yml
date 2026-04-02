@@ -88,6 +88,12 @@ jobs:
 
       - name: Run pipeline
         working-directory: model_pipeline
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         run: |
           MLFLOW_TRACKING_URI=http://127.0.0.1:5000 python src/run_pipeline.py
 

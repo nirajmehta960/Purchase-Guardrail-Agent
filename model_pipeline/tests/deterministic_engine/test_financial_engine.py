@@ -56,12 +56,12 @@ class TestGreen:
         result = engine.decide(_healthy_financial(), _healthy_product())
         assert result.decision_category == "GREEN"
 
-    def test_single_yellow_rule_stays_green(self, engine):
-        """Only 1 YELLOW rule triggers → need 2+ to trigger YELLOW."""
+    def test_no_yellow_rules_fire_stays_green(self, engine):
+        """No YELLOW rules fire because SPR=8.0 exceeds the spr<5.0 threshold in Rules 1 & 2."""
         fin = _healthy_financial()
         fin["affordability_score"] = -100
         fin["price_to_income_ratio"] = 0.30
-        fin["savings_to_price_ratio"] = 8.0  # below 10 for Rule 1
+        fin["savings_to_price_ratio"] = 8.0  # above spr<5.0 threshold → Rules 1 & 2 don't fire
         result = engine.decide(fin, _healthy_product())
         assert result.decision_category == "GREEN"
 
@@ -223,24 +223,24 @@ class TestPIREscape:
         assert not any("flow_stress" in r for r in result.triggered_rules)
 
 
-# ── YELLOW RULES (cross-group, needs 2+ to trigger) ─────────────────────
+# ── YELLOW RULES (any 1 rule triggers YELLOW) ────────────────────────────
 
 class TestYellowRules:
 
     def test_rules_1_and_2_trigger_yellow(self, engine):
-        """income_pressure + savings_strain → 2 rules → YELLOW."""
+        """income_pressure + savings_strain both fire (spr=3.0 < 5.0 threshold)."""
         fin = _healthy_financial()
         fin["affordability_score"] = -100
         fin["price_to_income_ratio"] = 0.30
-        fin["savings_to_price_ratio"] = 3.0   # < 10 for Rule 1, < 5 for Rule 2
-        fin["residual_utility_score"] = 2.0   # < 3 for Rule 2
+        fin["savings_to_price_ratio"] = 3.0   # < 5.0 threshold — Rules 1 & 2 fire
+        fin["residual_utility_score"] = 2.0
         result = engine.decide(fin, _healthy_product())
         assert result.decision_category == "YELLOW"
         assert any("income_pressure" in r for r in result.triggered_rules)
         assert any("savings_strain" in r for r in result.triggered_rules)
 
     def test_rules_3_and_4_trigger_yellow(self, engine):
-        """debt_stress + low_resilience → 2 rules → YELLOW."""
+        """debt_stress + low_resilience both fire → YELLOW."""
         fin = _healthy_financial()
         fin["monthly_expense_burden_ratio"] = 0.75
         fin["savings_to_price_ratio"] = 4.0
@@ -253,7 +253,7 @@ class TestYellowRules:
         assert any("low_resilience" in r for r in result.triggered_rules)
 
     def test_rules_1_and_5_trigger_yellow(self, engine):
-        """income_pressure + weak_profile → 2 rules → YELLOW."""
+        """income_pressure + weak_profile both fire → YELLOW."""
         fin = _healthy_financial()
         fin["affordability_score"] = -100
         fin["price_to_income_ratio"] = 0.30
@@ -264,42 +264,42 @@ class TestYellowRules:
         assert result.decision_category == "YELLOW"
 
     def test_savings_escape_prevents_rule1(self, engine):
-        """income_pressure doesn't trigger if savings heavily cover the price."""
+        """income_pressure Rule 1 doesn't fire when spr=15.0 exceeds the spr<5.0 threshold."""
         fin = _healthy_financial()
         fin["affordability_score"] = -100
         fin["price_to_income_ratio"] = 0.30
-        fin["savings_to_price_ratio"] = 15.0  # > 10 → Rule 1 doesn't fire
+        fin["savings_to_price_ratio"] = 15.0  # above spr<5.0 threshold → Rule 1 doesn't fire
         result = engine.decide(fin, _healthy_product())
-        # Only 1 rule triggers at most → GREEN
+        # No YELLOW rules fire with these values → GREEN
         assert result.decision_category == "GREEN"
 
     def test_trivial_purchase_prevents_rule2(self, engine):
-        """savings_strain doesn't trigger if PIR is tiny (cheap product)."""
+        """savings_strain Rule 2 doesn't fire when PIR is tiny (pir<0.10 escape)."""
         fin = _healthy_financial()
         fin["savings_to_price_ratio"] = 3.0
         fin["residual_utility_score"] = 2.0
-        fin["price_to_income_ratio"] = 0.05  # < 0.10 → Rule 2 doesn't fire
+        fin["price_to_income_ratio"] = 0.05  # below pir>0.10 threshold → Rule 2 doesn't fire
         result = engine.decide(fin, _healthy_product())
         assert result.decision_category == "GREEN"
 
-    def test_one_rule_not_enough_for_yellow(self, engine):
-        """Only 1 YELLOW rule triggers → stays GREEN."""
+    def test_no_yellow_rules_fire_stays_green(self, engine):
+        """No YELLOW rules fire when spr=8.0 exceeds the spr<5.0 threshold in Rules 1 & 2."""
         fin = _healthy_financial()
         fin["affordability_score"] = -100
         fin["price_to_income_ratio"] = 0.30
-        fin["savings_to_price_ratio"] = 8.0  # triggers Rule 1 only
+        fin["savings_to_price_ratio"] = 8.0  # above spr<5.0 — Rules 1 & 2 don't fire
         result = engine.decide(fin, _healthy_product())
         assert result.decision_category == "GREEN"
 
-    def test_three_rules_still_yellow_not_red(self, engine):
-        """3 YELLOW rules → YELLOW (not RED — RED has its own rules)."""
+    def test_two_rules_still_yellow_not_red(self, engine):
+        """Multiple YELLOW rules → YELLOW (not RED — RED has its own independent rules)."""
         fin = _healthy_financial()
         fin["affordability_score"] = -100
         fin["price_to_income_ratio"] = 0.30
-        fin["savings_to_price_ratio"] = 4.0
+        fin["savings_to_price_ratio"] = 4.0   # < 5.0 → Rules 1 (income_pressure) & 2 (savings_strain) fire
         fin["residual_utility_score"] = 2.0
         fin["debt_to_income_ratio"] = 0.35
-        fin["emergency_fund_months"] = 3.5   # < 4 for Rule 3
+        fin["emergency_fund_months"] = 3.5    # >= 3.0 → Rule 4 (low_resilience) does NOT fire
         result = engine.decide(fin, _healthy_product())
         assert result.decision_category == "YELLOW"
 

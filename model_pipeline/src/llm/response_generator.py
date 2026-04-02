@@ -32,6 +32,14 @@ class RecommendationContext:
     savings_to_price_ratio: float = 0.0
     emergency_fund_months: float = 0.0
     debt_to_income_ratio: float = 0.0
+    # Additional profile fields for richer LLM explanations
+    monthly_income: float = 0.0
+    monthly_expense_burden_ratio: float = 0.0  # MEB — expenses as % of income
+    price_to_income_ratio: float = 0.0          # PIR — price as % of monthly income
+    credit_score: Optional[int] = None          # Raw FICO score (300–850)
+    # Up to 5 formatted review snippets — e.g. '[4★] Great sound: battery lasts forever...'
+    # Empty list when product has no reviews or is a hypothetical evaluation.
+    review_snippets: List[str] = field(default_factory=list)
 
 
 def _color_key(color: str) -> str:
@@ -106,6 +114,11 @@ def _generate_from_template(context: RecommendationContext) -> str:
         lines.append(
             "- **Note:** Product and review signals caused a **one-step downgrade** from the pure financial assessment."
         )
+    if context.review_snippets:
+        lines.append("")
+        lines.append("**What customers say:**")
+        for snippet in context.review_snippets:
+            lines.append(f"  - {snippet}")
     if context.user_context:
         lines.append(f"- **Your note:** {context.user_context}")
 
@@ -135,32 +148,67 @@ def generate_response(context: RecommendationContext, llm_provider: Any) -> str:
     ck = _color_key(context.recommendation_color)
     rules_txt = "; ".join(context.triggered_rules[:12]) if context.triggered_rules else "(none listed)"
 
-    prompt = f"""You are SavVio, a fiduciary-style financial assistant.
+    if context.review_snippets:
+        reviews_block = "Customer voice (most helpful reviews):\n" + "\n".join(
+            f"  {s}" for s in context.review_snippets
+        )
+        reviews_instruction = (
+            "- Weave 1–2 specific details from the customer reviews into your explanation "
+            "so the user understands what real buyers experienced with this product. "
+            "If reviews are positive, note what customers praise. "
+            "If reviews are mixed or negative, flag the concerns honestly."
+        )
+    else:
+        reviews_block = "Customer voice: no reviews available for this product."
+        reviews_instruction = "- Do not fabricate customer opinions; note that no reviews are available."
 
-The deterministic engine has ALREADY decided the recommendation color. You MUST NOT contradict it.
+    afs_line = (
+        "Affordability score: [calculation error — do not quote]"
+        if context.affordability_score_unreliable
+        else f"Affordability score (monthly discretionary minus price): {context.affordability_score:+.2f}"
+    )
+    dti_pct = context.debt_to_income_ratio * 100
+    meb_pct = context.monthly_expense_burden_ratio * 100
+    pir_pct = context.price_to_income_ratio * 100
+    credit_line = (
+        f"Credit score: {context.credit_score} (300–850 scale; below 580 = poor, 580–669 = fair, 670+ = good)"
+        if context.credit_score is not None
+        else "Credit score: not available"
+    )
 
-Hard requirements:
-- The user's recommendation is **{context.recommendation_color}** (GREEN = okay to buy, YELLOW = caution, RED = avoid).
-- Do NOT tell the user to buy if the color is RED, or to avoid if the color is GREEN.
-- Keep the tone supportive and specific. Mention the product name and price.
-- Short paragraphs, optional bullet points. Use **bold** for key numbers.
+    prompt = f"""You are SavVio, a fiduciary financial advisor. Your job is to explain a purchase recommendation clearly, using the exact numbers provided.
 
-Context:
-- Product: {context.product_name} at ${context.product_price:,.2f}
-- Stated price only (no catalog SKU matched): {context.hypothetical_purchase}
-- ML confidence available: {context.ml_confidence is not None}
-- Affordability score: {"calculation error (do not quote a numeric AFS)" if context.affordability_score_unreliable else f"{context.affordability_score:.3f}"}
-- Savings to price ratio: {context.savings_to_price_ratio:.3f}
-- Emergency fund (months): {context.emergency_fund_months:.2f}
-- Debt-to-income ratio: {context.debt_to_income_ratio:.3f}
-- Triggered rules: {rules_txt}
-- Downgraded from financial-only layer: {context.was_downgraded}
-- User context: {context.user_context or "none"}
+DECISION: {context.recommendation_color} — do NOT contradict this.
+{"Do NOT suggest buying, going ahead, or that this is safe." if context.recommendation_color == "RED" else ""}
+{"Do NOT tell the user to avoid the purchase or that it is risky." if context.recommendation_color == "GREEN" else ""}
 
-Write the answer (no JSON)."""
+PRODUCT: {context.product_name}
+PRICE: ${context.product_price:,.2f}{"  (hypothetical — no catalog match, price is user-stated)" if context.hypothetical_purchase else ""}
+
+FINANCIAL PROFILE (use these exact values — never invent numbers):
+- Monthly income: ${context.monthly_income:,.0f}
+- This purchase = {pir_pct:.0f}% of monthly income
+- Monthly expense burden: {meb_pct:.0f}% of income already committed to expenses
+- {afs_line}
+- Savings cover price: {context.savings_to_price_ratio:.1f}x
+- Emergency fund: {context.emergency_fund_months:.1f} months (target: 3–6 months)
+- Debt-to-income: {dti_pct:.0f}%
+- {credit_line}
+- Rules that triggered: {rules_txt}
+{f"- User added context: {context.user_context}" if context.user_context else ""}
+
+{reviews_block}
+
+REQUIRED OUTPUT STRUCTURE — write exactly these 3 parts, no headers, no JSON:
+1. OPENING (1–2 sentences): State the {context.recommendation_color} verdict and the single strongest reason, using at least one specific number.
+2. FINANCIAL PICTURE (2–3 sentences): Explain what 2–3 of the financial numbers above mean for this user in plain English. Make it feel personal — e.g. "On a $1,110 income, this $600 purchase would consume more than half your monthly earnings."
+3. {"PRODUCT VOICE (1–2 sentences): Reference what real buyers say — quote or paraphrase a specific detail from the customer reviews above." if context.review_snippets else "PRODUCT NOTE (1 sentence): Note that no customer reviews are available for this product."}
+4. ACTION (1 sentence): One concrete next step the user can take right now.
+
+Use **bold** for key numbers. Write warmly but honestly. Do not use bullet points."""
 
     try:
-        raw = llm_provider.generate(prompt, max_tokens=600, temperature=0.35)
+        raw = llm_provider.generate(prompt, max_tokens=700, temperature=0.35)
         if raw and len(raw.strip()) > 20:
             return raw.strip()
     except Exception as e:

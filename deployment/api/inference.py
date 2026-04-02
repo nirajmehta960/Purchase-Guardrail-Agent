@@ -104,6 +104,64 @@ def _load_user_financial_profile(user_id: str, db_engine) -> dict | None:
     return dict(zip(columns, row))
 
 
+_REVIEW_NOISE_RE = None
+
+
+def _clean_review_text(text: str) -> str:
+    """Strip Amazon-specific noise from review text before injecting into LLM context."""
+    import re
+    # Remove [[VIDEOID:...]] and [[IMAGEID:...]] placeholders
+    text = re.sub(r"\[\[(?:VIDEO|IMAGE)ID:[^\]]*\]\]", "", text)
+    # Replace HTML line breaks with a space
+    text = re.sub(r"<br\s*/?>", " ", text, flags=re.IGNORECASE)
+    # Strip other HTML tags
+    text = re.sub(r"<[^>]+>", "", text)
+    # Collapse multiple spaces/newlines
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _select_review_snippets(reviews_df: pd.DataFrame, n_positive: int = 3, n_critical: int = 2) -> list:
+    """Return up to n_positive + n_critical formatted review snippets for LLM context.
+
+    Selects the most helpful positive reviews (rating >= 4) and most helpful
+    critical reviews (rating <= 2) so the LLM can reference real customer
+    experiences from both sides. Each snippet is truncated to ~160 chars.
+    """
+    if reviews_df.empty:
+        return []
+
+    df = reviews_df.copy()
+    df["helpful_vote"] = pd.to_numeric(df.get("helpful_vote", 0), errors="coerce").fillna(0)
+    df["rating"] = pd.to_numeric(df.get("rating", 3), errors="coerce").fillna(3)
+
+    positive = df[df["rating"] >= 4].nlargest(n_positive, "helpful_vote")
+    critical = df[df["rating"] <= 2].nlargest(n_critical, "helpful_vote")
+    selected = pd.concat([positive, critical])
+
+    snippets = []
+    for _, row in selected.iterrows():
+        rating = int(row.get("rating", 0))
+        title = _clean_review_text(str(row.get("review_title", "") or ""))
+        text = _clean_review_text(str(row.get("review_text", "") or ""))
+
+        if title and text:
+            body = f"{title}: {text}"
+        elif text:
+            body = text
+        elif title:
+            body = title
+        else:
+            continue
+
+        if len(body) > 160:
+            body = body[:157] + "..."
+
+        snippets.append(f"[{rating}★] {body}")
+
+    return snippets
+
+
 def _load_product_reviews(product_id: str, db_engine) -> pd.DataFrame:
     """Load all reviews for a product from the reviews table."""
     sql = text("""
@@ -317,6 +375,27 @@ def run_inference(request: PredictRequest, manager) -> PredictResponse:
     financial_dict["emergency_fund_months"] = float(user_profile.get("emergency_fund_months", 0) or 0)
     financial_dict["saving_to_income_ratio"] = float(user_profile.get("saving_to_income_ratio", 0) or 0)
 
+    # Guard computed features that can be None for degenerate profiles (e.g. zero
+    # income, zero price, or missing credit_score). The engine's _safe() raises
+    # ValueError on None — use conservative defaults so the engine can still run
+    # and produce a meaningful (cautious) result rather than a cryptic 500 error.
+    #   price_to_income_ratio → None when income=0: default 1.0 (100% of income)
+    #   savings_to_price_ratio → None when price=0:  default 0.0 (no coverage)
+    #   net_worth_indicator   → None when income=0:  default 0.0 (neutral)
+    #   credit_risk_indicator → None when credit_score missing: default 0.0 (worst)
+    if financial_dict.get("price_to_income_ratio") is None:
+        financial_dict["price_to_income_ratio"] = 1.0
+        logger.warning("price_to_income_ratio is None (income=0?) — defaulting to 1.0 for engine")
+    if financial_dict.get("savings_to_price_ratio") is None:
+        financial_dict["savings_to_price_ratio"] = 0.0
+        logger.warning("savings_to_price_ratio is None (price=0?) — defaulting to 0.0 for engine")
+    if financial_dict.get("net_worth_indicator") is None:
+        financial_dict["net_worth_indicator"] = 0.0
+        logger.warning("net_worth_indicator is None (income=0?) — defaulting to 0.0 for engine")
+    if financial_dict.get("credit_risk_indicator") is None:
+        financial_dict["credit_risk_indicator"] = 0.0
+        logger.warning("credit_risk_indicator is None (no credit_score?) — defaulting to 0.0 for engine")
+
     logger.info(
         "Affordability computed: score=%.2f, SPR=%.2f, AFS_unreliable=%s",
         financial_dict.get("affordability_score", 0),
@@ -366,10 +445,13 @@ def run_inference(request: PredictRequest, manager) -> PredictResponse:
     product_signals = None
     review_signals = None
 
+    review_snippets: list = []
+
     if product_id:
         product_row = _load_product_row(product_id, manager.db_engine)
         reviews_df = _load_product_reviews(product_id, manager.db_engine)
         review_count = len(reviews_df)
+        review_snippets = _select_review_snippets(reviews_df)
 
         if product_row is not None:
             product_feats = compute_product_features(
@@ -536,6 +618,11 @@ def run_inference(request: PredictRequest, manager) -> PredictResponse:
         savings_to_price_ratio=float(financial_dict.get("savings_to_price_ratio", 0.0)),
         emergency_fund_months=float(financial_dict.get("emergency_fund_months", 0.0)),
         debt_to_income_ratio=float(financial_dict.get("debt_to_income_ratio", 0.0)),
+        monthly_income=float(user_profile.get("monthly_income", 0) or 0),
+        monthly_expense_burden_ratio=float(financial_dict.get("monthly_expense_burden_ratio", 0.0)),
+        price_to_income_ratio=float(financial_dict.get("price_to_income_ratio", 0.0)),
+        credit_score=user_profile.get("credit_score"),
+        review_snippets=review_snippets,
     )
 
     response_text = generate_response(context, manager.llm_provider)

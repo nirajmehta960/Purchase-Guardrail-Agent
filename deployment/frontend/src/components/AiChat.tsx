@@ -741,7 +741,7 @@ export const AiChat = () => {
       const assistantMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: signal ? "" : res.explanation,
+        content: res.explanation,
         signal,
         layer1: signal ? buildLayer1(res, signal) : undefined,
         predictResponse: signal ? res : undefined,
@@ -806,28 +806,22 @@ export const AiChat = () => {
                   );
                 })()}
 
-              {/* Layer 1 — user-facing summary (structured predict responses) */}
-              {msg.layer1 && (
-                <div className="space-y-3">
-                  <p className="text-sm leading-relaxed text-foreground/95">
-                    <InlineBold text={msg.layer1.leadParagraph} />
-                  </p>
-                  <ul className="space-y-1.5 text-sm text-foreground/90 list-none pl-0">
-                    {msg.layer1.summaryLines.map((line, i) => (
-                      <li key={i} className="leading-snug">
-                        {line}
-                      </li>
-                    ))}
-                  </ul>
-                  <p className="text-sm leading-relaxed text-foreground/95">{msg.layer1.closingLine}</p>
-                </div>
-              )}
-
-              {/* Plain markdown-style content (welcome, errors, legacy) */}
-              {!msg.layer1 && (
-                <p className="whitespace-pre-wrap">
+              {/* LLM explanation — shown for all responses that have content */}
+              {msg.content && (
+                <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/95">
                   <InlineBold text={msg.content} />
                 </p>
+              )}
+
+              {/* Quick-stats strip — Emergency fund / Debt / Confidence (structured responses only) */}
+              {msg.layer1 && (
+                <ul className="space-y-1 text-sm text-foreground/80 list-none pl-0 mt-2 border-t border-border/20 pt-2">
+                  {msg.layer1.summaryLines.map((line, i) => (
+                    <li key={i} className="leading-snug">
+                      {line}
+                    </li>
+                  ))}
+                </ul>
               )}
 
               {/* Link indicator */}

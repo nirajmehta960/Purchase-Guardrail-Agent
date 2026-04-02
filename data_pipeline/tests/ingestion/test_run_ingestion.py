@@ -109,7 +109,13 @@ _utils_stub = _make_stub(
 # Using sys.modules.setdefault only sets if absent — we need to force here.
 _req_stub = types.ModuleType("requests")
 _req_stub.Session = MagicMock()
+_req_exc = types.ModuleType("requests.exceptions")
+_req_exc.Timeout          = Exception
+_req_exc.HTTPError        = Exception
+_req_exc.RequestException = Exception
+_req_stub.exceptions = _req_exc   # ← needed so test_api_loader.py can do requests.exceptions.X
 sys.modules["requests"] = _req_stub
+sys.modules["requests.exceptions"] = _req_exc
 
 _req_exc = types.ModuleType("requests.exceptions")
 _req_exc.Timeout          = Exception

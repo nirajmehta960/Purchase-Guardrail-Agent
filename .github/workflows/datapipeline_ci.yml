@@ -58,12 +58,10 @@ jobs:
           touch src/__init__.py 2>/dev/null || true
 
       - name: Set up src package
-        working-directory: data_pipeline/dags
+        working-directory: data_pipeline
         run: |
-          if [ ! -f src/__init__.py ]; then touch src/__init__.py; fi
-          for d in src/ingestion src/preprocess src/features src/validation src/validation/validate src/validation/anomaly src/database; do
-            if [ -d "$d" ] && [ ! -f "$d/__init__.py" ]; then touch "$d/__init__.py"; fi
-          done
+          # Create src symlink so "from src.X import" works
+          ln -sf dags/src src 2>/dev/null || true
       - name: Run unit tests
         working-directory: data_pipeline
         env:

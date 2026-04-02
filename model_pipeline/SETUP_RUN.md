@@ -1,19 +1,16 @@
-## Runbook
+# Runbook
 
-### Option 1: Docker (recommended)
+## Option 1: Docker (recommended)
 
-#### Prerequisites
+### Prerequisites
 
-Run these checks from the **repo root** before starting:
+
+
+#### 1. Docker Daemon is installed and running
+
+#### 2. .env must exist in model_pipeline/. Copy from the example if missing.
 
 ```bash
-# 1) savviocore must exist — it is mounted as a volume into the training container.
-ls savviocore
-
-# 2) Training data must be present.
-ls model_pipeline/data/training_scenarios.csv
-
-# 3) .env must exist in model_pipeline/. Copy from the example if missing.
 ls model_pipeline/.env || cp model_pipeline/.env.model.example model_pipeline/.env
 ```
 
@@ -77,7 +74,7 @@ docker compose down
 docker compose down -v
 ```
 
-### Option 2: Local virtualenv
+## Option 2: Local virtualenv
 ```bash
 # 1) Move into the model pipeline folder so relative paths resolve there.
 cd model_pipeline
@@ -109,7 +106,7 @@ MLFLOW_TRACKING_URI=http://127.0.0.1:5000 python src/run_pipeline.py
 open http://127.0.0.1:5000
 ```
 
-### Individual Components
+## Individual Components
 ```bash
 # Test DB connectivity (once DB integration is live)
 python src/data/db_loader.py
@@ -121,7 +118,7 @@ python src/data/validate_data.py
 open http://localhost:5000
 ```
 
-### Running Tests
+## Running Tests
 ```bash
 pytest tests/ -v
 ```

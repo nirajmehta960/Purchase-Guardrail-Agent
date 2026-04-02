@@ -9,6 +9,8 @@ defaults for local development.
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # ---------------------------------------------------------------------------
 # Path Resolution
 # ---------------------------------------------------------------------------
@@ -16,6 +18,10 @@ from pathlib import Path
 # deployment/api/config.py → deployment/ → SavVio/
 _DEPLOYMENT_DIR = Path(__file__).resolve().parent.parent
 _PROJECT_ROOT = _DEPLOYMENT_DIR.parent
+
+# Load env from project root and model_pipeline (DB_*, GROQ_API_KEY, etc.)
+load_dotenv(_PROJECT_ROOT / ".env")
+load_dotenv(_PROJECT_ROOT / "model_pipeline" / ".env")
 
 
 class APIConfig:
@@ -52,12 +58,12 @@ class APIConfig:
     # Server
     # ---------------------------------------------------------------------------
     API_HOST = os.getenv("API_HOST", "0.0.0.0")
-    API_PORT = int(os.getenv("API_PORT", "8080"))
+    API_PORT = int(os.getenv("API_PORT", "3500"))
 
-    # CORS — allow Streamlit frontend and local dev
+    # CORS — Vite dev server (3000), Streamlit, etc.
     CORS_ORIGINS = os.getenv(
         "CORS_ORIGINS",
-        "http://localhost:8501,http://localhost:3000,*",
+        "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8501,*",
     ).split(",")
 
     # ---------------------------------------------------------------------------
@@ -74,6 +80,19 @@ class APIConfig:
     # Logging
     # ---------------------------------------------------------------------------
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+    # ---------------------------------------------------------------------------
+    # Product catalog browse (GET /products) — default price band when query omits min/max
+    # ---------------------------------------------------------------------------
+    PRODUCT_BROWSE_PRICE_MIN = float(os.getenv("PRODUCT_BROWSE_PRICE_MIN", "50"))
+    PRODUCT_BROWSE_PRICE_MAX = float(os.getenv("PRODUCT_BROWSE_PRICE_MAX", "2000"))
+    PRODUCT_BROWSE_DEFAULT_LIMIT = int(os.getenv("PRODUCT_BROWSE_DEFAULT_LIMIT", "100"))
+    PRODUCT_BROWSE_MAX_LIMIT = int(os.getenv("PRODUCT_BROWSE_MAX_LIMIT", "500"))
+
+    # ---------------------------------------------------------------------------
+    # ML — display name for API / UI (e.g. technical panel)
+    # ---------------------------------------------------------------------------
+    ML_MODEL_DISPLAY_NAME = os.getenv("ML_MODEL_DISPLAY_NAME", "SavVio classifier")
 
     # ---------------------------------------------------------------------------
     # MLflow (for loading models from registry — optional)

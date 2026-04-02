@@ -15,7 +15,7 @@ Usage:
     model_manager.load()
 
     # During inference:
-    label, confidence = model_manager.predict(features_array)
+    label, confidence = model_manager.predict(features_array)  # confidence may be None
 """
 
 from __future__ import annotations
@@ -30,6 +30,29 @@ import numpy as np
 from deployment.api.config import APIConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _max_class_probability(proba) -> float:
+    """Best-effort max softmax probability across classes.
+
+    sklearn uses shape (n_samples, n_classes). Some paths return a 1-D (n_classes,)
+    vector for a single row — using only ``proba[0]`` would read *one class* and can
+    wrongly report 0.0 when that class has zero mass.
+    """
+    try:
+        import pandas as pd
+
+        if isinstance(proba, pd.DataFrame):
+            arr = proba.to_numpy(dtype=float)
+        else:
+            arr = np.asarray(proba, dtype=float)
+        if arr.size == 0:
+            return 0.0
+        if arr.ndim == 1:
+            return float(np.max(arr))
+        return float(np.max(arr[0]))
+    except Exception:
+        return 0.0
 
 
 def _ensure_import_paths():
@@ -62,6 +85,10 @@ class ModelManager:
         self.category_stats: dict = {}
         self.max_rating_number: float = 0.0
         self._loaded = False
+        #: Directory passed to ``mlflow.pyfunc.load_model`` (contains MLmodel) — used to reload
+        #: the native xgboost/lightgbm flavor for ``predict_proba`` (pyfunc does not expose it).
+        self._mlflow_model_uri: str | None = None
+        self._native_classifier = None
 
     @property
     def is_loaded(self) -> bool:
@@ -110,7 +137,10 @@ class ModelManager:
             if mlmodel_dirs:
                 model_path = mlmodel_dirs[0]
                 self.model = mlflow.pyfunc.load_model(model_path)
+                self._mlflow_model_uri = model_path
                 logger.info("Loaded model via mlflow.pyfunc from: %s", model_path)
+                # Eager-load native xgboost/lightgbm estimator for predict_proba (pyfunc wrapper has no proba).
+                self._load_native_classifier_with_predict_proba()
                 return
 
         except Exception as e:
@@ -230,20 +260,75 @@ class ModelManager:
     # Inference
     # ------------------------------------------------------------------
 
-    def predict(self, features) -> tuple[str, float]:
+    def _load_native_classifier_with_predict_proba(self):
+        """Reload the same artifact via mlflow.xgboost / lightgbm flavor to get predict_proba.
+
+        ``mlflow.pyfunc.load_model`` wraps the estimator for ``predict`` only; training
+        logs models with ``mlflow.xgboost.log_model`` / ``mlflow.lightgbm.log_model``,
+        which expose ``predict_proba`` when loaded with the matching flavor.
+        """
+        if self._native_classifier is not None:
+            return self._native_classifier
+        if not self._mlflow_model_uri:
+            return None
+        uri = self._mlflow_model_uri
+        try:
+            import mlflow.xgboost
+
+            m = mlflow.xgboost.load_model(uri)
+            if hasattr(m, "predict_proba"):
+                self._native_classifier = m
+                logger.info("Native XGBoost model available for predict_proba (%s)", uri)
+                return m
+        except Exception as e:
+            logger.debug("mlflow.xgboost.load_model(%s): %s", uri, e)
+        try:
+            import mlflow.lightgbm
+
+            m = mlflow.lightgbm.load_model(uri)
+            if hasattr(m, "predict_proba"):
+                self._native_classifier = m
+                logger.info("Native LightGBM model available for predict_proba (%s)", uri)
+                return m
+        except Exception as e:
+            logger.debug("mlflow.lightgbm.load_model(%s): %s", uri, e)
+        return None
+
+    def _predict_proba_for_pyfunc_model(self, features_df):
+        """Class probabilities for pyfunc-loaded models; ``None`` if unavailable."""
+        native = self._load_native_classifier_with_predict_proba()
+        if native is not None:
+            try:
+                return native.predict_proba(features_df)
+            except Exception as e:
+                logger.warning("Native classifier predict_proba failed: %s", e)
+        try:
+            unwrapped = self.model._model_impl
+            if hasattr(unwrapped, "predict_proba"):
+                return unwrapped.predict_proba(features_df)
+            for attr in ("sklearn_model", "model", "classifier"):
+                if hasattr(unwrapped, attr):
+                    inner = getattr(unwrapped, attr)
+                    if hasattr(inner, "predict_proba"):
+                        return inner.predict_proba(features_df)
+        except Exception as e:
+            logger.warning("Unwrapped MLflow model predict_proba failed: %s", e)
+        return None
+
+    def predict(self, features) -> tuple[str, float | None]:
         """Run the ML model and return (predicted_label, confidence).
 
         Args:
             features: Feature array or DataFrame row ready for model.predict().
 
         Returns:
-            Tuple of (label_string, confidence_float).
-            label_string is "GREEN", "YELLOW", or "RED".
-            confidence_float is the max class probability.
+            Tuple of (label_string, confidence_float | None).
+            confidence_float is the max class probability when scoring succeeds; None if
+            the model cannot produce a probability (caller should treat as ML unavailable).
         """
         if self.model is None:
-            logger.warning("No model loaded — returning default GREEN with 0.0 confidence.")
-            return "GREEN", 0.0
+            logger.warning("No model loaded — returning GREEN with no ML confidence.")
+            return "GREEN", None
 
         try:
             # Handle mlflow.pyfunc models (return DataFrame) vs raw XGBClassifier
@@ -251,24 +336,17 @@ class ModelManager:
                 pred = self.model.predict(features)
                 proba = self.model.predict_proba(features)
             elif hasattr(self.model, "_model_impl"):
-                # mlflow pyfunc wrapper
+                # MLflow pyfunc: predict via wrapper; proba via native xgboost/lightgbm reload
                 import pandas as pd
+
                 if not isinstance(features, pd.DataFrame):
                     features = pd.DataFrame(features)
                 pred_raw = self.model.predict(features)
                 pred = pred_raw.values if hasattr(pred_raw, "values") else pred_raw
-                # pyfunc models may not expose predict_proba directly
-                try:
-                    unwrapped = self.model._model_impl
-                    if hasattr(unwrapped, "predict_proba"):
-                        proba = unwrapped.predict_proba(features)
-                    else:
-                        proba = np.array([[0.33, 0.34, 0.33]])
-                except Exception:
-                    proba = np.array([[0.33, 0.34, 0.33]])
+                proba = self._predict_proba_for_pyfunc_model(features)
             else:
-                logger.warning("Model type not recognized — returning default.")
-                return "GREEN", 0.0
+                logger.warning("Model type not recognized — returning GREEN with no confidence.")
+                return "GREEN", None
 
             # Decode integer prediction to label string
             pred_int = int(pred[0]) if hasattr(pred[0], "__int__") else pred[0]
@@ -277,12 +355,15 @@ class ModelManager:
             else:
                 label = str(pred_int)
 
-            confidence = float(proba[0].max())
+            if proba is None:
+                confidence = None
+            else:
+                confidence = _max_class_probability(proba)
             return label, confidence
 
         except Exception as e:
             logger.error("Prediction failed: %s", e, exc_info=True)
-            return "GREEN", 0.0
+            return "GREEN", None
 
     # ------------------------------------------------------------------
     # Health Check Helpers

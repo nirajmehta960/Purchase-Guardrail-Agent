@@ -37,16 +37,29 @@ The FastAPI application follows a clean request flow:
    - Triggers LLM Guardrails to ensure output safety.
 3. **`model_loader.py`** manages singletons (the Database Engine, the XGBoost MLflow artifact, the Label Encoder, and Precomputed category statistics) to stay loaded in memory for fast performance.
 
+### Catalog browse, reviews, and hypothetical mode
+
+- **`GET /products`** — Lists rows from `products` for catalog selection in the UI. Supports `q` (substring on `product_name`), `price_min`, `price_max`, `limit` (default from `PRODUCT_BROWSE_DEFAULT_LIMIT`), and `offset`. If `price_min` / `price_max` are omitted, the API uses **`PRODUCT_BROWSE_PRICE_MIN`** and **`PRODUCT_BROWSE_PRICE_MAX`** from the environment (see `deployment/api/config.py`).
+- **Product reviews and Layer 2 (downgrade engine)** load only when inference has a resolved **`product_id`** that exists in `products` (e.g. `POST /predict` with `product_id`, or a successful catalog match from natural language). If there is **no** catalog match and the engine uses **stated price only** (`evaluation_mode: hypothetical`), review-derived features are not applied for that request.
+
 ---
 
 ## 3. Running the API Locally
 
-Run the Uvicorn webserver local process.
+Run Uvicorn from the **SavVio repository root** (the folder that contains `deployment/`, `model_pipeline/`, and `savviocore/`). The inference layer imports packages from `model_pipeline/src` and `savviocore/src`, so you must set `PYTHONPATH`:
 
 ```bash
-# Start from the project root!
-uvicorn deployment.api.main:app --host 0.0.0.0 --port 8081 --reload
+cd /path/to/SavVio
+
+export PYTHONPATH="model_pipeline/src:savviocore/src:."
+uvicorn deployment.api.main:app --host 0.0.0.0 --port 3500 --reload
 ```
+
+If you run from another directory (for example only `model_pipeline/src`) without this `PYTHONPATH`, you will get `ModuleNotFoundError: No module named 'deployment'` or import errors for `llm` / `savviocore`.
+
+**Note:** `model_pipeline/src/data/db_loader.py` is used only by the **training pipeline** (`run_pipeline.py`), not by this API. Changing or reverting it does not start or stop the backend.
+
+Alternatively, from the repo root: `./run_api.sh` (sets `PYTHONPATH` and runs Uvicorn).
 
 The server initializes everything and will typically output:
 ```log
@@ -63,26 +76,37 @@ If it fails to connect to the DB or load the model, it will still start but oper
 
 ## 4. Testing Endpoints
 
-Once the Uvicorn server is running locally on port `8081`, you can test the three primary REST endpoints from another terminal.
+Once the Uvicorn server is running locally on port `3500`, you can test the three primary REST endpoints from another terminal.
 
 *(Note: We use `U01157` as a sample User ID for local tests. You can query your local `financial_profiles` table for others).*
 
 ### Check API Health
 Validates that connections to the Model, DB, and LLM are fully loaded and operational.
 ```bash
-curl -s http://localhost:8081/health
+curl -s http://localhost:3500/health
+```
+
+### User financial profile (dashboard)
+Returns the `financial_profiles` row for the React dashboard:
+```bash
+curl -s http://localhost:3500/user/U01157/profile
+```
+
+### Browse products (catalog picker)
+```bash
+curl -s "http://localhost:3500/products?limit=20&q=headphone"
 ```
 
 ### Direct Product Evaluation
 If you already know the specific `product_id`, skip Natural Language parsing and evaluate directly:
 ```bash
-curl -s "http://localhost:8081/user/U01157/evaluate?product_id=B07NPZ8YB1" 
+curl -s "http://localhost:3500/user/U01157/evaluate?product_id=B07NPZ8YB1" 
 ```
 
 ### Natural Language Search & Evaluation
 Pass raw natural language inputs. The engine will parse the intent, find the nearest `product_id` in pgvector, and evaluate:
 ```bash
-curl -s -X POST http://localhost:8081/predict \
+curl -s -X POST http://localhost:3500/predict \
   -H "Content-Type: application/json" \
   -d '{
       "user_query": "Can I sensibly afford to buy a gas cooktop today?", 

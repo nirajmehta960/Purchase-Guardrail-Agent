@@ -30,9 +30,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -e ../savviocore
-          # 'pip install -e .' intentionally omitted: pyproject.toml has no
-          # [project.dependencies], so editable install is not needed and
-          # can corrupt sys.path by inserting the project root into .pth files.
+          pip install -e .
           if [ -f data-requirements.txt ]; then pip install -r data-requirements.txt; fi
           pip install pytest pytest-cov
 
@@ -52,14 +50,14 @@ jobs:
           python -c "from preprocess.run_preprocessing import run_pipeline; run_pipeline()"
           python -c "from features.run_features import main; main()"
 
-      - name: Run unit tests
+      - name: Set up src package
         working-directory: data_pipeline
+        run: |
+          cp -r dags/src src
+      - name: Run unit tests
+        working-directory: data_pipeline/dags
         env:
-          # Safety net: only dags/ in PYTHONPATH so 'src' is found as a
-          # proper package at dags/src/.  pyproject.toml [tool.pytest.ini_options]
-          # pythonpath = ["dags"] sets this via pytest's built-in mechanism,
-          # and conftest.py pre-registers 'src' via sys.modules for robustness.
-          PYTHONPATH: ${{ github.workspace }}/data_pipeline/dags
+          PYTHONPATH: src:.
         run: |
           python -m pytest \
             tests/bias/ \

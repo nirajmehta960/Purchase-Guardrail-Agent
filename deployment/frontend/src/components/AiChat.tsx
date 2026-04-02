@@ -11,10 +11,10 @@ import {
   X,
   ChevronDown,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Button } from "./ui/button";
+import { Label } from "./ui/label";
+import { Switch } from "./ui/switch";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
 import {
   Command,
   CommandEmpty,
@@ -22,16 +22,16 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-} from "@/components/ui/command";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { useUser } from "@/context/UserContext";
+} from "./ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { useUser } from "../context/UserContext";
 import {
   fetchProducts,
   sendPredict,
   type FinancialFeaturesView,
   type PredictResponse,
   type ProductListItem,
-} from "@/services/api";
+} from "../services/api";
 
 type Signal = "green" | "yellow" | "red";
 

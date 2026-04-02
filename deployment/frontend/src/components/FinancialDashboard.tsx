@@ -10,7 +10,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
-import { useUser } from "@/context/UserContext";
+import { useUser } from "../context/UserContext";
 
 function fmtMoney(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";

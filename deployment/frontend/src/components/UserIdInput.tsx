@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { User } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { useUser } from "@/context/UserContext";
+import { useUser } from "../context/UserContext";
 
 export function UserIdInput() {
   const { userId, setUserId, profileError, isLoadingProfile } = useUser();

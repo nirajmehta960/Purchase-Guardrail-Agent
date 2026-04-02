@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { fetchUserProfile, type UserProfileResponse } from "@/services/api";
+import { fetchUserProfile, type UserProfileResponse } from "../services/api";
 
 const STORAGE_KEY = "savvio_user_id";
 

@@ -73,12 +73,12 @@ class TestModelManager:
         assert confidence == 0.85
 
     def test_predict_no_model_returns_default(self):
-        """With no model loaded, predict() should return GREEN with 0.0 confidence."""
+        """With no model loaded, predict() should return GREEN with no confidence."""
         from deployment.api.model_loader import ModelManager
         manager = ModelManager()
         label, confidence = manager.predict(np.array([[1, 2, 3]]))
         assert label == "GREEN"
-        assert confidence == 0.0
+        assert confidence is None
 
     def test_predict_confidence_range(self):
         """Confidence should always be in [0, 1]."""

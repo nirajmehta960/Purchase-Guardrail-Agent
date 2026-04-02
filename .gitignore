@@ -7,6 +7,9 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+dist-ssr/
+out/
+.next/
 downloads/
 eggs/
 .eggs/
@@ -141,3 +144,20 @@ docs/
 # Deployment
 deployment/docker/
 deployment/smoke_test.sh
+
+# JavaScript / Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Vite / React specifics
+.vite/
+stats.html
+coverage/
+
+# Model Reports
+model_pipeline/reports/
+model_pipeline/reports/sensitivity/
+!model_pipeline/reports/.gitkeep

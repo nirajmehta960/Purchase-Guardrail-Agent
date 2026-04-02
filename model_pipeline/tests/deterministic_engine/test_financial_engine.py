@@ -2,9 +2,9 @@
 Unit tests for the Deterministic Decision Engine.
 
 Tests the cross-group compound AND labeling rules:
-  RED    — 4 rules crossing 2+ groups, each with PIR escape hatch
-  YELLOW — 5 rules crossing 2+ groups, triggers when >= 2 fire
-  GREEN  — default when no RED triggers and < 2 YELLOW rules fire
+  RED    — 5 rules crossing 2+ groups, each with PIR escape hatch
+  YELLOW — 5 rules crossing 2+ groups, triggers when >= 1 fires
+  GREEN  — default when no RED or YELLOW rules fire
 """
 
 import os
@@ -122,6 +122,52 @@ class TestRedRules:
         result = engine.decide(fin, _healthy_product())
         assert result.decision_category == "RED"
 
+    def test_rule5_flow_stress_maxed_budget(self, engine):
+        """RED-5: price > discretionary AND MEB > 70% AND significant purchase.
+
+        Models the U29750-like case: $1,110 income, $184 discretionary,
+        $600 product → aff=-416, meb=0.83, pir=0.54.
+        Even with savings that could absorb the hit, the tight budget
+        makes this harmful.
+        """
+        fin = _healthy_financial()
+        fin["affordability_score"] = -416
+        fin["monthly_expense_burden_ratio"] = 0.83
+        fin["price_to_income_ratio"] = 0.54
+        fin["savings_to_price_ratio"] = 4.6
+        fin["emergency_fund_months"] = 3.0
+        result = engine.decide(fin, _healthy_product())
+        assert result.decision_category == "RED"
+        assert any("flow_stress" in r for r in result.triggered_rules)
+
+    def test_rule5_moderate_budget_still_fires(self, engine):
+        """RED-5 fires at MEB 0.75 (above 0.70 threshold)."""
+        fin = _healthy_financial()
+        fin["affordability_score"] = -200
+        fin["monthly_expense_burden_ratio"] = 0.75
+        fin["price_to_income_ratio"] = 0.20
+        result = engine.decide(fin, _healthy_product())
+        assert result.decision_category == "RED"
+        assert any("flow_stress" in r for r in result.triggered_rules)
+
+    def test_rule5_positive_affordability_no_fire(self, engine):
+        """RED-5 does NOT fire when discretionary covers the price."""
+        fin = _healthy_financial()
+        fin["affordability_score"] = 100
+        fin["monthly_expense_burden_ratio"] = 0.75
+        fin["price_to_income_ratio"] = 0.20
+        result = engine.decide(fin, _healthy_product())
+        assert result.decision_category != "RED" or not any("flow_stress" in r for r in result.triggered_rules)
+
+    def test_rule5_low_meb_no_fire(self, engine):
+        """RED-5 does NOT fire with healthy budget (MEB < 0.70)."""
+        fin = _healthy_financial()
+        fin["affordability_score"] = -200
+        fin["monthly_expense_burden_ratio"] = 0.50
+        fin["price_to_income_ratio"] = 0.20
+        result = engine.decide(fin, _healthy_product())
+        assert not any("flow_stress" in r for r in result.triggered_rules)
+
 
 # ── PIR ESCAPE HATCH (trivial purchases never RED) ────────────────────────
 
@@ -166,6 +212,15 @@ class TestPIREscape:
         fin["price_to_income_ratio"] = 0.05  # below 0.10 escape
         result = engine.decide(fin, _healthy_product())
         assert result.decision_category != "RED"
+
+    def test_rule5_trivial_purchase_not_red(self, engine):
+        """aff < 0 AND MEB > 0.70, but PIR tiny → RED-5 does not fire."""
+        fin = _healthy_financial()
+        fin["affordability_score"] = -10
+        fin["monthly_expense_burden_ratio"] = 0.80
+        fin["price_to_income_ratio"] = 0.05  # below 0.15 escape
+        result = engine.decide(fin, _healthy_product())
+        assert not any("flow_stress" in r for r in result.triggered_rules)
 
 
 # ── YELLOW RULES (cross-group, needs 2+ to trigger) ─────────────────────

@@ -34,6 +34,17 @@ jobs:
           if [ -f data-requirements.txt ]; then pip install -r data-requirements.txt; fi
           pip install pytest pytest-cov
 
+      - name: Run data pipeline
+        working-directory: data_pipeline
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GCP_CREDENTIALS_PATH: ${{ env.GOOGLE_APPLICATION_CREDENTIALS }}
+          PYTHONPATH: dags/src:dags
+        run: |
+          python -c "from ingestion.run_ingestion import run_ingestion; run_ingestion()"
+          python -c "from preprocess.run_preprocessing import run_pipeline; run_pipeline()"
+          python -c "from features.run_features import main; main()"
+
       - name: Run unit tests
         working-directory: data_pipeline
         env:

@@ -30,6 +30,8 @@ from core_models.train import train_model, log_model_to_mlflow
 from core_models.evaluate import evaluate_model
 from core_models.optuna_tuner import tune_best_candidate
 from core_models.sensitivity_analysis import analyze_optuna_sensitivity
+from llm.prompt_engin import apply_llm_guardrails
+from llm.config import LLMConfig
 
 logger = logging.getLogger(__name__)
 
@@ -444,6 +446,81 @@ def save_best_model_local(best, label_encoder):
     logger.info("Saved champion model locally at %s and encoder at %s", downloaded_model_path, Config.ENCODER_SAVE_DIR)
 
 # ---------------------------------------------------------------------------
+# 6. LLM Layer Validation
+# ---------------------------------------------------------------------------
+
+def validate_llm_layer(best, data):
+    """
+    Smoke-test the LLM guardrail layer against the champion model.
+
+    Samples one prediction per class (GREEN/YELLOW/RED) from the validation set,
+    runs each through apply_llm_guardrails, and logs prompt versions + pass rate
+    to a dedicated MLflow run for lineage tracking.
+    """
+    if best is None:
+        logger.warning("LLM validation skipped — no champion model.")
+        return
+
+    model = best["model"]
+    label_encoder = data["label_encoder"]
+    X_val = data["X_val"]
+
+    # Sample one index per class from the validation set.
+    y_val_decoded = label_encoder.inverse_transform(data["y_val"])
+    sample_indices = []
+    for color in ["GREEN", "YELLOW", "RED"]:
+        matches = np.where(y_val_decoded == color)[0]
+        if len(matches) > 0:
+            sample_indices.append(int(matches[0]))
+
+    if not sample_indices:
+        logger.warning("LLM validation: no validation samples found.")
+        return
+
+    guardrail_results = []
+    with mlflow.start_run(run_name="llm_layer_validation"):
+        mlflow.log_param("llm_provider",              LLMConfig.PROVIDER)
+        mlflow.log_param("system_prompt_version",     LLMConfig.SYSTEM_PROMPT_VERSION)
+        mlflow.log_param("intent_prompt_version",     LLMConfig.INTENT_PROMPT_VERSION)
+        mlflow.log_param("response_prompt_version",   LLMConfig.RESPONSE_PROMPT_VERSION)
+        mlflow.log_param("champion_model",            best["name"])
+
+        for i in sample_indices:
+            try:
+                row = X_val[i:i+1] if not hasattr(X_val, "iloc") else X_val.iloc[i:i+1]
+                y_pred = label_encoder.inverse_transform([model.predict(row)[0]])[0]
+                proba = model.predict_proba(row)[0]
+                confidence = float(proba.max())
+
+                # Generic financial context — sufficient for a guardrail smoke test.
+                user_data = {
+                    "product_name": "Sample Product",
+                    "product_price": 299.99,
+                    "affordability_score": 0.0,
+                    "savings_to_price_ratio": 3.0,
+                    "emergency_fund_months": 4.0,
+                    "debt_to_income_ratio": 0.25,
+                    "triggered_rules": [],
+                    "was_downgraded": False,
+                }
+                is_safe, _ = apply_llm_guardrails(y_pred, user_data, confidence)
+                guardrail_results.append(int(is_safe))
+                logger.info("LLM validation sample — label=%s, guardrail_passed=%s", y_pred, is_safe)
+
+            except Exception as e:
+                logger.warning("LLM validation sample %d failed: %s", i, e)
+
+        if guardrail_results:
+            pass_rate = sum(guardrail_results) / len(guardrail_results)
+            mlflow.log_metric("guardrail_pass_rate", pass_rate)
+            mlflow.log_metric("guardrail_samples_tested", len(guardrail_results))
+            logger.info(
+                "LLM layer validation complete — pass_rate=%.2f (%d/%d samples)",
+                pass_rate, sum(guardrail_results), len(guardrail_results),
+            )
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -507,6 +584,11 @@ def main():
 
     # 6. Save best model and label encoder locally under artifacts and preprocessing.
     save_best_model_local(best, data["label_encoder"])
+
+    # 6b. Validate LLM guardrail layer — smoke test + log prompt versions to MLflow.
+    print("[6b] Validating LLM guardrail layer...")
+    validate_llm_layer(best, data)
+    print("[6b] LLM layer validation complete.")
 
     # 7. Save a simple markdown summary for 3 baseline models + champion final metrics.
     summary_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

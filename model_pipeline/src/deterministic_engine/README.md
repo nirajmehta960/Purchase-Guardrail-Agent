@@ -18,7 +18,7 @@ User + Product
      ▼
 ┌──────────────────────────────┐
 │  Layer 1: Financial Engine   │  Uses 11 financial features (5 from DB + 6 computed).
-│  (financial_engine.py)       │  Evaluates 4 RED rules, then 5 YELLOW rules.
+│  (financial_engine.py)       │  Evaluates 5 RED rules, then 5 YELLOW rules.
 │                              │  Output: GREEN / YELLOW / RED
 └──────────────┬───────────────┘
                │
@@ -87,6 +87,7 @@ trivially cheap purchases (low PIR) never trigger RED.
 | **RED 2** | `MEB > 0.80` AND `PIR > 0.20` AND `EFM < 3.0` | 3 + 1 + 2 | Budget over 80% consumed, product is 20%+ of income, and thin emergency fund. |
 | **RED 3** | `NWI < −2.0` AND `affordability < 0` AND `PIR > 0.15` AND `EFM < 3.0` | 4 + 1 + 2 | Net worth deeply negative, no surplus income, and a significant purchase. |
 | **RED 4** | `EFM < 1.0` AND `DTI > 0.30` AND `PIR > 0.10` | 2 + 3 + 1 | Less than 1 month emergency fund, DTI over 30%, and purchase is non-trivial. |
+| **RED 5** | `affordability < 0` AND `MEB > 0.70` AND `PIR > 0.15` | 1 + 3 | Monthly income can't cover this purchase and budget is already heavily consumed (>70%). Forces a risky draw on savings. |
 
 **PIR escape hatch:** Every RED rule requires PIR above a threshold (0.10–0.20). If a user is
 financially stressed but the product costs $5, it won't trigger RED. This prevents the engine
@@ -112,7 +113,7 @@ If no RED rules fire AND no YELLOW rules fire, the label is GREEN.
 ### Evaluation order
 
 ```
-1. Evaluate all 4 RED rules (short-circuit: first RED rule that fires → return RED)
+1. Evaluate all 5 RED rules (short-circuit: first RED rule that fires → return RED)
 2. Evaluate all 5 YELLOW rules (count how many fire)
 3. If ≥1 YELLOW rule fired → return YELLOW
 4. Otherwise → return GREEN

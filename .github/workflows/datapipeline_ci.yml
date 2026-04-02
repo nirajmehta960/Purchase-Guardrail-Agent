@@ -43,7 +43,7 @@ jobs:
         env:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
           GCP_CREDENTIALS_PATH: ${{ env.GOOGLE_APPLICATION_CREDENTIALS }}
-          PYTHONPATH: dags
+          PYTHONPATH: dags:dags/src
         run: |
           python -c "from ingestion.run_ingestion import run_ingestion; run_ingestion()"
           cp -r dags/src/data/raw/. dags/data/raw/

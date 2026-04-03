@@ -59,7 +59,7 @@ class DecisionEngine:
     """
     Pure-financial multi-condition labeling engine.
 
-    RED:    4 compound AND rules — each crosses at least 2 correlation groups
+    RED:    5 compound AND rules — each crosses at least 2 correlation groups
             and includes a price_to_income_ratio escape so trivial purchases
             never trigger RED.
     YELLOW: 5 compound AND rules — each crosses at least 2 groups.
@@ -105,6 +105,12 @@ class DecisionEngine:
         meb = self._safe(financial.get("monthly_expense_burden_ratio"), "monthly_expense_burden_ratio")
         efm = self._safe(financial.get("emergency_fund_months"), "emergency_fund_months")
 
+        logger.info(
+            "DecisionEngine inputs: affordability=%s pir=%s spr=%s nwi=%s "
+            "credit_risk_indicator(CRI)=%s dti=%s meb=%s efm=%s",
+            affordability, pir, spr, nwi, credit, dti, meb, efm,
+        )
+
         # Evaluate RED Rules
         red_result = self._evaluate_red_rules(affordability, pir, spr, nwi, meb, efm, dti)
         if red_result:
@@ -128,29 +134,70 @@ class DecisionEngine:
         """
         triggered = []
 
-        # RED Rule 1 — Groups 1 + 2 
-        if affordability < 0 and spr < 1.5 and pir > 0.10:
+        # RED Rule 1 — Groups 1 + 2
+        r1 = affordability < 0 and spr < 1.5 and pir > 0.10
+        logger.info(
+            "Rule RED-1 red:cant_afford_from_any_angle fired=%s (need aff<0, spr<1.5, pir>0.10): "
+            "aff<0=%s spr<1.5=%s pir>0.10=%s",
+            r1, affordability < 0, spr < 1.5, pir > 0.10,
+        )
+        if r1:
             triggered.append("red:cant_afford_from_any_angle")
             return DecisionResult("RED", triggered,
                 explanation="Income can't handle it, savings barely cover the price, and the purchase is non-trivial.")
 
-        # RED Rule 2 — Groups 3 + 1 + 2
-        if meb > 0.80 and pir > 0.20 and efm < 3.0:
+        # RED Rule 2 — Groups 3 + 1 + 2 (MEB > 80%)
+        r2 = meb > 0.80 and pir > 0.20 and efm < 3.0
+        logger.info(
+            "Rule RED-2 red:maxed_budget_significant_purchase fired=%s (need meb>0.80, pir>0.20, efm<3): "
+            "meb>0.80=%s pir>0.20=%s efm<3=%s",
+            r2, meb > 0.80, pir > 0.20, efm < 3.0,
+        )
+        if r2:
             triggered.append("red:maxed_budget_significant_purchase")
             return DecisionResult("RED", triggered,
                 explanation="Budget over 80% consumed, product is 20%+ of income, and thin emergency fund.")
 
         # RED Rule 3 — Groups 4 + 1 + 2
-        if nwi < -2.0 and affordability < 0 and pir > 0.15 and efm < 3.0:
+        r3 = nwi < -2.0 and affordability < 0 and pir > 0.15 and efm < 3.0
+        logger.info(
+            "Rule RED-3 red:underwater_no_surplus_significant fired=%s: nwi<-2=%s aff<0=%s pir>0.15=%s efm<3=%s",
+            r3, nwi < -2.0, affordability < 0, pir > 0.15, efm < 3.0,
+        )
+        if r3:
             triggered.append("red:underwater_no_surplus_significant")
             return DecisionResult("RED", triggered,
                 explanation="Net worth negative, no surplus income, and a significant purchase.")
 
         # RED Rule 4 — Groups 2 + 3 + price awareness
-        if efm < 1.0 and dti > 0.30 and pir > 0.10:
+        r4 = efm < 1.0 and dti > 0.30 and pir > 0.10
+        logger.info(
+            "Rule RED-4 red:paycheck_to_paycheck_wipes_net fired=%s: efm<1=%s dti>0.30=%s pir>0.10=%s",
+            r4, efm < 1.0, dti > 0.30, pir > 0.10,
+        )
+        if r4:
             triggered.append("red:paycheck_to_paycheck_wipes_net")
             return DecisionResult("RED", triggered,
                 explanation="Less than 1 month emergency fund, DTI over 30%, and purchase is non-trivial.")
+
+        # RED Rule 5 — Groups 1 + 3: flow stress
+        # Catches the case where monthly discretionary cannot cover the price
+        # AND the budget is already heavily consumed, even if liquid savings
+        # could technically absorb the hit.  A fiduciary should flag this as
+        # harmful because it forces a draw on savings that a tight budget
+        # cannot replenish quickly.
+        r5 = affordability < 0 and meb > 0.70 and pir > 0.15
+        logger.info(
+            "Rule RED-5 red:flow_stress_maxed_budget fired=%s (need aff<0, meb>0.70, pir>0.15): "
+            "aff<0=%s meb>0.70=%s pir>0.15=%s",
+            r5, affordability < 0, meb > 0.70, pir > 0.15,
+        )
+        if r5:
+            triggered.append("red:flow_stress_maxed_budget")
+            return DecisionResult("RED", triggered,
+                explanation="Monthly income can't cover this purchase, and over 70% of income is already "
+                            "consumed by obligations. Even if savings exist, this forces a draw that a "
+                            "tight budget cannot replenish quickly.")
 
         return None
 
@@ -163,27 +210,53 @@ class DecisionEngine:
         explanations = []
 
         # YELLOW Rule 1 — Groups 1 + 2
-        if affordability < 0 and pir > 0.25 and spr < 5.0:
+        y1 = affordability < 0 and pir > 0.25 and spr < 5.0
+        logger.info(
+            "Rule YELLOW-1 yellow:income_pressure fired=%s (aff<0, pir>0.25, spr<5)",
+            y1,
+        )
+        if y1:
             yellow_triggers.append("yellow:income_pressure")
             explanations.append("Income doesn't cover purchase directly and savings cushion is moderate.")
 
         # YELLOW Rule 2 — Groups 2 + 1
-        if spr < 5.0 and pir > 0.10:
+        y2 = spr < 5.0 and pir > 0.10
+        logger.info(
+            "Rule YELLOW-2 yellow:savings_strain fired=%s (spr<5, pir>0.10): spr<5=%s pir>0.10=%s",
+            y2, spr < 5.0, pir > 0.10,
+        )
+        if y2:
             yellow_triggers.append("yellow:savings_strain")
             explanations.append("Savings can't comfortably absorb the purchase.")
 
-        # YELLOW Rule 3 — Groups 3 + 1 + 2 
-        if meb > 0.70 and pir > 0.10 and spr < 5.0:
+        # YELLOW Rule 3 — Groups 3 + 1 + 2 (MEB > 70%)
+        y3 = meb > 0.70 and pir > 0.10 and spr < 5.0
+        logger.info(
+            "Rule YELLOW-3 yellow:debt_stress fired=%s (meb>0.70, pir>0.10, spr<5): meb>0.70=%s pir>0.10=%s spr<5=%s",
+            y3, meb > 0.70, pir > 0.10, spr < 5.0,
+        )
+        if y3:
             yellow_triggers.append("yellow:debt_stress")
             explanations.append("High debt obligations coupled with significant purchase and thin savings.")
 
         # YELLOW Rule 4 — Groups 2 + 1
-        if efm < 3.0 and affordability < 0:
+        y4 = efm < 3.0 and affordability < 0
+        logger.info(
+            "Rule YELLOW-4 yellow:low_resilience fired=%s (efm<3, aff<0): efm<3=%s aff<0=%s",
+            y4, efm < 3.0, affordability < 0,
+        )
+        if y4:
             yellow_triggers.append("yellow:low_resilience")
             explanations.append("Low emergency funds for an unaffordable immediate expense.")
 
-        # YELLOW Rule 5 — Groups 4 + 1 + 2
-        if credit < 0.35 and nwi < 1.0 and pir > 0.15 and spr < 5.0:
+        # YELLOW Rule 5 — Groups 4 + 1 + 2 (CRI = credit_risk_indicator from credit_score)
+        y5 = credit < 0.35 and nwi < 1.0 and pir > 0.15 and spr < 5.0
+        logger.info(
+            "Rule YELLOW-5 yellow:weak_profile fired=%s (CRI<0.35, nwi<1, pir>0.15, spr<5): "
+            "CRI<0.35=%s nwi<1=%s pir>0.15=%s spr<5=%s",
+            y5, credit < 0.35, nwi < 1.0, pir > 0.15, spr < 5.0,
+        )
+        if y5:
             yellow_triggers.append("yellow:weak_profile")
             explanations.append("Weak overall financial profile for a significant purchase.")
 
@@ -193,6 +266,7 @@ class DecisionEngine:
             return DecisionResult("YELLOW", yellow_triggers, [],
                 explanation=combined_explanation)
 
+        logger.info("YELLOW rules: none fired — continuing to GREEN.")
         return None
 
     def decide_row(self, row) -> str:

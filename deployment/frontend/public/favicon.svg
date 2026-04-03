@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <rect width="32" height="32" rx="8" fill="#0f172a"/>
+  <path d="M16 5L7 9.5V17c0 4.97 3.84 9.63 9 10.75C21.16 26.63 25 21.97 25 17V9.5L16 5z" fill="#22c55e" opacity="0.2"/>
+  <path d="M16 5L7 9.5V17c0 4.97 3.84 9.63 9 10.75C21.16 26.63 25 21.97 25 17V9.5L16 5z" stroke="#22c55e" stroke-width="1.5" stroke-linejoin="round"/>
+  <text x="16" y="20.5" text-anchor="middle" font-family="system-ui, sans-serif" font-weight="700" font-size="9" fill="#22c55e">S</text>
+</svg>

@@ -432,18 +432,39 @@ def final_evaluation(best, X_test, y_test, label_encoder):
 
     return metrics, final_run_id
 
-
+# ---------------------------------------------------------------------------
+# 5b. Save Best Model + Label Encoder Locally
+# ---------------------------------------------------------------------------
 def save_best_model_local(best, label_encoder):
-    """Download champion model from MLflow to local artifacts and save label encoder."""
+    """Bundle champion model + feature pipeline + label encoder into a single MLflow pyfunc artifact."""
     if not best: return
 
-    champion_model_uri = f"models:/{Config.REGISTERED_MODEL_NAME}@champion"
-    downloaded_model_path = mlflow.artifacts.download_artifacts(
-        artifact_uri=champion_model_uri,
-        dst_path=Config.MODEL_SAVE_DIR,
+    from core_models.savvio_model_wrapper import SavVioModelWrapper
+
+    os.makedirs(Config.MODEL_SAVE_DIR, exist_ok=True)
+    os.makedirs(Config.ENCODER_SAVE_DIR, exist_ok=True)
+
+    # Save the 3 pieces to disk (mlflow.pyfunc.save_model needs file paths)
+    classifier_path = os.path.join(Config.MODEL_SAVE_DIR, "classifier.pkl")
+    encoder_path = os.path.join(Config.ENCODER_SAVE_DIR, "label_encoder.pkl")
+    pipeline_path = os.path.join(Config.MODEL_SAVE_DIR, "feature_pipeline.pkl")
+    # feature_pipeline.pkl already saved during training by FeaturePipeline.fit_transform()
+
+    joblib.dump(best["model"], classifier_path)
+    joblib.dump(label_encoder, encoder_path)
+
+    # Bundle into one artifact
+    savvio_model_path = os.path.join(Config.MODEL_SAVE_DIR, "savvio_model")
+    mlflow.pyfunc.save_model(
+        path=savvio_model_path,
+        python_model=SavVioModelWrapper(),
+        artifacts={
+            "classifier": classifier_path,
+            "feature_pipeline": pipeline_path,
+            "label_encoder": encoder_path,
+        },
     )
-    joblib.dump(label_encoder, f"{Config.ENCODER_SAVE_DIR}/label_encoder.pkl")
-    logger.info("Saved champion model locally at %s and encoder at %s", downloaded_model_path, Config.ENCODER_SAVE_DIR)
+    logger.info("Saved bundled pyfunc artifact at %s", savvio_model_path)
 
 # ---------------------------------------------------------------------------
 # 6. LLM Layer Validation

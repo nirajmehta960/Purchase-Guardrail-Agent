@@ -113,36 +113,28 @@ class ModelManager:
         logger.info("Model manager fully loaded.")
 
     def _load_model(self, artifact_dir: str) -> None:
-        """Load model from local artifact directory or log error."""
+        """Load MLflow pyfunc model from local artifact directory.
+
+        The champion model is saved by run_pipeline.py's save_best_model_local()
+        into model_pipeline/models/artifacts/ via mlflow.artifacts.download_artifacts.
+        The MLmodel file lives directly in that directory.
+        """
         logger.info("Loading model from: %s", artifact_dir)
         if not os.path.exists(artifact_dir):
-            logger.warning("Model artifact directory not found: %s", artifact_dir)
+            logger.error("Model artifact directory not found: %s", artifact_dir)
             return
 
-        try:
-            import mlflow.pyfunc
-            mlmodel_dirs = [
-                root for root, _dirs, files in os.walk(artifact_dir) if "MLmodel" in files
-            ]
-            if mlmodel_dirs:
-                model_path = mlmodel_dirs[0]
-                self.model = mlflow.pyfunc.load_model(model_path)
-                logger.info("Loaded model via mlflow.pyfunc from: %s", model_path)
-                return
-        except Exception as e:
-            logger.warning("mlflow.pyfunc load failed: %s — trying xgboost direct load", e)
+        import mlflow.pyfunc
+        mlmodel_dirs = [
+            root for root, _dirs, files in os.walk(artifact_dir) if "MLmodel" in files
+        ]
+        if not mlmodel_dirs:
+            logger.error("No MLmodel file found in %s", artifact_dir)
+            return
 
-        try:
-            from xgboost import XGBClassifier
-            model_file = os.path.join(artifact_dir, "model.xgb")
-            if os.path.exists(model_file):
-                self.model = XGBClassifier()
-                self.model.load_model(model_file)
-                logger.info("Loaded XGBoost model from: %s", model_file)
-            else:
-                logger.warning("No model file found in %s", artifact_dir)
-        except Exception as e:
-            logger.error("Failed to load model: %s", e, exc_info=True)
+        model_path = mlmodel_dirs[0]
+        self.model = mlflow.pyfunc.load_model(model_path)
+        logger.info("Loaded model via mlflow.pyfunc from: %s", model_path)
 
     def _load_label_encoder(self, encoder_path: str) -> None:
         """Load label encoder or create a default."""

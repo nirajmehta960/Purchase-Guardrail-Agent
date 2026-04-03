@@ -48,7 +48,6 @@ interface Message {
   signal?: Signal;
   layer1?: AssistantLayer1;
   predictResponse?: PredictResponse;
-  nudge?: string;
 }
 
 const signalConfig: Record<
@@ -225,9 +224,6 @@ export const AiChat = () => {
       });
 
       const signal = mapRecommendationToSignal(res.recommendation);
-      const nudge = res.was_downgraded
-        ? "Product and review signals caused a one-step downgrade from the pure financial assessment."
-        : undefined;
 
       const assistantMsg: Message = {
         id: (Date.now() + 1).toString(),
@@ -236,7 +232,6 @@ export const AiChat = () => {
         signal,
         layer1: signal ? buildLayer1(res, signal) : undefined,
         predictResponse: signal ? res : undefined,
-        nudge,
       };
       setMessages((prev) => [...prev, assistantMsg]);
     } catch (e) {
@@ -320,14 +315,6 @@ export const AiChat = () => {
                 <div className="flex items-center gap-1 mt-2 text-xs opacity-70">
                   <Link2 className="w-3 h-3" />
                   Product link detected
-                </div>
-              )}
-
-              {/* Downgrade nudge */}
-              {msg.nudge && (
-                <div className="mt-3 p-2.5 rounded-lg bg-caution/10 border border-caution/20 flex items-start gap-2">
-                  <AlertTriangle className="w-3.5 h-3.5 text-caution shrink-0 mt-0.5" />
-                  <p className="text-xs text-caution/90 leading-relaxed">{msg.nudge}</p>
                 </div>
               )}
 

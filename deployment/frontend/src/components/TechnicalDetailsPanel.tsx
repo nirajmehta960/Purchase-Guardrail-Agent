@@ -1,8 +1,8 @@
 /**
  * Collapsible technical details panel for the AiChat assistant messages.
  *
- * Displays financial features, decision engine results, product/review
- * signals, and ML layer information from a PredictResponse.
+ * Displays financial features, evaluation context, and ML layer
+ * information from a PredictResponse.
  */
 
 import { useState, type ReactNode } from "react";
@@ -84,32 +84,6 @@ function severityCRI(cri: number | null | undefined): SeverityLevel {
 // ---------------------------------------------------------------------------
 // Display helpers
 // ---------------------------------------------------------------------------
-
-/** Matches `financial_engine.py`: 5 RED compound rules, 5 YELLOW compound rules. */
-const RED_RULE_TOTAL = 5;
-const YELLOW_RULE_TOTAL = 5;
-
-function countRulePrefix(rules: string[] | undefined, prefix: string): number {
-  if (!rules?.length) return 0;
-  return rules.filter((r) => r.startsWith(prefix)).length;
-}
-
-function stripCategoryBreadcrumb(s: string | null | undefined): string {
-  if (!s?.trim()) return "—";
-  const t = s.trim();
-  if (t.includes(">")) {
-    const parts = t.split(/\s*>\s*/).map((p) => p.trim()).filter(Boolean);
-    return parts[parts.length - 1] ?? "—";
-  }
-  return t;
-}
-
-function sentimentShort(s: string | null | undefined): string {
-  if (!s?.trim()) return "—";
-  const t = s.trim();
-  const head = t.split(/[,|]/)[0]?.trim() ?? t;
-  return head.length > 96 ? `${head.slice(0, 93)}…` : head;
-}
 
 /** Strip catalog noise after the first vertical bar. */
 export function truncateProductNameAtPipe(
@@ -205,18 +179,7 @@ function TechnicalDetailsBody({ res }: { res: PredictResponse }) {
   const nwi = ff.net_worth_indicator;
   const cri = ff.credit_risk_indicator;
 
-  const redN = countRulePrefix(res.triggered_rules, "red:");
-  const yellowN = countRulePrefix(res.triggered_rules, "yellow:");
-
-  const l1 = (res.layer1_recommendation ?? "—").toUpperCase();
   const finalL = (res.recommendation ?? "—").toUpperCase();
-
-  let downgradeLine = "No";
-  if (res.was_downgraded) {
-    const p2 = (res.layer2_product_triggers ?? []).join(", ") || "—";
-    const r2 = (res.layer2_review_triggers ?? []).join(", ") || "—";
-    downgradeLine = `Yes · P2: ${p2} · R2: ${r2}`;
-  }
 
   const mode =
     res.evaluation_mode === "catalog"
@@ -226,9 +189,6 @@ function TechnicalDetailsBody({ res }: { res: PredictResponse }) {
         : res.evaluation_mode === "none"
           ? "none"
           : String(res.evaluation_mode ?? "—");
-
-  const ps = res.product_signals;
-  const rs = res.review_signals;
 
   const mlReady =
     res.confidence != null && !Number.isNaN(res.confidence) && res.ml_unavailable_reason == null;
@@ -277,8 +237,8 @@ function TechnicalDetailsBody({ res }: { res: PredictResponse }) {
         <TechnicalFeatureRow abbrev="CRI" fullLabel="Credit risk indicator" value={cri != null && !Number.isNaN(cri) ? fmtNum(cri, 4) : "—"} severity={cri != null && !Number.isNaN(cri) ? severityCRI(cri) : "na"} />
       </SectionBlock>
 
-      {/* 2 — Decision engine */}
-      <SectionBlock title="2 · Decision engine">
+      {/* 2 — Evaluation context */}
+      <SectionBlock title="2 · Evaluation context">
         <div className="space-y-1 text-[11px]">
           <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-b border-border/15 py-1 font-mono tabular-nums">
             <span className="text-muted-foreground">Product</span>
@@ -296,87 +256,15 @@ function TechnicalDetailsBody({ res }: { res: PredictResponse }) {
             <span className="text-muted-foreground">Evaluation mode</span>
             <span className="text-right uppercase">{mode}</span>
           </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-b border-border/15 py-1 font-mono tabular-nums">
-            <span className="text-muted-foreground">RED rules fired</span>
-            <span className="text-right">{redN} of {RED_RULE_TOTAL}</span>
-          </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-b border-border/15 py-1 font-mono tabular-nums">
-            <span className="text-muted-foreground">YELLOW rules fired</span>
-            <span className="text-right">{yellowN} of {YELLOW_RULE_TOTAL}</span>
-          </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-b border-border/15 py-1">
-            <span className="text-muted-foreground">Layer 1 label</span>
-            <span className="text-right font-mono text-foreground/90">{l1}</span>
-          </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-b border-border/15 py-1">
-            <span className="text-muted-foreground">Layer 2 downgrade</span>
-            <span className="text-right font-mono text-[10px] leading-snug text-foreground/90 break-words">{downgradeLine}</span>
-          </div>
           <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 py-1">
-            <span className="text-muted-foreground">Final label</span>
+            <span className="text-muted-foreground">Recommendation</span>
             <span className="text-right font-mono font-semibold text-foreground">{finalL}</span>
           </div>
         </div>
       </SectionBlock>
 
-      {/* 3 — Product signals */}
-      <SectionBlock title="3 · Product signals">
-        <div className="space-y-1 text-[11px]">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-b border-border/15 py-1">
-            <span className="text-muted-foreground">Rating</span>
-            <span className="text-right font-mono tabular-nums">{ps?.average_rating != null ? ps.average_rating.toFixed(1) : "—"}</span>
-          </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-b border-border/15 py-1">
-            <span className="text-muted-foreground">Review count</span>
-            <span className="text-right font-mono tabular-nums">{ps?.rating_count ?? "—"}</span>
-          </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-b border-border/15 py-1">
-            <span className="text-muted-foreground">Price position in category</span>
-            <span className="text-right font-mono text-[10px] leading-snug break-words">{stripCategoryBreadcrumb(ps?.price_position_in_category)}</span>
-          </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-b border-border/15 py-1">
-            <span className="text-muted-foreground">Value density</span>
-            <span className="text-right font-mono tabular-nums">{fmtNum(ps?.value_density ?? null, 4)}</span>
-          </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-b border-border/15 py-1">
-            <span className="text-muted-foreground">Quality risk score</span>
-            <span className="text-right font-mono tabular-nums">{fmtNum(ps?.quality_risk_score ?? null, 3)}</span>
-          </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 py-1">
-            <span className="text-muted-foreground">Review coverage score</span>
-            <span className="text-right font-mono tabular-nums">{fmtPctRounded(ps?.review_confidence ?? null)}</span>
-          </div>
-        </div>
-      </SectionBlock>
-
-      {/* 4 — Review signals */}
-      <SectionBlock title="4 · Review signals">
-        <div className="space-y-1 text-[11px]">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-b border-border/15 py-1">
-            <span className="text-muted-foreground">Sentiment</span>
-            <span className="text-right text-[10px] leading-snug break-words">{sentimentShort(rs?.sentiment_interpretation)}</span>
-          </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-b border-border/15 py-1">
-            <span className="text-muted-foreground">Verified purchase rate</span>
-            <span className="text-right font-mono tabular-nums">{fmtPctRounded(rs?.verified_purchase_ratio ?? null)}</span>
-          </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-b border-border/15 py-1">
-            <span className="text-muted-foreground">Review depth</span>
-            <span className="text-right font-mono tabular-nums">{fmtPctRounded(rs?.review_depth_score ?? null)}</span>
-          </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-b border-border/15 py-1">
-            <span className="text-muted-foreground">Reviewer diversity</span>
-            <span className="text-right font-mono tabular-nums">{fmtPctRounded(rs?.reviewer_diversity ?? null)}</span>
-          </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 py-1">
-            <span className="text-muted-foreground">Helpfulness concentration</span>
-            <span className="text-right font-mono tabular-nums">{fmtNum(rs?.helpful_concentration ?? null, 3)}</span>
-          </div>
-        </div>
-      </SectionBlock>
-
-      {/* 5 — ML layer */}
-      <SectionBlock title="5 · ML layer">
+      {/* 3 — ML layer */}
+      <SectionBlock title="3 · ML layer">
         {mlReady ? (
           <div className="space-y-1 text-[11px]">
             <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-b border-border/15 py-1">

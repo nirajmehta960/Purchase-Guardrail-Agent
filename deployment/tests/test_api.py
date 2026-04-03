@@ -86,9 +86,6 @@ class TestPredictEndpoint:
                 explanation="This purchase fits well within your budget.",
                 product_name="Sony WH-1000XM5",
                 product_price=349.99,
-                triggered_rules=["green:all_clear"],
-                was_downgraded=False,
-                guardrail_passed=True,
             )
             response = test_client.post("/predict", json={
                 "user_query": "Can I buy the Sony WH-1000XM5?",
@@ -101,9 +98,6 @@ class TestPredictEndpoint:
             assert "explanation" in data
             assert "product_name" in data
             assert "product_price" in data
-            assert "triggered_rules" in data
-            assert "was_downgraded" in data
-            assert "guardrail_passed" in data
 
     def test_predict_recommendation_is_valid_color(self, test_client):
         """Recommendation must be GREEN, YELLOW, or RED."""
@@ -114,7 +108,6 @@ class TestPredictEndpoint:
                     recommendation=color,
                     confidence=0.85,
                     explanation=f"Test {color} response.",
-                    guardrail_passed=True,
                 )
                 response = test_client.post("/predict", json={
                     "user_query": "Can I buy test product?",
@@ -131,7 +124,6 @@ class TestPredictEndpoint:
                 recommendation="GREEN",
                 confidence=0.87,
                 explanation="Good to buy.",
-                guardrail_passed=True,
             )
             response = test_client.post("/predict", json={
                 "user_query": "Can I buy something?",
@@ -159,7 +151,6 @@ class TestEvaluateEndpoint:
                 explanation="Looks good!",
                 product_name="Test Product",
                 product_price=99.99,
-                guardrail_passed=True,
             )
             response = test_client.get(
                 "/user/test_user/evaluate",

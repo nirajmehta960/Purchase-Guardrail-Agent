@@ -33,19 +33,10 @@ class APIConfig:
     PROJECT_ROOT = _PROJECT_ROOT
     DEPLOYMENT_DIR = _DEPLOYMENT_DIR
 
-    # Model artifacts — saved by run_pipeline.py's save_best_model_local()
+    # Model artifact — single bundled pyfunc saved by run_pipeline.py's save_best_model_local()
     MODEL_ARTIFACT_DIR = os.getenv(
         "MODEL_ARTIFACT_DIR",
-        str(_PROJECT_ROOT / "model_pipeline" / "models" / "artifacts"),
-    )
-    LABEL_ENCODER_PATH = os.getenv(
-        "LABEL_ENCODER_PATH",
-        str(_PROJECT_ROOT / "model_pipeline" / "models" / "preprocessing" / "label_encoder.pkl"),
-    )
-    # Fitted sklearn feature pipeline (saved by FeaturePipeline.save() during training)
-    FEATURE_PIPELINE_PATH = os.getenv(
-        "FEATURE_PIPELINE_PATH",
-        str(_PROJECT_ROOT / "model_pipeline" / "models" / "artifacts" / "feature_pipeline.pkl"),
+        str(_PROJECT_ROOT / "model_pipeline" / "models" / "model"),
     )
 
     # ---------------------------------------------------------------------------

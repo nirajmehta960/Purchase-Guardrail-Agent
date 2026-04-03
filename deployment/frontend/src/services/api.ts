@@ -10,36 +10,7 @@ export interface PredictRequestBody {
   product_id?: string | null;
 }
 
-/** Product listing + engineered features (Layer 2 / training pipeline). */
-export interface ProductSignalsView {
-  average_rating?: number | null;
-  rating_count?: number | null;
-  rating_variance?: number | null;
-  category?: string | null;
-  price?: number | null;
-  price_position_in_category?: string | null;
-  rating_vs_category?: string | null;
-  cold_start?: boolean | null;
-  value_density?: number | null;
-  review_confidence?: number | null;
-  rating_polarization?: number | null;
-  quality_risk_score?: number | null;
-  price_category_rank?: number | null;
-  category_rating_deviation?: number | null;
-}
-
-/** Aggregated review features (same as training). */
-export interface ReviewSignalsView {
-  verified_purchase_ratio?: number | null;
-  helpful_concentration?: number | null;
-  sentiment_spread?: number | null;
-  review_depth_score?: number | null;
-  reviewer_diversity?: number | null;
-  extreme_rating_ratio?: number | null;
-  sentiment_interpretation?: string | null;
-}
-
-/** Layer 1 — user profile + purchase-pair features (matches decision engine inputs). */
+/** Financial inputs: user profile ratios + affordability features. */
 export interface FinancialFeaturesView {
   discretionary_income?: number | null;
   debt_to_income_ratio?: number | null;
@@ -56,39 +27,26 @@ export interface FinancialFeaturesView {
 
 export interface PredictResponse {
   recommendation: string;
-  /** ML classifier confidence; null when the model is not loaded or did not score. */
+  /** ML model confidence; null when the model is not loaded or did not score. */
   confidence: number | null;
   /** When confidence is null: no_model | no_pipeline | scoring_error */
   ml_unavailable_reason?: string | null;
   explanation: string;
   product_name?: string | null;
   product_price?: number | null;
-  triggered_rules: string[];
-  was_downgraded: boolean;
-  guardrail_passed: boolean;
   /** "catalog" | "hypothetical" | "none" */
   evaluation_mode?: string;
-  /** Layer 2 DowngradeEngine ran with product + review features */
-  layer2_evaluated?: boolean;
-  /** Rows in reviews table for this SKU */
-  review_count?: number;
-  layer2_product_triggers?: string[];
-  layer2_review_triggers?: string[];
-  product_signals?: ProductSignalsView | null;
-  review_signals?: ReviewSignalsView | null;
-  /** discretionary − price; may be clamped when unreliable */
+  /** Discretionary income minus price; may be clamped when unreliable. */
   affordability_score?: number | null;
   affordability_score_unreliable?: boolean;
-  /** Months of expenses covered by liquid savings (dashboard-aligned). */
+  /** Months of expenses covered by liquid savings. */
   emergency_fund_months?: number | null;
-  /** Debt payments ÷ income, 0–1. */
+  /** Debt payments / income, 0-1. */
   debt_to_income_ratio?: number | null;
   financial_features?: FinancialFeaturesView | null;
-  /** L1 deterministic label before Layer 2. */
-  layer1_recommendation?: string | null;
-  /** ML classifier output (informational). */
+  /** ML classifier predicted label (GREEN/YELLOW/RED). */
   ml_predicted_label?: string | null;
-  /** Display name for ML layer (e.g. pending integration message). */
+  /** Display name for ML model. */
   ml_model_name?: string;
 }
 

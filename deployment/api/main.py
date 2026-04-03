@@ -1,7 +1,7 @@
 """
 SavVio FastAPI Application — Production Inference API.
 
-Exposes the SavVio recommendation engine as a REST API:
+Exposes the SavVio ML model as a REST API:
     GET  /health   — Liveness check (model, DB, LLM status)
     GET  /products — Browse catalog (price band + search) for product picker
     POST /predict  — Full inference pipeline (prompt → recommendation)
@@ -234,8 +234,8 @@ async def predict(
 ):
     """Full inference pipeline — natural language prompt → recommendation.
 
-    The deterministic engine's color is AUTHORITATIVE — the ML model
-    and LLM wrapper cannot override it.
+    The ML model is the authority for GREEN/YELLOW/RED decisions.
+    The LLM generates a natural-language explanation.
     """
     try:
         return run_inference(request, manager)

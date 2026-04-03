@@ -111,12 +111,15 @@ jobs:
         run: |
           python3 - <<'EOF'
           import os, sys
+          import urllib.parse
           if not os.getenv("DB_HOST"):
               print("No DB_HOST configured — skipping DB connection check.")
               sys.exit(0)
           try:
               from sqlalchemy import create_engine, text
-              url = f"postgresql://{os.environ['DB_USER']}:{os.environ['DB_PASSWORD']}@{os.environ['DB_HOST']}:{os.environ.get('DB_PORT', '5432')}/{os.environ['DB_NAME']}"
+              user = urllib.parse.quote_plus(os.environ['DB_USER'])
+              password = urllib.parse.quote_plus(os.environ['DB_PASSWORD'])
+              url = f"postgresql://{user}:{password}@{os.environ['DB_HOST']}:{os.environ.get('DB_PORT', '5432')}/{os.environ['DB_NAME']}"
               engine = create_engine(url)
               with engine.connect() as conn:
                   result = conn.execute(text("SELECT 1"))

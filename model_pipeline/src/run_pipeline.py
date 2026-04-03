@@ -435,36 +435,36 @@ def final_evaluation(best, X_test, y_test, label_encoder):
 # ---------------------------------------------------------------------------
 # 5b. Save Best Model + Label Encoder Locally
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 5b. Save Best Model + Label Encoder Locally
+# ---------------------------------------------------------------------------
 def save_best_model_local(best, label_encoder):
-    """Bundle champion model + feature pipeline + label encoder into a single MLflow pyfunc artifact."""
+    """Bundle champion model + feature pipeline + label encoder into a single MLflow pyfunc artifact at models/model/."""
     if not best: return
-
+    import shutil
     from core_models.savvio_model_wrapper import SavVioModelWrapper
 
-    os.makedirs(Config.MODEL_SAVE_DIR, exist_ok=True)
-    os.makedirs(Config.ENCODER_SAVE_DIR, exist_ok=True)
+    model_dir = os.path.join(Config.BASE_DIR, "models")
+    artifact_path = os.path.join(model_dir, "model")
 
-    # Save the 3 pieces to disk (mlflow.pyfunc.save_model needs file paths)
-    classifier_path = os.path.join(Config.MODEL_SAVE_DIR, "classifier.pkl")
-    encoder_path = os.path.join(Config.ENCODER_SAVE_DIR, "label_encoder.pkl")
-    pipeline_path = os.path.join(Config.MODEL_SAVE_DIR, "feature_pipeline.pkl")
-    # feature_pipeline.pkl already saved during training by FeaturePipeline.fit_transform()
+    # mlflow.pyfunc.save_model needs file paths on disk
+    joblib.dump(best["model"], os.path.join(model_dir, "classifier.pkl"))
+    joblib.dump(label_encoder, os.path.join(model_dir, "label_encoder.pkl"))
 
-    joblib.dump(best["model"], classifier_path)
-    joblib.dump(label_encoder, encoder_path)
+    # mlflow errors if target dir exists — remove previous run's artifact
+    if os.path.exists(artifact_path):
+        shutil.rmtree(artifact_path)
 
-    # Bundle into one artifact
-    savvio_model_path = os.path.join(Config.MODEL_SAVE_DIR, "savvio_model")
     mlflow.pyfunc.save_model(
-        path=savvio_model_path,
+        path=artifact_path,
         python_model=SavVioModelWrapper(),
         artifacts={
-            "classifier": classifier_path,
-            "feature_pipeline": pipeline_path,
-            "label_encoder": encoder_path,
+            "classifier": os.path.join(model_dir, "classifier.pkl"),
+            "feature_pipeline": os.path.join(Config.MODEL_SAVE_DIR, "feature_pipeline.pkl"),
+            "label_encoder": os.path.join(model_dir, "label_encoder.pkl"),
         },
     )
-    logger.info("Saved bundled pyfunc artifact at %s", savvio_model_path)
+    logger.info("Saved bundled pyfunc artifact at %s", artifact_path)
 
 # ---------------------------------------------------------------------------
 # 6. LLM Layer Validation

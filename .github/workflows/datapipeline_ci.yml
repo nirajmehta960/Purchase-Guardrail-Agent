@@ -101,7 +101,6 @@ jobs:
           pip install sqlalchemy psycopg2-binary
 
       - name: Check DB connection
-        continue-on-error: true   # DB credentials may not be available in CI
         env:
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
@@ -127,7 +126,7 @@ jobs:
           except Exception as e:
               print(f"DB connection FAILED: {e}")
               print("Hint: Check DB_HOST / DB_USER GitHub Secrets are set correctly.")
-              sys.exit(0)  # warn only, do not fail the workflow for DB check
+              sys.exit(1)  # fatal error as requested by user
           EOF
 
   # ===========================================================================

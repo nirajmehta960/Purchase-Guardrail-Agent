@@ -3,7 +3,7 @@ Shared test fixtures for SavVio deployment tests.
 
 Provides:
     - Mock ModelManager with pre-configured test data
-    - FastAPI TestClient
+    - FastAPI TestClient (uses app.dependency_overrides for clean DI)
     - Sample financial profiles for GREEN / YELLOW / RED scenarios
     - Sample products and reviews
 """
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -124,7 +124,7 @@ def sample_product():
 
 @pytest.fixture
 def cheap_product():
-    """A cheap product (low PIR) — should not trigger RED even for distressed users."""
+    """A cheap product (low PIR) — should not trigger RED."""
     return {
         "product_id": "B0CHEAP001",
         "product_name": "USB Cable",
@@ -151,7 +151,11 @@ def mock_model_manager():
     manager.llm_provider = MagicMock()
     manager.llm_provider.provider_name = "mock"
     manager.category_stats = {
-        "Electronics": {"min_price": 5.0, "max_price": 2000.0, "mean_rating": 4.0},
+        "Electronics": {
+            "min_price": 5.0,
+            "max_price": 2000.0,
+            "mean_rating": 4.0,
+        },
     }
     manager.max_rating_number = 50000.0
     manager.check_db_connection.return_value = True
@@ -160,15 +164,20 @@ def mock_model_manager():
 
 
 # ---------------------------------------------------------------------------
-# FastAPI TestClient
+# FastAPI TestClient — uses dependency overrides (no monkeypatching)
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
 def test_client(mock_model_manager):
-    """FastAPI TestClient with mocked ModelManager."""
-    with patch("deployment.api.main.model_manager", mock_model_manager):
-        from fastapi.testclient import TestClient
-        from deployment.api.main import app
+    """FastAPI TestClient with DI-overridden ModelManager."""
+    from fastapi.testclient import TestClient
 
-        client = TestClient(app)
-        yield client
+    from deployment.api.dependencies import get_model_manager
+    from deployment.api.main import app
+
+    app.dependency_overrides[get_model_manager] = (
+        lambda: mock_model_manager
+    )
+    client = TestClient(app)
+    yield client
+    app.dependency_overrides.clear()

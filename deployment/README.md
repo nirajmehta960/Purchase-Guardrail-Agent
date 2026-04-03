@@ -50,12 +50,11 @@ The model is deployed exclusively on Google Cloud Platform using the following G
 SavVio is an AI-driven financial advocacy tool that provides pre-purchase recommendations in the form of a **Green / Yellow / Red** signal, based on a user's real-time financial health and product quality signals.
 This phase covers the **deployment** of the production-ready SavVio model onto Google Cloud Platform. It picks up directly from the Model Development phase: the approved, bias-validated XGBoost model has been pushed to GCP Artifact Registry with a versioned tag, rollback pointer, and full MLflow lineage. The goal here is to expose that model through a live, monitored, auto-scaling inference API — with CI/CD automation, drift detection, and a retraining trigger loop.
 
-**The three-layer recommendation system is preserved end-to-end at inference:**
+**The two-layer recommendation system is preserved end-to-end at inference:**
 
 | Layer | Responsibility |
 |---|---|
-| Deterministic Engine | Authoritative Green/Yellow/Red classification via financial rule engine (Financial Engine) |
-| ML Model Layer | Confidence scoring and ranking support — providing a "Second Opinion" to the engine |
+| ML Model Layer | Convservaive Green/Yellow/Red classification |
 | LLM Advocate | Parses natural language intent, resolves products, and generates conversational recommendations with fiduciary guardrails |
 
 ---
@@ -76,12 +75,7 @@ User Prompt (natural language input)
 └─────────────────────────────────────┘
         ↓
 ┌─────────────────────────────────────┐
-│       Deterministic Engine          │  ← Hard financial rules (RUS, PIR, etc.)
-│     Green / Yellow / Red            │  ← Authoritative output
-└─────────────────────────────────────┘
-        ↓
-┌─────────────────────────────────────┐
-│          ML Model Layer             │  ← Confidence scoring (XGBoost)
+│          ML Model Layer             │  ← Decision & Confidence score
 └─────────────────────────────────────┘
         ↓
 ┌─────────────────────────────────────┐
@@ -89,7 +83,7 @@ User Prompt (natural language input)
 │       Custom Guardrails             │  ← 6-point fiduciary safety checks
 └─────────────────────────────────────┘
         ↓
-   User-facing Advocate UI (React/Vite)
+   User-facing SavVio UI
 ```
 
 ### Deployment Infrastructure
@@ -101,7 +95,7 @@ GitHub Actions (CI/CD)
         ↓
 ┌──────────────────────────────────────────┐
 │             Docker Container             │
-│   FastAPI + Deterministic Engine +       │
+│   FastAPI +       │
 │   ML Model + LLM Wrapper                 │
 └──────────────────────────────────────────┘
         ↓

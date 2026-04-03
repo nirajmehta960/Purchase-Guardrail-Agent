@@ -30,10 +30,9 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -e ../savviocore
-          # Note: 'pip install -e .' is intentionally omitted.
-          # data_pipeline/pyproject.toml has no [project.dependencies], so the
-          # editable install adds nothing useful but may corrupt sys.path by
-          # inserting the project root instead of dags/ into site-packages .pth.
+          # 'pip install -e .' intentionally omitted: pyproject.toml has no
+          # [project.dependencies], so editable install is not needed and
+          # can corrupt sys.path by inserting the project root into .pth files.
           if [ -f data-requirements.txt ]; then pip install -r data-requirements.txt; fi
           pip install pytest pytest-cov
 
@@ -53,21 +52,13 @@ jobs:
           python -c "from preprocess.run_preprocessing import run_pipeline; run_pipeline()"
           python -c "from features.run_features import main; main()"
 
-      - name: Debug sys.path
-        working-directory: data_pipeline
-        env:
-          PYTHONPATH: ${{ github.workspace }}/data_pipeline/dags
-        run: |
-          python -c "import sys; [print(p) for p in sys.path]"
-          python -c "import src; print('src OK:', src.__file__)"
-          python -c "from src.ingestion.config import ENVIRONMENT; print('src.ingestion OK')"
-
       - name: Run unit tests
         working-directory: data_pipeline
         env:
-          # Only dags/ in PYTHONPATH — Python finds 'src' as a proper package (dags/src/).
-          # conftest.py also adds dags/ (and ONLY dags/) to sys.path.
-          # Having dags/src/ in the path too triggers a namespace package collision.
+          # Safety net: only dags/ in PYTHONPATH so 'src' is found as a
+          # proper package at dags/src/.  pyproject.toml [tool.pytest.ini_options]
+          # pythonpath = ["dags"] sets this via pytest's built-in mechanism,
+          # and conftest.py pre-registers 'src' via sys.modules for robustness.
           PYTHONPATH: ${{ github.workspace }}/data_pipeline/dags
         run: |
           python -m pytest \
@@ -119,19 +110,24 @@ jobs:
         run: |
           python3 - <<'EOF'
           import os, sys
+          import urllib.parse
           if not os.getenv("DB_HOST"):
               print("No DB_HOST configured — skipping DB connection check.")
               sys.exit(0)
           try:
               from sqlalchemy import create_engine, text
-              url = f"postgresql://{os.environ['DB_USER']}:{os.environ['DB_PASSWORD']}@{os.environ['DB_HOST']}:{os.environ.get('DB_PORT', '5432')}/{os.environ['DB_NAME']}"
+              user = urllib.parse.quote_plus(os.environ['DB_USER'])
+              password = urllib.parse.quote_plus(os.environ['DB_PASSWORD'])
+              url = f"postgresql://{user}:{password}@{os.environ['DB_HOST']}:{os.environ.get('DB_PORT', '5432')}/{os.environ['DB_NAME']}"
               engine = create_engine(url)
               with engine.connect() as conn:
                   result = conn.execute(text("SELECT 1"))
                   print(f"DB connection OK: {result.scalar()}")
           except Exception as e:
               print(f"DB connection FAILED: {e}")
-              sys.exit(1)
+              print("Hint: Check DB_HOST / DB_USER GitHub Secrets are set correctly.")
+              print("Note: If using Supabase, you may need an IPv4 connection pooler.")
+              sys.exit(1)  # fatal error as requested by user
           EOF
 
   # ===========================================================================

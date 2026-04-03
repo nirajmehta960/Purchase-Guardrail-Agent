@@ -1,11 +1,7 @@
-import sys
-import os
+"""
+tests/conftest.py — shared test fixtures for data_pipeline.
 
-# Add dags/ to sys.path so Python finds 'src' as a proper package (dags/src/).
-# IMPORTANT: do NOT also add dags/src/ here.  When both are present, Python
-# creates a namespace package for 'src' (because dags/src/src/ doesn't exist
-# in the second entry), which causes:
-#   ModuleNotFoundError: No module named 'src.ingestion'; 'src' is not a package
-dags_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'dags'))
-if dags_dir not in sys.path:
-    sys.path.insert(0, dags_dir)
+sys.path / 'src' package setup is handled by the root-level conftest.py
+(data_pipeline/conftest.py), which pytest loads before this file.
+"""
+# Nothing extra needed here — root conftest handles sys.path and src registration.

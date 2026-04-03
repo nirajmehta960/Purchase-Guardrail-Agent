@@ -26,10 +26,8 @@ MANIFEST
 
 # Virtual Environment
 venv/
-env/
-ENV/
 .venv
-.savvio_venv/
+test_venv/
 
 # IDEs
 .vscode/

@@ -44,7 +44,11 @@ class SavVioModelWrapper(mlflow.pyfunc.PythonModel):
         feature_row.update(aff_dict)
         feature_row["downgraded"] = 0
 
-        X = self.pipeline.transform(pd.DataFrame([feature_row]))
+        df = pd.DataFrame([feature_row])
+        # Reorder columns to match the order the model was trained on
+        trained_cols = self.model.get_booster().feature_names
+        df = df[[c for c in trained_cols if c in df.columns]]
+        X = self.pipeline.transform(df)
         pred = self.model.predict(X)
         proba = self.model.predict_proba(X)
 

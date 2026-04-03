@@ -65,6 +65,8 @@ matplotlib>=3.8.0
 
 # Models
 xgboost>=2.0.3
+
+# libomp installation is required for xgboost; on some platforms, you may need to install it separately (e.g., via `brew install libomp` on macOS)
 # For local CPU training
 lightgbm>=4.0.0
 

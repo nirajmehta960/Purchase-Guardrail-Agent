@@ -60,10 +60,11 @@ from src.ingestion.config import (
     GCP_PROJECT_ID,
     API_BASE_URL,
     API_KEY,
-    API_TIMEOUT,
-    FINANCIAL_API_ENDPOINT,
     PRODUCT_API_ENDPOINT,
     REVIEW_API_ENDPOINT,
+    KAGGLE_FINANCIAL_DATASET,
+    KAGGLE_PRODUCT_DATASET,
+    KAGGLE_REVIEW_DATASET,
     get_config_summary
 )
 
@@ -192,6 +193,51 @@ def load_from_api() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         raise
 
 
+def load_from_kaggle() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Load all datasets directly from Kaggle.
+    
+    Returns:
+        Tuple of (financial_df, product_df, review_df)
+    """
+    logger.info("=" * 80)
+    logger.info("DATA SOURCE: KAGGLE (Direct Download)")
+    logger.info("=" * 80)
+    
+    # Import Kaggle loader
+    from src.ingestion.kaggle_loader import load_financial_data, load_product_data, load_review_data
+    
+    try:
+        financial_df = load_financial_data(
+            dataset_handle=KAGGLE_FINANCIAL_DATASET,
+            destination_path=FINANCIAL_RAW_PATH
+        )
+        
+        product_df = load_product_data(
+            dataset_handle=KAGGLE_PRODUCT_DATASET,
+            destination_path=PRODUCT_RAW_PATH
+        )
+        
+        review_df = load_review_data(
+            dataset_handle=KAGGLE_REVIEW_DATASET,
+            destination_path=REVIEW_RAW_PATH
+        )
+        
+        logger.info("=" * 80)
+        logger.info("KAGGLE DATA LOADING COMPLETE")
+        logger.info(f"Financial records: {len(financial_df)}")
+        logger.info(f"Product records sampled: {len(product_df)}")
+        logger.info(f"Review records sampled: {len(review_df)}")
+        logger.info("=" * 80)
+        
+        return financial_df, product_df, review_df
+        
+    except Exception as e:
+        logger.error(f"Failed to load data from Kaggle: {e}")
+        raise
+
+
+
 def run_ingestion() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Main ingestion function that routes to appropriate data source.
@@ -219,14 +265,16 @@ def run_ingestion() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     
     try:
         # Route to appropriate loader based on data source
-        if DATA_SOURCE.lower() == 'gcs':
+        if DATA_SOURCE.lower() == 'kaggle':
+            financial_df, product_df, review_df = load_from_kaggle()
+        elif DATA_SOURCE.lower() == 'gcs':
             financial_df, product_df, review_df = load_from_gcs()
         elif DATA_SOURCE.lower() == 'api':
             financial_df, product_df, review_df = load_from_api()
         else:
             raise ValueError(
                 f"Unsupported data source: {DATA_SOURCE}. "
-                "Must be 'gcs' or 'api'"
+                "Must be 'kaggle', 'gcs' or 'api'"
             )
         
         # Validate that we got data
@@ -258,7 +306,13 @@ def run_ingestion() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 def ingest_financial_task(**context):
     """Airflow task: ingest financial data only."""
     logger.info("Ingesting financial data...")
-    if DATA_SOURCE.lower() == 'gcs':
+    if DATA_SOURCE.lower() == 'kaggle':
+        from src.ingestion.kaggle_loader import load_financial_data
+        df = load_financial_data(
+            dataset_handle=KAGGLE_FINANCIAL_DATASET,
+            destination_path=FINANCIAL_RAW_PATH
+        )
+    elif DATA_SOURCE.lower() == 'gcs':
         from src.ingestion.gcs_loader import load_financial_data
         df = load_financial_data(
             bucket_name=GCS_BUCKET_NAME, blob_name=FINANCIAL_BLOB,
@@ -281,7 +335,13 @@ def ingest_financial_task(**context):
 def ingest_product_task(**context):
     """Airflow task: ingest product data only."""
     logger.info("Ingesting product data...")
-    if DATA_SOURCE.lower() == 'gcs':
+    if DATA_SOURCE.lower() == 'kaggle':
+        from src.ingestion.kaggle_loader import load_product_data
+        df = load_product_data(
+            dataset_handle=KAGGLE_PRODUCT_DATASET,
+            destination_path=PRODUCT_RAW_PATH
+        )
+    elif DATA_SOURCE.lower() == 'gcs':
         from src.ingestion.gcs_loader import load_product_data
         df = load_product_data(
             bucket_name=GCS_BUCKET_NAME, blob_name=PRODUCT_BLOB,
@@ -304,7 +364,13 @@ def ingest_product_task(**context):
 def ingest_review_task(**context):
     """Airflow task: ingest review data only."""
     logger.info("Ingesting review data...")
-    if DATA_SOURCE.lower() == 'gcs':
+    if DATA_SOURCE.lower() == 'kaggle':
+        from src.ingestion.kaggle_loader import load_review_data
+        df = load_review_data(
+            dataset_handle=KAGGLE_REVIEW_DATASET,
+            destination_path=REVIEW_RAW_PATH
+        )
+    elif DATA_SOURCE.lower() == 'gcs':
         from src.ingestion.gcs_loader import load_review_data
         df = load_review_data(
             bucket_name=GCS_BUCKET_NAME, blob_name=REVIEW_BLOB,

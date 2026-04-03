@@ -102,6 +102,16 @@ REVIEW_API_ENDPOINT = os.getenv("REVIEW_API_ENDPOINT", f"{API_BASE_URL}/reviews"
 
 
 # ============================================================================
+# Kaggle Configuration
+# ============================================================================
+
+KAGGLE_FINANCIAL_DATASET = os.getenv("KAGGLE_FINANCIAL_DATASET", "miadul/personal-finance-ml-dataset")
+KAGGLE_PRODUCT_DATASET = os.getenv("KAGGLE_PRODUCT_DATASET", "lokeshparab/amazon-products-dataset")
+KAGGLE_REVIEW_DATASET = os.getenv("KAGGLE_REVIEW_DATASET", "lokeshparab/amazon-products-dataset") # Usually same dataset
+
+
+
+# ============================================================================
 # Environment Configuration
 # ============================================================================
 
@@ -109,11 +119,11 @@ ENVIRONMENT = os.getenv("ENVIRONMENT", "dev")  # dev, staging, prod
 
 # Determine data source based on environment
 if ENVIRONMENT == "dev":
-    DATA_SOURCE = "gcs"
+    DATA_SOURCE = "kaggle"  # Default dev to kaggle now that it's implemented!
 elif ENVIRONMENT == "prod":
     DATA_SOURCE = "api"
 else:
-    DATA_SOURCE = os.getenv("DATA_SOURCE", "gcs")
+    DATA_SOURCE = os.getenv("DATA_SOURCE", "kaggle")
 
 
 # ============================================================================
@@ -203,6 +213,8 @@ def get_config_summary() -> dict:
         "gcp_project": GCP_PROJECT_ID,
         "gcs_bucket": GCS_BUCKET_NAME,
         "api_base_url": API_BASE_URL,
+        "kaggle_financial": KAGGLE_FINANCIAL_DATASET,
+        "kaggle_product": KAGGLE_PRODUCT_DATASET,
         "log_level": LOG_LEVEL,
         "data_dir": str(DATA_DIR),
     }

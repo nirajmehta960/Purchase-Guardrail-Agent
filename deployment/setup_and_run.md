@@ -33,7 +33,7 @@ Copy the `.env` file at the project root. Key variables:
 ```bash
 # Database (required)
 DB_USER=postgres
-DB_PASSWORD=postinsql
+DB_PASSWORD=*******
 DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=savvio_dp
@@ -50,7 +50,19 @@ If no LLM key is set, the API starts with a **mock provider** (template-based re
 
 ---
 
-## 3. Backend Setup
+## 3. Run SavVio
+
+The `run.sh` script can start both services in one terminal:
+
+```bash
+./deployment/run.sh
+```
+
+This starts the backend (port 3500) and frontend (port 3000) as background processes. `Ctrl+C` stops both.
+
+---
+
+## Manual Backend Setup
 
 ### Install Python dependencies
 
@@ -109,7 +121,7 @@ curl -s -X POST http://localhost:3500/predict \
 
 ---
 
-## 4. Frontend Setup
+## Manual Frontend Setup
 
 ```bash
 cd deployment/frontend
@@ -131,19 +143,7 @@ The app will be available at **http://localhost:3000**. API requests to `/api/*`
 
 ---
 
-## 5. Run Both Together
-
-The `run.sh` script can start both services in one terminal:
-
-```bash
-./deployment/run.sh          # or: ./deployment/run.sh both
-```
-
-This starts the backend (port 3500) and frontend (port 3000) as background processes. `Ctrl+C` stops both.
-
----
-
-## 6. Running Tests
+## Running Tests
 
 ### Backend tests (pytest)
 
@@ -161,8 +161,6 @@ cd deployment/frontend
 # Unit tests (Vitest)
 npm run test
 
-# E2E tests (Playwright — requires backend running)
-npx playwright test
 ```
 
 ---

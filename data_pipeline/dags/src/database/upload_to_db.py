@@ -20,6 +20,8 @@ from savviocore.database.db_schema import create_tables
 
 logger = logging.getLogger(__name__)
 
+JSONL_STREAM_CHUNKSIZE = 25_000
+
 # ---------------------------------------------------------------------------
 # Column mapping: source field → DB column
 # Only mapped columns get pushed to the database.
@@ -212,54 +214,60 @@ def load_financial(engine, csv_path: str) -> int:
 
 def load_products(engine, jsonl_path: str) -> int:
     """Upsert products from JSONL into products table."""
-    df = _read_jsonl(jsonl_path)
-    df = _select_and_rename(df, PRODUCT_COLS)
-
-    # Ensure text columns are strings
-    for col in ["description", "features"]:
-        if col in df.columns:
-            df[col] = df[col].fillna("")
-
-    # Serialize details as JSON string for JSONB column
-    df = _ensure_jsonb(df, "details")
-
     conflict_cols = ["product_id"]
-    update_cols = [c for c in df.columns if c not in conflict_cols]
-
-    return _upsert_df(engine, df, "products", conflict_cols, update_cols)
+    total_rows = 0
+    file_size_mb = os.path.getsize(jsonl_path) / (1024 * 1024)
+    logger.info(
+        "Products JSONL size: %.1f MB. Streaming in chunks of %d rows.",
+        file_size_mb, JSONL_STREAM_CHUNKSIZE,
+    )
+    for i, chunk in enumerate(pd.read_json(jsonl_path, lines=True, chunksize=JSONL_STREAM_CHUNKSIZE), start=1):
+        df = _select_and_rename(chunk, PRODUCT_COLS)
+        for col in ["description", "features"]:
+            if col in df.columns:
+                df[col] = df[col].fillna("")
+        df = _ensure_jsonb(df, "details")
+        update_cols = [c for c in df.columns if c not in conflict_cols]
+        rows = _upsert_df(engine, df, "products", conflict_cols, update_cols)
+        total_rows += rows
+        logger.info("Products chunk %d upserted: %d rows (running total: %d)", i, rows, total_rows)
+    return total_rows
 
 
 def load_reviews(engine, jsonl_path: str) -> int:
     """Upsert reviews from JSONL into reviews table."""
-    df = _read_jsonl(jsonl_path)
-    df = _select_and_rename(df, REVIEW_COLS)
-
-    # Type fixes
-    if "verified_purchase" in df.columns:
-        df["verified_purchase"] = df["verified_purchase"].astype(bool)
-    if "helpful_vote" in df.columns:
-        df["helpful_vote"] = df["helpful_vote"].fillna(0).astype(int)
-
     # Filter out reviews whose product_id doesn't exist in the products table
-    # to avoid ForeignKeyViolation errors
+    # to avoid ForeignKeyViolation errors.
     with engine.connect() as conn:
-        existing_ids = pd.read_sql(
-            text("SELECT product_id FROM products"), conn
-        )["product_id"].tolist()
-    existing_ids_set = set(existing_ids)
-    before_count = len(df)
-    df = df[df["product_id"].isin(existing_ids_set)]
-    dropped = before_count - len(df)
-    if dropped:
-        logger.warning(
-            "Dropped %d orphaned reviews (product_id not in products table)",
-            dropped,
+        existing_ids_set = set(
+            pd.read_sql(text("SELECT product_id FROM products"), conn)["product_id"].tolist()
         )
 
     conflict_cols = ["user_id", "product_id"]
-    update_cols = [c for c in df.columns if c not in conflict_cols]
+    total_rows = 0
+    total_dropped = 0
+    file_size_mb = os.path.getsize(jsonl_path) / (1024 * 1024)
+    logger.info(
+        "Reviews JSONL size: %.1f MB. Streaming in chunks of %d rows.",
+        file_size_mb, JSONL_STREAM_CHUNKSIZE,
+    )
+    for i, chunk in enumerate(pd.read_json(jsonl_path, lines=True, chunksize=JSONL_STREAM_CHUNKSIZE), start=1):
+        df = _select_and_rename(chunk, REVIEW_COLS)
+        if "verified_purchase" in df.columns:
+            df["verified_purchase"] = df["verified_purchase"].astype(bool)
+        if "helpful_vote" in df.columns:
+            df["helpful_vote"] = df["helpful_vote"].fillna(0).astype(int)
+        before_count = len(df)
+        df = df[df["product_id"].isin(existing_ids_set)]
+        total_dropped += before_count - len(df)
+        update_cols = [c for c in df.columns if c not in conflict_cols]
+        rows = _upsert_df(engine, df, "reviews", conflict_cols, update_cols)
+        total_rows += rows
+        logger.info("Reviews chunk %d upserted: %d rows (running total: %d)", i, rows, total_rows)
 
-    return _upsert_df(engine, df, "reviews", conflict_cols, update_cols)
+    if total_dropped:
+        logger.warning("Dropped %d orphaned reviews (product_id not in products table)", total_dropped)
+    return total_rows
 
 
 # ---------------------------------------------------------------------------

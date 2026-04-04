@@ -84,6 +84,7 @@ class Config:
 
     # ---------------------------------------------------------------------------
     # Sensitive Features for Bias Tracking (Fairlearn)
+    # ``savings_band`` is appended in run_pipeline.prepare_data from scenarios.
     # ---------------------------------------------------------------------------
     SENSITIVE_FEATURES = ["region", "employment_status"]
 

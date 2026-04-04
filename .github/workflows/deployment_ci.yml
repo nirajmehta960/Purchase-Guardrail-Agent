@@ -2,26 +2,26 @@ name: Deployment CI/CD
 
 on:
   workflow_dispatch:
-    inputs:
-      environment:
-        description: "Target environment"
-        required: true
-        default: "dev"
-        type: choice
-        options:
-          - dev
-          - prod
-  push:
-    branches: [main]
-    paths:
-      - "deployment/api/**"
-      - "deployment/frontend/src/**"
-      - "deployment/frontend/package.json"
-      - "deployment/requirements.txt"
-      - "deployment/__init__.py"
-      - "savviocore/**"
-      - "model_pipeline/src/**"
-      - "model_pipeline/models/model/**"
+  #   inputs:
+  #     environment:
+  #       description: "Target environment"
+  #       required: true
+  #       default: "dev"
+  #       type: choice
+  #       options:
+  #         - dev
+  #         - prod
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "deployment/api/**"
+  #     - "deployment/frontend/src/**"
+  #     - "deployment/frontend/package.json"
+  #     - "deployment/requirements.txt"
+  #     - "deployment/__init__.py"
+  #     - "savviocore/**"
+  #     - "model_pipeline/src/**"
+  #     - "model_pipeline/models/model/**"
 
 env:
   ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}

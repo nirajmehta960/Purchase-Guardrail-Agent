@@ -161,3 +161,8 @@ coverage/
 model_pipeline/reports/
 model_pipeline/reports/sensitivity/
 !model_pipeline/reports/.gitkeep
+
+
+# Copilot and claude instructions
+CLAUDE.md
+copilot-instruction.md

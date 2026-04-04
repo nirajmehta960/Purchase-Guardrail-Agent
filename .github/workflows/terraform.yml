@@ -1,0 +1,61 @@
+name: Terraform Infrastructure
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'deployment/terraform/**'
+
+jobs:
+  terraform-dev:
+    name: Terraform (dev)
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    defaults:
+      run:
+        working-directory: deployment/terraform/environments/dev
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.7"
+
+      - name: Update project_id
+        run: |
+          sed -i 's/project_id *= *"savvio-ai"/project_id = "savvio-purchase-guardrail"/' terraform.tfvars
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: terraform plan -var-file="terraform.tfvars"
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve -var-file="terraform.tfvars"
+
+      - name: Show Terraform Outputs
+        run: |
+          echo "=== Terraform Outputs ==="
+          echo "DB Connection Name: $(terraform output -raw db_connection_name)"
+          echo "API URL: $(terraform output -raw api_url)"
+          echo "MLflow URL: $(terraform output -raw mlflow_url)"
+          echo ""
+          echo "Next step: grab DB_HOST from GCP Console → Cloud SQL → Public IP"
+          echo "and DB_PASSWORD from GCP Secrets Manager → savvio-dev-db-password"

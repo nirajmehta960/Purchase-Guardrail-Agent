@@ -1,0 +1,181 @@
+name: Deployment CI/CD
+
+on:
+  workflow_dispatch:
+  #   inputs:
+  #     environment:
+  #       description: "Target environment"
+  #       required: true
+  #       default: "dev"
+  #       type: choice
+  #       options:
+  #         - dev
+  #         - prod
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "deployment/api/**"
+  #     - "deployment/frontend/src/**"
+  #     - "deployment/frontend/package.json"
+  #     - "deployment/requirements.txt"
+  #     - "deployment/__init__.py"
+  #     - "savviocore/**"
+  #     - "model_pipeline/src/**"
+  #     - "model_pipeline/models/model/**"
+
+env:
+  ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
+  REGION: us-east1
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Tests (parallel)
+  # ---------------------------------------------------------------------------
+  test-api:
+    name: API Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r deployment/requirements.txt && pip install pytest httpx
+
+      - name: Run tests
+        env:
+          PYTHONPATH: "${{ github.workspace }}/model_pipeline/src:${{ github.workspace }}/savviocore/src:${{ github.workspace }}"
+        run: python -m pytest deployment/tests/ -v --tb=short
+
+  test-frontend:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        working-directory: deployment/frontend
+        run: npm ci
+
+      - name: Lint
+        working-directory: deployment/frontend
+        run: npm run lint
+
+      - name: Run tests
+        working-directory: deployment/frontend
+        run: npm test
+
+  # ---------------------------------------------------------------------------
+  # Build & push (parallel, after tests pass)
+  # ---------------------------------------------------------------------------
+  build-push-api:
+    name: Build & Push API
+    runs-on: ubuntu-latest
+    needs: test-api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        env:
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-api
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            -f deployment/api/Dockerfile \
+            -t $IMAGE:${{ github.sha }} \
+            -t $IMAGE:latest \
+            --push .
+
+  build-push-frontend:
+    name: Build & Push Frontend
+    runs-on: ubuntu-latest
+    needs: test-frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        env:
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-frontend
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            -f deployment/frontend/Dockerfile \
+            --build-arg VITE_API_BASE=${{ secrets.API_URL_DEV }} \
+            -t $IMAGE:${{ github.sha }} \
+            -t $IMAGE:latest \
+            --push deployment/frontend/
+
+  # ---------------------------------------------------------------------------
+  # Deploy to Cloud Run
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    needs: [build-push-api, build-push-frontend]
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Deploy API
+        run: |
+          gcloud run services update savvio-${{ env.ENVIRONMENT }}-api \
+            --image ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-api:${{ github.sha }} \
+            --region ${{ env.REGION }} --quiet
+
+      - name: Deploy Frontend
+        run: |
+          gcloud run services update savvio-${{ env.ENVIRONMENT }}-frontend \
+            --image ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-frontend:${{ github.sha }} \
+            --region ${{ env.REGION }} --quiet
+
+      - name: Verify API health
+        run: |
+          API_URL=$(gcloud run services describe savvio-${{ env.ENVIRONMENT }}-api \
+            --region ${{ env.REGION }} --format='value(status.url)')
+          echo "API: $API_URL"
+          curl -sf "$API_URL/health" || echo "Warning: health check non-200"
+
+  # ---------------------------------------------------------------------------
+  # Notifications
+  # ---------------------------------------------------------------------------
+  notify-on-failure:
+    name: Notify Failure
+    runs-on: ubuntu-latest
+    needs: [test-api, test-frontend, build-push-api, build-push-frontend, deploy]
+    if: failure()
+    steps:
+      - run: echo "FAILED — ${{ env.ENVIRONMENT }} — ${{ github.sha }}"
+
+  notify-on-success:
+    name: Notify Success
+    runs-on: ubuntu-latest
+    needs: [test-api, test-frontend, build-push-api, build-push-frontend, deploy]
+    if: success()
+    steps:
+      - run: echo "PASSED — ${{ env.ENVIRONMENT }} — ${{ github.sha }}"

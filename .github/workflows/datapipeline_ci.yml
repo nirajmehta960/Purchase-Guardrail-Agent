@@ -1,0 +1,195 @@
+name: Data Pipeline CI/CD
+
+on:
+  workflow_dispatch:  # Manual trigger only
+
+jobs:
+  # ===========================================================================
+  # JOB 1 — Unit Tests
+  # ===========================================================================
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: data_pipeline
+        run: |
+          pip install --upgrade pip
+          pip install -e ../savviocore
+          # 'pip install -e .' intentionally omitted: pyproject.toml has no
+          # [project.dependencies], so editable install is not needed and
+          # can corrupt sys.path by inserting the project root into .pth files.
+          if [ -f data-requirements.txt ]; then pip install -r data-requirements.txt; fi
+          pip install pytest pytest-cov
+
+      - name: Create data directories
+        working-directory: data_pipeline/dags
+        run: mkdir -p data/raw data/processed data/features data/validated data/temp data/quarantine
+
+      - name: Run data pipeline
+        working-directory: data_pipeline
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GCP_CREDENTIALS_PATH: ${{ env.GOOGLE_APPLICATION_CREDENTIALS }}
+          PYTHONPATH: dags:dags/src
+        run: |
+          python -c "from ingestion.run_ingestion import run_ingestion; run_ingestion()"
+          cp -r dags/src/data/raw/. dags/data/raw/
+          python -c "from preprocess.run_preprocessing import run_pipeline; run_pipeline()"
+          python -c "from features.run_features import main; main()"
+
+      - name: Run unit tests
+        working-directory: data_pipeline
+        env:
+          # Safety net: only dags/ in PYTHONPATH so 'src' is found as a
+          # proper package at dags/src/.  pyproject.toml [tool.pytest.ini_options]
+          # pythonpath = ["dags"] sets this via pytest's built-in mechanism,
+          # and conftest.py pre-registers 'src' via sys.modules for robustness.
+          PYTHONPATH: ${{ github.workspace }}/data_pipeline/dags
+        run: |
+          python -m pytest \
+            tests/bias/ \
+            tests/features/ \
+            tests/ingestion/ \
+            tests/preprocess/ \
+            tests/validation/ \
+            -v --tb=short
+
+  # ===========================================================================
+  # JOB 2 — DB Connection Check
+  # ===========================================================================
+  db-connection-check:
+    name: DB Connection Check
+    runs-on: ubuntu-latest
+    needs: unit-tests
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install sqlalchemy psycopg2-binary
+
+      - name: Check DB connection
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          import urllib.parse
+          if not os.getenv("DB_HOST"):
+              print("No DB_HOST configured — skipping DB connection check.")
+              sys.exit(0)
+          try:
+              from sqlalchemy import create_engine, text
+              user = urllib.parse.quote_plus(os.environ['DB_USER'])
+              password = urllib.parse.quote_plus(os.environ['DB_PASSWORD'])
+              url = f"postgresql://{user}:{password}@{os.environ['DB_HOST']}:{os.environ.get('DB_PORT', '5432')}/{os.environ['DB_NAME']}"
+              engine = create_engine(url)
+              with engine.connect() as conn:
+                  result = conn.execute(text("SELECT 1"))
+                  print(f"DB connection OK: {result.scalar()}")
+          except Exception as e:
+              print(f"DB connection FAILED: {e}")
+              print("Hint: Check DB_HOST / DB_USER GitHub Secrets are set correctly.")
+              print("Note: If using Supabase, you may need an IPv4 connection pooler.")
+              sys.exit(1)  # fatal error as requested by user
+          EOF
+
+  # ===========================================================================
+  # JOB 3 — Data Quality Check
+  # ===========================================================================
+  data-quality-check:
+    name: Data Quality Check
+    runs-on: ubuntu-latest
+    needs: unit-tests
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: data_pipeline
+        run: |
+          pip install --upgrade pip
+          pip install -e ../savviocore
+          if [ -f data-requirements.txt ]; then pip install -r data-requirements.txt; fi
+          pip install pytest
+
+      - name: Run data validation tests
+        working-directory: data_pipeline
+        run: |
+          python -m pytest tests/validation/ -v --tb=short
+
+  # ===========================================================================
+  # JOB 4 — Notify on Failure
+  # ===========================================================================
+  notify-on-failure:
+    name: Notify on Failure
+    runs-on: ubuntu-latest
+    needs: [unit-tests, db-connection-check, data-quality-check]
+    if: failure()
+
+    steps:
+      - name: Send failure notification
+        run: |
+          echo "Data Pipeline CI/CD FAILED"
+          echo "Branch:       ${{ github.ref_name }}"
+          echo "Commit:       ${{ github.sha }}"
+          echo "Triggered by: ${{ github.actor }}"
+
+  # ===========================================================================
+  # JOB 5 — Notify on Success
+  # ===========================================================================
+  notify-on-success:
+    name: Notify on Success
+    runs-on: ubuntu-latest
+    needs: [unit-tests, db-connection-check, data-quality-check]
+    if: success()
+
+    steps:
+      - name: Send success notification
+        run: |
+          echo "Data Pipeline CI/CD PASSED"
+          echo "Branch:       ${{ github.ref_name }}"
+          echo "Commit:       ${{ github.sha }}"
+          echo "Triggered by: ${{ github.actor }}"

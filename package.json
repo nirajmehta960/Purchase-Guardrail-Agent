@@ -1,0 +1,12 @@
+{
+  "name": "savvio",
+  "private": true,
+  "workspaces": ["deployment/frontend"],
+  "scripts": {
+    "dev": "npm run dev -w savvio-frontend",
+    "build": "npm run build -w savvio-frontend",
+    "lint": "npm run lint -w savvio-frontend",
+    "test": "npm run test -w savvio-frontend",
+    "preview": "npm run preview -w savvio-frontend"
+  }
+}

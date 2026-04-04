@@ -29,11 +29,14 @@ from features.feature_engineering import build_training_data
 from core_models.train import train_model, log_model_to_mlflow
 from core_models.evaluate import evaluate_model
 from core_models.optuna_tuner import tune_best_candidate
+from core_models.sensitivity_analysis import analyze_optuna_sensitivity
+from llm.prompt_engin import apply_llm_guardrails
+from llm.config import LLMConfig
 
 logger = logging.getLogger(__name__)
 
 
-def write_evaluation_summary_md(candidates, best, final_metrics, output_path):
+def write_evaluation_summary_md(candidates, best, final_metrics, output_path, sensitivity_summary=None):
     """Write a simple markdown summary for 3 baseline models + champion."""
     baseline_names = {"xgboost", "lightgbm", "xgb_linear"}
     baseline_rows = [c for c in candidates if c.get("name") in baseline_names]
@@ -73,7 +76,31 @@ def write_evaluation_summary_md(candidates, best, final_metrics, output_path):
         for metric_name, metric_value in final_metrics.items():
             lines.append(f"- {metric_name}: {metric_value}")
 
-    with open(output_path, "w") as f:
+    lines.extend([
+        "",
+        "## Hyperparameter Sensitivity (Tuned Champion)",
+        "",
+    ])
+
+    if not sensitivity_summary:
+        lines.append("Sensitivity analysis was not executed.")
+    elif sensitivity_summary.get("status") != "ok":
+        lines.append(
+            f"Sensitivity analysis skipped: {sensitivity_summary.get('reason', 'unknown_reason')}"
+        )
+        lines.append(f"- completed_trials: {sensitivity_summary.get('trial_count', 0)}")
+    else:
+        lines.append(f"- study_name: {sensitivity_summary.get('study_name', 'unknown')}")
+        lines.append(f"- completed_trials: {sensitivity_summary.get('trial_count', 0)}")
+        lines.append("- top_hyperparameters:")
+        for item in sensitivity_summary.get("top_importances", []):
+            lines.append(f"  - {item['param']}: {item['importance']:.6f}")
+        if sensitivity_summary.get("artifacts"):
+            lines.append("- artifact_paths:")
+            for artifact_path in sensitivity_summary["artifacts"]:
+                lines.append(f"  - {artifact_path}")
+
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
     logger.info("Saved evaluation summary markdown: %s", output_path)
@@ -315,13 +342,15 @@ def train_candidates(
 
 def tune_candidate(candidates, data):
     # 3b. Hyperparameter tuning on best baseline.
+    tuning_context = None
     tuning_result = tune_best_candidate(
         candidates,
         data["X_train"], data["y_train"],
         data["X_val"], data["y_val"],
     )
     if tuning_result:
-        model_type, tuned_params, _ = tuning_result
+        model_type, tuned_params, _, tuning_study = tuning_result
+        tuning_context = {"model_type": model_type, "study": tuning_study}
         try:
             with mlflow.start_run(run_name=f"{model_type}_tuned"):
                 mlflow.log_param("model_type", model_type)
@@ -374,12 +403,56 @@ def tune_candidate(candidates, data):
                     "model": tuned_model,
                     "run_id": mlflow.active_run().info.run_id,
                     "metrics": tuned_metrics,
+<<<<<<< HEAD
                     "bias_passed": bias_passed,
+=======
+                    "bias_passed": True,  # Will be checked in select_best_model
+                    "tuning_study": tuning_study,
+>>>>>>> e5c3aad9881792b6a707dca6ad4880dbc0b750f0
                 })
         except Exception as e:
             logger.error("Tuned model training failed: %s", e, exc_info=True)
 
-    return candidates
+    return candidates, tuning_context
+
+
+def run_sensitivity_analysis(best, tuning_context):
+    """Run Optuna-based sensitivity analysis for the tuned champion only."""
+    if best is None:
+        return {"status": "skipped", "reason": "no_champion", "trial_count": 0}
+
+    if not Config.SENSITIVITY_ANALYSIS_ENABLED:
+        return {"status": "skipped", "reason": "disabled_in_config", "trial_count": 0}
+
+    if not best["name"].endswith("_tuned"):
+        return {
+            "status": "skipped",
+            "reason": "champion_is_not_tuned",
+            "trial_count": 0,
+        }
+
+    if not tuning_context or tuning_context.get("study") is None:
+        return {"status": "skipped", "reason": "missing_tuning_study", "trial_count": 0}
+
+    if not best["name"].startswith(tuning_context.get("model_type", "")):
+        return {
+            "status": "skipped",
+            "reason": "study_champion_mismatch",
+            "trial_count": 0,
+        }
+
+    output_dir = os.path.join(Config.BASE_DIR, "reports", "sensitivity")
+    try:
+        return analyze_optuna_sensitivity(
+            study=tuning_context["study"],
+            model_name=best["name"],
+            output_dir=output_dir,
+            min_completed_trials=Config.SENSITIVITY_MIN_COMPLETED_TRIALS,
+            top_k_params=Config.SENSITIVITY_TOP_K_PARAMS,
+        )
+    except Exception as exc:
+        logger.warning("Sensitivity analysis failed: %s", exc, exc_info=True)
+        return {"status": "skipped", "reason": "runtime_error", "trial_count": 0}
 
 # ---------------------------------------------------------------------------
 # 4. Model Selection
@@ -423,7 +496,7 @@ def final_evaluation(best, X_test, y_test, label_encoder, sens_test=None):
     """
     if best is None:
         logger.error("No best model — skipping final evaluation.")
-        return
+        return None, None
 
     model = best["model"]
     model_type = best["name"]
@@ -451,13 +524,23 @@ def final_evaluation(best, X_test, y_test, label_encoder, sens_test=None):
             version=registered_model_version.version,
         )
 
-    return metrics
+        final_run_id = mlflow.active_run().info.run_id
 
+    return metrics, final_run_id
 
+# ---------------------------------------------------------------------------
+# 5b. Save Best Model + Label Encoder Locally
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 5b. Save Best Model + Label Encoder Locally
+# ---------------------------------------------------------------------------
 def save_best_model_local(best, label_encoder):
-    """Download champion model from MLflow to local artifacts and save label encoder."""
+    """Bundle champion model + feature pipeline + label encoder into a single MLflow pyfunc artifact at models/model/."""
     if not best: return
+    import shutil
+    from core_models.savvio_model_wrapper import SavVioModelWrapper
 
+<<<<<<< HEAD
     os.makedirs(Config.MODEL_SAVE_DIR, exist_ok=True)
     os.makedirs(Config.ENCODER_SAVE_DIR, exist_ok=True)
 
@@ -465,9 +548,104 @@ def save_best_model_local(best, label_encoder):
     downloaded_model_path = mlflow.artifacts.download_artifacts(
         artifact_uri=champion_model_uri,
         dst_path=Config.MODEL_SAVE_DIR,
+=======
+    model_dir = os.path.join(Config.BASE_DIR, "models")
+    artifact_path = os.path.join(model_dir, "model")
+
+    # mlflow.pyfunc.save_model needs file paths on disk
+    joblib.dump(best["model"], os.path.join(model_dir, "classifier.pkl"))
+    joblib.dump(label_encoder, os.path.join(model_dir, "label_encoder.pkl"))
+
+    # mlflow errors if target dir exists — remove previous run's artifact
+    if os.path.exists(artifact_path):
+        shutil.rmtree(artifact_path)
+
+    mlflow.pyfunc.save_model(
+        path=artifact_path,
+        python_model=SavVioModelWrapper(),
+        artifacts={
+            "classifier": os.path.join(model_dir, "classifier.pkl"),
+            "feature_pipeline": os.path.join(Config.MODEL_SAVE_DIR, "feature_pipeline.pkl"),
+            "label_encoder": os.path.join(model_dir, "label_encoder.pkl"),
+        },
+>>>>>>> e5c3aad9881792b6a707dca6ad4880dbc0b750f0
     )
-    joblib.dump(label_encoder, f"{Config.ENCODER_SAVE_DIR}/label_encoder.pkl")
-    logger.info("Saved champion model locally at %s and encoder at %s", downloaded_model_path, Config.ENCODER_SAVE_DIR)
+    logger.info("Saved bundled pyfunc artifact at %s", artifact_path)
+
+# ---------------------------------------------------------------------------
+# 6. LLM Layer Validation
+# ---------------------------------------------------------------------------
+
+def validate_llm_layer(best, data):
+    """
+    Smoke-test the LLM guardrail layer against the champion model.
+
+    Samples one prediction per class (GREEN/YELLOW/RED) from the validation set,
+    runs each through apply_llm_guardrails, and logs prompt versions + pass rate
+    to a dedicated MLflow run for lineage tracking.
+    """
+    if best is None:
+        logger.warning("LLM validation skipped — no champion model.")
+        return
+
+    model = best["model"]
+    label_encoder = data["label_encoder"]
+    X_val = data["X_val"]
+
+    # Sample one index per class from the validation set.
+    y_val_decoded = label_encoder.inverse_transform(data["y_val"])
+    sample_indices = []
+    for color in ["GREEN", "YELLOW", "RED"]:
+        matches = np.where(y_val_decoded == color)[0]
+        if len(matches) > 0:
+            sample_indices.append(int(matches[0]))
+
+    if not sample_indices:
+        logger.warning("LLM validation: no validation samples found.")
+        return
+
+    guardrail_results = []
+    with mlflow.start_run(run_name="llm_layer_validation"):
+        mlflow.log_param("llm_provider",              LLMConfig.PROVIDER)
+        mlflow.log_param("system_prompt_version",     LLMConfig.SYSTEM_PROMPT_VERSION)
+        mlflow.log_param("intent_prompt_version",     LLMConfig.INTENT_PROMPT_VERSION)
+        mlflow.log_param("response_prompt_version",   LLMConfig.RESPONSE_PROMPT_VERSION)
+        mlflow.log_param("champion_model",            best["name"])
+
+        for i in sample_indices:
+            try:
+                row = X_val[i:i+1] if not hasattr(X_val, "iloc") else X_val.iloc[i:i+1]
+                y_pred = label_encoder.inverse_transform([model.predict(row)[0]])[0]
+                proba = model.predict_proba(row)[0]
+                confidence = float(proba.max())
+
+                # Generic financial context — sufficient for a guardrail smoke test.
+                user_data = {
+                    "product_name": "Sample Product",
+                    "product_price": 299.99,
+                    "affordability_score": 0.0,
+                    "savings_to_price_ratio": 3.0,
+                    "emergency_fund_months": 4.0,
+                    "debt_to_income_ratio": 0.25,
+                    "triggered_rules": [],
+                    "was_downgraded": False,
+                }
+                is_safe, _ = apply_llm_guardrails(y_pred, user_data, confidence)
+                guardrail_results.append(int(is_safe))
+                logger.info("LLM validation sample — label=%s, guardrail_passed=%s", y_pred, is_safe)
+
+            except Exception as e:
+                logger.warning("LLM validation sample %d failed: %s", i, e)
+
+        if guardrail_results:
+            pass_rate = sum(guardrail_results) / len(guardrail_results)
+            mlflow.log_metric("guardrail_pass_rate", pass_rate)
+            mlflow.log_metric("guardrail_samples_tested", len(guardrail_results))
+            logger.info(
+                "LLM layer validation complete — pass_rate=%.2f (%d/%d samples)",
+                pass_rate, sum(guardrail_results), len(guardrail_results),
+            )
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -503,7 +681,7 @@ def main():
 
     # 3b. Hyperparameter tuning on best baseline.
     print("[4/6] Running hyperparameter tuning on best baseline...")
-    candidates = tune_candidate(candidates, data)
+    candidates, tuning_context = tune_candidate(candidates, data)
     print(f"[4/6] Tuning stage complete. candidates={len(candidates)}")
 
     # 4. Select best model (F1 + bias gate).
@@ -519,24 +697,51 @@ def main():
 
     # 5. Final evaluation on held-out test set.
     print("[6/6] Running final evaluation on held-out test set...")
+<<<<<<< HEAD
     final_metrics = final_evaluation(
+=======
+    final_metrics, final_run_id = final_evaluation(
+>>>>>>> e5c3aad9881792b6a707dca6ad4880dbc0b750f0
         best,
         data["X_test"],
         data["y_test"],
         data["label_encoder"],
+<<<<<<< HEAD
         sens_test=data.get("sens_test"),
+=======
+>>>>>>> e5c3aad9881792b6a707dca6ad4880dbc0b750f0
     )
     if final_metrics is not None:
         print(f"[6/6] Final test metrics: {final_metrics}")
     else:
         print("[6/6] Final evaluation skipped or failed.")
 
+    sensitivity_summary = run_sensitivity_analysis(best, tuning_context)
+
     # 6. Save best model and label encoder locally under artifacts and preprocessing.
     save_best_model_local(best, data["label_encoder"])
 
+    # 6b. Validate LLM guardrail layer — smoke test + log prompt versions to MLflow.
+    print("[6b] Validating LLM guardrail layer...")
+    validate_llm_layer(best, data)
+    print("[6b] LLM layer validation complete.")
+
     # 7. Save a simple markdown summary for 3 baseline models + champion final metrics.
-    report_path = os.path.join(Config.BASE_DIR, "reports", "evaluation_summary.md")
-    write_evaluation_summary_md(candidates, best, final_metrics, report_path)
+    summary_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    summary_run_id = final_run_id or (best["run_id"] if best else "no_run_id")
+    report_filename = f"evaluation_summary_{summary_timestamp}_{summary_run_id}.md"
+    report_path = os.path.join(Config.BASE_DIR, "reports", report_filename)
+    write_evaluation_summary_md(
+        candidates,
+        best,
+        final_metrics,
+        report_path,
+        sensitivity_summary=sensitivity_summary,
+    )
+
+    if final_run_id and os.path.exists(report_path):
+        with mlflow.start_run(run_id=final_run_id):
+            mlflow.log_artifact(report_path, "reports")
 
     # Summary.
     if best:

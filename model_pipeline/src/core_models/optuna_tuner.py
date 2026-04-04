@@ -152,7 +152,7 @@ def tune_model(
     X_val, y_val,
     n_trials: int = None,
     timeout: int = None,
-) -> Tuple[Dict[str, Any], float]:
+) -> Tuple[Dict[str, Any], float, optuna.study.Study]:
     """
     Run Optuna hyperparameter optimization for a single model type.
 
@@ -170,7 +170,7 @@ def tune_model(
         timeout:    Max seconds for the study. Defaults to Config.TUNING_TIMEOUT_SECONDS.
 
     Returns:
-        Tuple of (best_params dict, best_f1_score float).
+        Tuple of (best_params dict, best_f1_score float, optuna study).
 
     Raises:
         ValueError: If model_type is not supported for tuning.
@@ -232,14 +232,14 @@ def tune_model(
     )
     logger.info("Best params: %s", study.best_params)
 
-    return study.best_params, study.best_value
+    return study.best_params, study.best_value, study
 
 
 def tune_best_candidate(
     candidates: list,
     X_train, y_train,
     X_val, y_val,
-) -> Optional[Tuple[str, Dict[str, Any], float]]:
+) -> Optional[Tuple[str, Dict[str, Any], float, optuna.study.Study]]:
     """
     Identify the best baseline candidate that supports tuning,
     then optimize its hyperparameters.
@@ -255,7 +255,7 @@ def tune_best_candidate(
         y_val:      Validation labels.
 
     Returns:
-        Tuple of (model_type, best_params, best_f1) or None if tuning is
+        Tuple of (model_type, best_params, best_f1, study) or None if tuning is
         disabled or no tunable candidate exists.
     """
     if Config.TUNING_BACKEND == "none":
@@ -277,7 +277,7 @@ def tune_best_candidate(
         model_type, best_baseline["metrics"]["f1_score"],
     )
 
-    best_params, best_f1 = tune_model(
+    best_params, best_f1, study = tune_model(
         model_type, X_train, y_train, X_val, y_val,
     )
 
@@ -287,4 +287,4 @@ def tune_best_candidate(
         best_f1, improvement,
     )
 
-    return model_type, best_params, best_f1
+    return model_type, best_params, best_f1, study

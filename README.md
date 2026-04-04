@@ -47,16 +47,13 @@ SavVio/
 │   ├── config/                 # Model configuration files
 │   └── tests/                  # Model testing scripts
 │
-├── deployment/                 # Model deployment and serving
+├── deployment/                 # Model deployment, API, and web UI
+│   ├── api/                    # FastAPI inference service
+│   ├── frontend/               # Vite + React web app
 │   ├── scripts/                # Deployment automation scripts
 │   ├── config/                 # Deployment configuration
 │   ├── monitoring/             # Monitoring and alerting scripts
 │   └── docker/                 # Dockerfiles for containerization
-│
-├── frontend/                   # Web application interface
-│   ├── src/                    # Frontend source code (Streamlit)
-│   ├── static/                 # Static assets
-│   └── templates/              # HTML templates (if needed)
 │
 ├── infrastructure/             # Infrastructure as Code
 │   ├── terraform/              # Terraform configurations
@@ -153,7 +150,7 @@ Model training and development will include:
 ### Running the Application
 
 Once implemented:
-- **Backend API**: Will run on port 4000 (FastAPI)
+- **Backend API**: Will run on port 3500 (FastAPI)
 - **Frontend**: Will run on port 3000 (Streamlit)
 
 ### Deployment

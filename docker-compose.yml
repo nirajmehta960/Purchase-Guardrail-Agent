@@ -1,0 +1,59 @@
+# Local full-stack testing — no cloud dependencies.
+#
+# Usage:
+#   docker compose up --build        # build and start everything
+#   docker compose down -v           # tear down + remove volumes
+#
+# Endpoints:
+#   Frontend:  http://localhost:8501
+#   API:       http://localhost:8080
+#   API docs:  http://localhost:8080/docs
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: deployment/api/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      API_PORT: "8080"
+      DB_ENV: "dev"
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: deployment/frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE: "http://localhost:8080"
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:

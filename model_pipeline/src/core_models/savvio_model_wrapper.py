@@ -45,10 +45,12 @@ class SavVioModelWrapper(mlflow.pyfunc.PythonModel):
         feature_row["downgraded"] = 0
 
         df = pd.DataFrame([feature_row])
-        # Reorder columns to match the order the model was trained on
-        trained_cols = self.model.get_booster().feature_names
-        df = df[[c for c in trained_cols if c in df.columns]]
         X = self.pipeline.transform(df)
+        # Reorder columns to match the order the model was trained on
+        # (must happen AFTER pipeline — NumericScaler needs product_price,
+        #  FeatureDropper removes it, then we align to model's feature order)
+        trained_cols = self.model.get_booster().feature_names
+        X = X[[c for c in trained_cols if c in X.columns]]
         pred = self.model.predict(X)
         proba = self.model.predict_proba(X)
 

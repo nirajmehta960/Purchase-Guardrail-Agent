@@ -293,7 +293,7 @@ def train_candidates(
                         if hasattr(model, "predict_proba")
                         else None
                     )
-                    model, bias_passed, _ = detect_and_mitigate(
+                    model, bias_passed, fairness_metrics = detect_and_mitigate(
                         model,
                         X_train,
                         y_train,
@@ -326,6 +326,7 @@ def train_candidates(
                     "run_id": run_id,
                     "metrics": metrics,
                     "bias_passed": bias_passed,
+                    "fairness_metrics": fairness_metrics if BIAS_AVAILABLE else {},
                 })
                 logger.info("%s — val F1: %.4f, bias passed: %s",
                             model_type, metrics["f1_score"], bias_passed)
@@ -376,7 +377,7 @@ def tune_candidate(candidates, data):
                         if hasattr(tuned_model, "predict_proba")
                         else None
                     )
-                    tuned_model, bias_passed, _ = detect_and_mitigate(
+                    tuned_model, bias_passed, fairness_metrics = detect_and_mitigate(
                         tuned_model,
                         data["X_train"],
                         data["y_train"],
@@ -403,12 +404,9 @@ def tune_candidate(candidates, data):
                     "model": tuned_model,
                     "run_id": mlflow.active_run().info.run_id,
                     "metrics": tuned_metrics,
-<<<<<<< HEAD
                     "bias_passed": bias_passed,
-=======
-                    "bias_passed": True,  # Will be checked in select_best_model
                     "tuning_study": tuning_study,
->>>>>>> e5c3aad9881792b6a707dca6ad4880dbc0b750f0
+                    "fairness_metrics": fairness_metrics if BIAS_AVAILABLE else {},
                 })
         except Exception as e:
             logger.error("Tuned model training failed: %s", e, exc_info=True)
@@ -540,15 +538,6 @@ def save_best_model_local(best, label_encoder):
     import shutil
     from core_models.savvio_model_wrapper import SavVioModelWrapper
 
-<<<<<<< HEAD
-    os.makedirs(Config.MODEL_SAVE_DIR, exist_ok=True)
-    os.makedirs(Config.ENCODER_SAVE_DIR, exist_ok=True)
-
-    champion_model_uri = f"models:/{Config.REGISTERED_MODEL_NAME}@champion"
-    downloaded_model_path = mlflow.artifacts.download_artifacts(
-        artifact_uri=champion_model_uri,
-        dst_path=Config.MODEL_SAVE_DIR,
-=======
     model_dir = os.path.join(Config.BASE_DIR, "models")
     artifact_path = os.path.join(model_dir, "model")
 
@@ -568,7 +557,6 @@ def save_best_model_local(best, label_encoder):
             "feature_pipeline": os.path.join(Config.MODEL_SAVE_DIR, "feature_pipeline.pkl"),
             "label_encoder": os.path.join(model_dir, "label_encoder.pkl"),
         },
->>>>>>> e5c3aad9881792b6a707dca6ad4880dbc0b750f0
     )
     logger.info("Saved bundled pyfunc artifact at %s", artifact_path)
 
@@ -697,19 +685,12 @@ def main():
 
     # 5. Final evaluation on held-out test set.
     print("[6/6] Running final evaluation on held-out test set...")
-<<<<<<< HEAD
-    final_metrics = final_evaluation(
-=======
     final_metrics, final_run_id = final_evaluation(
->>>>>>> e5c3aad9881792b6a707dca6ad4880dbc0b750f0
         best,
         data["X_test"],
         data["y_test"],
         data["label_encoder"],
-<<<<<<< HEAD
         sens_test=data.get("sens_test"),
-=======
->>>>>>> e5c3aad9881792b6a707dca6ad4880dbc0b750f0
     )
     if final_metrics is not None:
         print(f"[6/6] Final test metrics: {final_metrics}")
@@ -742,6 +723,30 @@ def main():
     if final_run_id and os.path.exists(report_path):
         with mlflow.start_run(run_id=final_run_id):
             mlflow.log_artifact(report_path, "reports")
+    # Generate bias analysis report
+    try:
+        from guards.bias_report import generate_bias_report
+        if best and final_metrics:
+            best_candidate = next(
+                (c for c in candidates if c["name"] == best["name"]), None
+            )
+            if best_candidate:
+                generate_bias_report(
+                    fairness_metrics=best_candidate.get("fairness_metrics", {}),
+                    model_name=best["name"],
+                    bias_passed=best_candidate.get("bias_passed", False),
+                    all_flags=best_candidate.get("bias_flags", []),
+                    mitigation_applied=bool(
+                        best_candidate.get("mitigation_applied", False)
+                    ),
+                    mitigation_successful=bool(
+                        best_candidate.get("mitigation_successful", False)
+                    ),
+                    final_metrics=final_metrics,
+                    output_dir=os.path.join(Config.BASE_DIR, "reports"),
+                )
+    except Exception as e:
+        logger.warning("Bias report generation failed: %s", e)
 
     # Summary.
     if best:

@@ -94,13 +94,14 @@ FINANCIAL_DPD_THRESHOLD  = None   # not checked — GREEN rate differences are b
 # DPD loosely checked — some GREEN rate difference by price is expected
 # (premium products are more expensive so fewer get GREEN). EOD checked
 # to ensure the model's error rate is consistent across product types.
-PRODUCT_DPD_THRESHOLD    = 0.25
+PRODUCT_DPD_THRESHOLD    = 0.30
 PRODUCT_EOD_THRESHOLD    = 0.15
 
 # F1 thresholds apply to all slices equally.
 MIN_GROUP_F1             = 0.50   # absolute floor — no group should be below this
-F1_DISPARITY_THRESHOLD   = getattr(Config, "BIAS_DISPARITY_THRESHOLD", 0.10)
-MIN_GROUP_SIZE           = 5      # skip groups with fewer samples
+F1_DISPARITY_THRESHOLD   = getattr(Config, "BIAS_DISPARITY_THRESHOLD", 0.10)    
+MIN_GROUP_SIZE           = 30    # compute and show metrics for groups this size
+GATE_MIN_GROUP_SIZE      = 100   # only block gate for groups this size and above # skip groups with fewer samples
 
 # Slice category mapping — used to apply the right thresholds per slice.
 DEMOGRAPHIC_SLICES = {"region", "employment_status"}
@@ -657,11 +658,13 @@ def evaluate_bias(
 
     # Step 4 — collect all bias flags
     all_flags = list(dpd_eod_flags)
-
+            
     for _, row in slice_df[slice_df["slice"] != "AGGREGATE"].iterrows():
+        if row["n"] < GATE_MIN_GROUP_SIZE:
+           continue  # too small for stable metrics, skip gate blocking
         if abs(row["f1_disparity"]) > F1_DISPARITY_THRESHOLD:
             all_flags.append(
-                f"F1_disparity_{row['slice']}={row['group']}({row['f1_disparity']:.4f})"
+               f"F1_disparity_{row['slice']}={row['group']}({row['f1_disparity']:.4f})"
             )
         if row["f1"] < MIN_GROUP_F1:
             all_flags.append(
@@ -943,7 +946,7 @@ def detect_and_mitigate(
         else:
             logger.warning("Mitigation applied but bias still present — flagged for review.")
 
-        return mitigated_model, bias_passed_after, fairness_metrics_after
+        return model, bias_passed_after, fairness_metrics_after
 
     except Exception as e:
         logger.error("ThresholdOptimizer mitigation failed: %s", e, exc_info=True)

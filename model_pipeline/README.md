@@ -483,58 +483,52 @@ Layer 2 takes the Layer 1 financial label and can **only downgrade** it by at mo
 
 ### Phase 7 — Bias Detection
 
-**Objective:** Detect performance disparities across meaningful data subgroups after model training. Bias detection is performed **post-training** — run on validation set predictions after model fitting is complete.
+**Objective:** Detect performance disparities across data subgroups after model training. Bias detection is computed directly on the validation set using 17 uniquely defined slices.
 
-**Tasks:**
-- Define all slices in `Config.SENSITIVE_FEATURES`
-- Collect model predictions and ground truth per slice on validation set
-- Compute per-slice metrics: Accuracy, F1, AUC for each subgroup
-- Compare per-slice vs. aggregate metrics — flag disparities above configured threshold
-- Generate bias report: F1 bar chart per slice, disparity summary table
-- Log bias report and visualizations to MLflow
-- Document all detected disparities before moving to mitigation
+**Implemented — Post-Training Bias Detection (`guards/bias_detection.py`):**
+- Computes aggregate metrics (Accuracy, F1, GREEN rate).
+- Evaluates Demographic Parity Difference (DPD) and Equalized Odds Difference (EOD) via Fairlearn.
+- Flags any disparities that exceed 10% for DPD/EOD or strict F1 score violations across 17 slices.
+- Plugs into `run_pipeline.py` to gate any models containing bias.
+- Generates a comprehensive bias report alongside the evaluation summary.
 
 **Slice Definitions for SavVio:**
 
 | Slice Type | Subgroups |
 |------------|-----------|
-| Financial | Income bands, DTI bands, savings-to-income, emergency fund runway |
-| Product | Price bands, rating variance bands, review confidence bands (`rating_number`) |
+| Financial | Income bands, savings band, DTI bands, savings-to-income |
+| Product | Price bands, rating variance bands, review confidence bands (`rating_number`), category_name |
 | Demographic | Region, employment status |
 
 **Tools:**
 
 | Tool | Purpose |
 |------|---------|
-| Fairlearn | Slice fairness analysis via `MetricFrame` |
-| AIF360 | Alternative fairness toolkit |
-| Pandas groupby | Manual slice metric computation |
+| Fairlearn | Slice fairness analysis and Parity checks |
+| Pandas | Manual slice metric computation |
 
 ---
 
 ### Phase 8 — Bias Mitigation
 
-**Objective:** Apply mitigation strategies to address detected bias and re-evaluate until disparities fall within acceptable thresholds.
+**Objective:** Apply robust data rebalancing and mathematical boundary shifts to correct bias.
 
-**Tasks:**
-- Review bias report from Phase 7 — identify which slices exceed disparity threshold
-- Apply one or more mitigation strategies:
-  - **Re-weighting** — assign higher loss weights to underrepresented groups
-  - **Controlled re-sampling** — oversample sparse slices in training data
-  - **Decision threshold adjustment** — set different classification thresholds per slice
-  - **Stratified re-training** — retrain with stratified splits enforcing slice balance
-- Re-run bias detection (Phase 7) after mitigation
-- Compare pre- and post-mitigation disparity metrics
-- Document trade-offs made (e.g., slight drop in aggregate accuracy for fairness gain)
-- If disparity persists beyond threshold → block model promotion via CI/CD gate
+**Implemented — Dual-Tier Mitigation System:**
+1. **Pre-Training Mitigation (`data/bias_mitigation.py`)** 
+   - Dynamically oversamples under-represented clusters (e.g. Unemployed/Student profiles up to 12%, Premium products up to 6%).
+   - Generates synthetic cohorts (injecting "near-zero savings" vectors created from similar low-income users) to ensure model exposure.
+   - Caps over-represented groups (prolific reviewers limited to 50 max predictions) preventing dataset sway.
+2. **Post-Training Threshold Mitigation (`guards/bias_detection.py`)**
+   - In instances where the model's post-training bias detection (Phase 7) flags a violation, Fairlearn's `ThresholdOptimizer` is automatically fired.
+   - It performs mathematical boundary adjustment without recalculating XGBoost gradients, strictly forcing predictions into a passing fairness envelope.
+   - Followed by a re-evaluation to confirm the newly adjusted threshold successfully corrected the disparity.
 
 **Tools:**
 
 | Tool | Purpose |
 |------|---------|
-| Fairlearn | Fairness constraints and threshold optimization |
-| imbalanced-learn | Re-sampling strategies |
-| scikit-learn | Threshold adjustment per class |
+| Fairlearn | Boundary shifts and threshold optimization (`ThresholdOptimizer`) |
+| Pandas | Re-sampling, taxonomy collapsing, and synthetic cohort generation |
 
 ---
 

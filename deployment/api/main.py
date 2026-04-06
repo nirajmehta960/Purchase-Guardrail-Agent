@@ -29,6 +29,7 @@ from fastapi.responses import JSONResponse
 from deployment.api.config import APIConfig
 from deployment.api.dependencies import get_model_manager, require_db
 from deployment.api.inference import run_inference, _load_user_financial_profile
+from deployment.api.metrics import setup_metrics, track_active_request, release_active_request
 from deployment.api.model_loader import ModelManager
 from deployment.api.products_catalog import list_products as fetch_products
 from deployment.api.schemas import (
@@ -65,12 +66,8 @@ async def lifespan(app: FastAPI):
         manager.load()
         logger.info("All resources loaded successfully.")
     except Exception as e:
-        logger.error(
-            "Startup resource loading failed: %s", e, exc_info=True,
-        )
-        logger.warning(
-            "API will start but some features may be unavailable.",
-        )
+        logger.error("Startup resource loading failed: %s", e, exc_info=True)
+        logger.warning("API will start but some features may be unavailable.")
     yield
     logger.info("Shutting down SavVio API...")
 
@@ -95,6 +92,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Setup Prometheus instrumentation
+setup_metrics(app)
+
 
 # ---------------------------------------------------------------------------
 # Request Logging Middleware
@@ -102,16 +102,20 @@ app.add_middleware(
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    """Log every request with timing."""
+    """Log every request with timing for Cloud Logging / monitoring."""
+    track_active_request()
     start = time.time()
-    response = await call_next(request)
-    elapsed = time.time() - start
-    logger.info(
-        "request_log | method=%s path=%s status=%d latency=%.3fs",
-        request.method, request.url.path,
-        response.status_code, elapsed,
-    )
-    return response
+    try:
+        response = await call_next(request)
+        elapsed = time.time() - start
+        logger.info(
+            "request_log | method=%s path=%s status=%d latency=%.3fs",
+            request.method, request.url.path,
+            response.status_code, elapsed,
+        )
+        return response
+    finally:
+        release_active_request()
 
 
 # ---------------------------------------------------------------------------

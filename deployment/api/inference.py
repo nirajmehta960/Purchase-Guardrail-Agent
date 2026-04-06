@@ -21,6 +21,34 @@ import pandas as pd
 from sqlalchemy import text
 
 from deployment.api.config import APIConfig
+from deployment.api.model_loader import _ensure_import_paths
+
+_ensure_import_paths()
+
+from llm.intent_parser import parse_user_input
+from llm.product_resolver import resolve_product, resolve_product_by_id
+from llm.response_generator import RecommendationContext, generate_response, _generate_from_template
+from llm.guardrails import check_response
+from llm.prompts.response_templates import (
+    OUT_OF_SCOPE_RESPONSE,
+    PRODUCT_NOT_FOUND_RESPONSE,
+    USER_NOT_FOUND_RESPONSE,
+)
+from features.product_features import (
+    ProductFeatures,
+    compute_product_features,
+    compute_category_stats,
+)
+from features.review_features import ReviewFeatures, compute_review_features
+from deterministic_engine.downgrade_engine import DowngradeEngine
+
+from deployment.api.metrics import (
+    record_inference,
+    record_guardrail_failure,
+    record_layer2_downgrade,
+    observe_ml_confidence,
+    observe_llm_latency,
+)
 from deployment.api.schemas import (
     FinancialFeaturesView,
     PredictRequest,
@@ -100,10 +128,6 @@ def _load_user_financial_profile(user_id: str, db_engine) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def _resolve_product(request: PredictRequest, manager) -> ProductResolution | PredictResponse:
-    from llm.product_resolver import resolve_product, resolve_product_by_id
-    from llm.intent_parser import parse_user_input
-    from llm.prompts.response_templates import OUT_OF_SCOPE_RESPONSE, PRODUCT_NOT_FOUND_RESPONSE
-
     if request.product_id:
         match = resolve_product_by_id(request.product_id, manager.db_engine)
         if match:
@@ -116,7 +140,13 @@ def _resolve_product(request: PredictRequest, manager) -> ProductResolution | Pr
             explanation=PRODUCT_NOT_FOUND_RESPONSE, evaluation_mode="none",
         )
 
+    _t0 = time.time()
     parsed = parse_user_input(request.user_query, manager.llm_provider)
+    observe_llm_latency(
+        provider=getattr(manager.llm_provider, "provider_name", "unknown"),
+        operation="intent_parse",
+        latency=time.time() - _t0,
+    )
 
     if parsed.intent == "out_of_scope":
         return PredictResponse(
@@ -153,11 +183,33 @@ def _resolve_product(request: PredictRequest, manager) -> ProductResolution | Pr
 # Stage 3: Load Product Data
 # ---------------------------------------------------------------------------
 
-def _load_product_data(product: ProductResolution, manager) -> dict:
-    """Load product row + reviews from DB, return flat dict of raw + computed features."""
-    from features.product_features import compute_product_features, compute_category_stats
-    from features.review_features import compute_review_features
+def _format_review_snippets(reviews_df) -> list:
+    """Return up to 5 formatted review snippets sorted by helpfulness."""
+    if reviews_df.empty:
+        return []
+    top = reviews_df.sort_values("helpful_vote", ascending=False).head(5)
+    snippets = []
+    for _, r in top.iterrows():
+        rating = int(r.get("rating") or 0)
+        title = str(r.get("review_title") or "").strip()
+        text = str(r.get("review_text") or "").strip()
+        snippet = f"[{rating}\u2605]"
+        if title:
+            snippet += f" {title}"
+        if text:
+            snippet += f": {text[:120]}{'...' if len(text) > 120 else ''}"
+        if len(snippet) > 5:
+            snippets.append(snippet)
+    return snippets
 
+
+def _load_product_data(product: ProductResolution, manager) -> tuple[dict, list]:
+    """Load product row + reviews from DB.
+
+    Returns:
+        (feature_dict, review_snippets) — feature_dict is used for ML scoring,
+        review_snippets are formatted strings for the LLM explanation.
+    """
     empty = {
         "average_rating": 0, "rating_number": 0, "rating_variance": 0, "category": "unknown",
         "value_density": 0, "review_confidence": 0, "rating_polarization": 0,
@@ -168,7 +220,7 @@ def _load_product_data(product: ProductResolution, manager) -> dict:
     }
 
     if not product.product_id or not manager.db_engine:
-        return empty
+        return empty, []
 
     # Load product row
     try:
@@ -179,10 +231,10 @@ def _load_product_data(product: ProductResolution, manager) -> dict:
             ), {"pid": product.product_id}).fetchone()
     except Exception as e:
         logger.error("Failed to load product %s: %s", product.product_id, e)
-        return empty
+        return empty, []
 
     if row is None:
-        return empty
+        return empty, []
 
     cols = ["product_id", "product_name", "price", "average_rating", "rating_number", "rating_variance", "category"]
     product_row = pd.Series(dict(zip(cols, row)))
@@ -208,6 +260,7 @@ def _load_product_data(product: ProductResolution, manager) -> dict:
 
     pf = compute_product_features(product_row, cat_stats, max_rn)
     rf = compute_review_features(reviews_df)
+    snippets = _format_review_snippets(reviews_df)
 
     return {
         "average_rating": float(product_row["average_rating"] or 0),
@@ -215,7 +268,7 @@ def _load_product_data(product: ProductResolution, manager) -> dict:
         "rating_variance": float(product_row["rating_variance"] or 0),
         "category": str(product_row["category"] or "unknown"),
         **pf.to_dict(), **rf.to_dict(),
-    }
+    }, snippets
 
 
 # ---------------------------------------------------------------------------
@@ -249,23 +302,53 @@ def _score_ml_model(user_profile: dict, product: ProductResolution, product_data
 
 
 # ---------------------------------------------------------------------------
+# Stage 4b: Layer 2 Downgrade (product/review quality signals)
+# ---------------------------------------------------------------------------
+
+def _apply_layer2_downgrade(ml_label: str, product_data: dict):
+    """Run the DowngradeEngine against product/review features from product_data."""
+    pf = ProductFeatures(
+        value_density=float(product_data.get("value_density", 0)),
+        review_confidence=float(product_data.get("review_confidence", 0)),
+        rating_polarization=float(product_data.get("rating_polarization", 0)),
+        quality_risk_score=float(product_data.get("quality_risk_score", 0)),
+        cold_start_flag=int(product_data.get("cold_start_flag", 0)),
+        price_category_rank=float(product_data.get("price_category_rank", 0)),
+        category_rating_deviation=float(product_data.get("category_rating_deviation", 0)),
+    )
+    rf = ReviewFeatures(
+        verified_purchase_ratio=float(product_data.get("verified_purchase_ratio", 0)),
+        helpful_concentration=float(product_data.get("helpful_concentration", 0)),
+        sentiment_spread=float(product_data.get("sentiment_spread", 0)),
+        review_depth_score=float(product_data.get("review_depth_score", 0)),
+        reviewer_diversity=float(product_data.get("reviewer_diversity", 0)),
+        extreme_rating_ratio=float(product_data.get("extreme_rating_ratio", 0)),
+    )
+    return DowngradeEngine().evaluate(ml_label, pf, rf)
+
+
+# ---------------------------------------------------------------------------
 # Stage 5: LLM Response Generation + Guardrails
 # ---------------------------------------------------------------------------
 
-def _generate_explanation(product: ProductResolution, ml: MLScore, user_profile: dict, manager) -> str:
-    from llm.response_generator import RecommendationContext, generate_response, _generate_from_template
-    from llm.guardrails import check_response
-
-    recommendation_color = ml.predicted_label or "YELLOW"
+def _generate_explanation(product: ProductResolution, ml: MLScore, user_profile: dict, manager, downgrade_result=None, review_snippets: list = None) -> str:
+    final_color =(downgrade_result.final_label if downgrade_result else None) or ml.predicted_label or "YELLOW"
+    original_color = (downgrade_result.original_label if downgrade_result else None) or final_color
+    was_downgraded = downgrade_result.was_downgraded if downgrade_result else False
+    triggered_rules = (
+        (downgrade_result.product_triggers + downgrade_result.review_triggers)
+        if downgrade_result and was_downgraded
+        else []
+    )
 
     context = RecommendationContext(
         product_name=product.product_name or "the product",
         product_price=product.product_price or 0.0,
-        recommendation_color=recommendation_color,
-        original_color=recommendation_color,
-        was_downgraded=False,
-        triggered_rules=[],
-        confidence_scores={recommendation_color: ml.confidence or 0.0},
+        recommendation_color=final_color,
+        original_color=original_color,
+        was_downgraded=was_downgraded,
+        triggered_rules=triggered_rules,
+        confidence_scores={final_color: ml.confidence or 0.0},
         ml_confidence=ml.confidence,
         ml_unavailable_reason=ml.unavailable_reason,
         hypothetical_purchase=(product.evaluation_mode == "hypothetical"),
@@ -279,13 +362,20 @@ def _generate_explanation(product: ProductResolution, ml: MLScore, user_profile:
         monthly_expense_burden_ratio=float(user_profile.get("monthly_expense_burden_ratio", 0) or 0),
         price_to_income_ratio=ml.price_to_income_ratio,
         credit_score=user_profile.get("credit_score"),
-        review_snippets=[],
+        review_snippets=review_snippets or [],
     )
 
+    _t0 = time.time()
     response_text = generate_response(context, manager.llm_provider)
-    guardrail = check_response(response_text, recommendation_color, context)
+    observe_llm_latency(
+        provider=getattr(manager.llm_provider, "provider_name", "unknown"),
+        operation="response_gen",
+        latency=time.time() - _t0,
+    )
+    guardrail = check_response(response_text, final_color, context)
 
     if not guardrail.passed:
+        record_guardrail_failure()
         logger.warning("Guardrail violations: %s — falling back to template", guardrail.violations)
         response_text = _generate_from_template(context)
 
@@ -297,8 +387,6 @@ def _generate_explanation(product: ProductResolution, ml: MLScore, user_profile:
 # ---------------------------------------------------------------------------
 
 def run_inference(request: PredictRequest, manager) -> PredictResponse:
-    from llm.prompts.response_templates import USER_NOT_FOUND_RESPONSE
-
     start_time = time.time()
 
     if manager.db_engine is None:
@@ -318,17 +406,49 @@ def run_inference(request: PredictRequest, manager) -> PredictResponse:
     if isinstance(resolution, PredictResponse):
         return resolution
 
-    product_data = _load_product_data(resolution, manager)
+    product_data, review_snippets = _load_product_data(resolution, manager)
 
     ml = _score_ml_model(user_profile, resolution, product_data, manager)
 
-    explanation = _generate_explanation(resolution, ml, user_profile, manager)
+    # Layer 2 downgrade — catalog products only (hypothetical have no real features)
+    downgrade_result = None
+    if ml.predicted_label and resolution.product_id:
+        try:
+            downgrade_result = _apply_layer2_downgrade(ml.predicted_label, product_data)
+            if downgrade_result.was_downgraded:
+                record_layer2_downgrade(
+                    from_color=downgrade_result.original_label,
+                    to_color=downgrade_result.final_label,
+                )
+                logger.info(
+                    "Layer 2 downgrade: %s → %s (triggers: %s)",
+                    downgrade_result.original_label,
+                    downgrade_result.final_label,
+                    downgrade_result.product_triggers + downgrade_result.review_triggers,
+                )
+        except Exception as e:
+            logger.warning("Layer 2 downgrade engine failed: %s", e)
+
+    final_label = (downgrade_result.final_label if downgrade_result else None) or ml.predicted_label or "YELLOW"
+
+    explanation = _generate_explanation(resolution, ml, user_profile, manager, downgrade_result, review_snippets)
 
     elapsed = time.time() - start_time
-    logger.info("Inference complete: %s (%.3fs)", ml.predicted_label, elapsed)
+    logger.info("Inference complete: %s (%.3fs)", final_label, elapsed)
+
+    # ------------------------------------------------------------------
+    # Prometheus Metrics Recording
+    # ------------------------------------------------------------------
+    record_inference(
+        color=final_label,
+        evaluation_mode=resolution.evaluation_mode,
+        latency=elapsed,
+    )
+    if ml.confidence is not None:
+        observe_ml_confidence(ml.confidence)
 
     return PredictResponse(
-        recommendation=ml.predicted_label or "YELLOW",
+        recommendation=final_label,
         confidence=ml.confidence,
         ml_unavailable_reason=ml.unavailable_reason,
         explanation=explanation,

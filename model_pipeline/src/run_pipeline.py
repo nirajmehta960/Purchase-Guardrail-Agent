@@ -160,6 +160,22 @@ def prepare_data():
     # Feature engineering + deterministic labeling (GREEN/YELLOW/RED).
     X, y_raw, scenarios_raw = build_training_data(is_training=True)
 
+    # Remove synthetic rows (injected by augment_near_zero_savings) before splitting.
+    # The docstring for augment_near_zero_savings requires these be excluded from
+    # any held-out evaluation set; without this filter they contaminate val/test
+    # bias metrics for the savings_band slice.
+    if "synthetic_flag" in scenarios_raw.columns:
+        real_mask = (scenarios_raw["synthetic_flag"] != 1).values
+        n_synthetic = int((~real_mask).sum())
+        if n_synthetic > 0:
+            logger.info("Removing %d synthetic rows before train/val/test split.", n_synthetic)
+            scenarios_raw = scenarios_raw[real_mask].reset_index(drop=True)
+            if hasattr(X, "reset_index"):
+                X = X[real_mask].reset_index(drop=True)
+            else:
+                X = X[real_mask]
+            y_raw = y_raw[real_mask].reset_index(drop=True)
+
     # Encode string labels into integers for model training.
     label_encoder = LabelEncoder()
     y = label_encoder.fit_transform(y_raw)
@@ -293,6 +309,7 @@ def train_candidates(
                         if hasattr(model, "predict_proba")
                         else None
                     )
+                    green_class_idx = int(label_encoder.transform(["GREEN"])[0])
                     model, bias_passed, fairness_metrics = detect_and_mitigate(
                         model,
                         X_train,
@@ -304,6 +321,7 @@ def train_candidates(
                         sens_val,
                         scenarios_raw=scenarios_val,
                         y_prob_val=y_prob_val,
+                        green_class_idx=green_class_idx,
                     )
                     mlflow.log_metric("bias_gate_passed", int(bias_passed))
 
@@ -377,6 +395,7 @@ def tune_candidate(candidates, data):
                         if hasattr(tuned_model, "predict_proba")
                         else None
                     )
+                    green_class_idx = int(data["label_encoder"].transform(["GREEN"])[0])
                     tuned_model, bias_passed, fairness_metrics = detect_and_mitigate(
                         tuned_model,
                         data["X_train"],
@@ -388,6 +407,7 @@ def tune_candidate(candidates, data):
                         data["sens_val"],
                         scenarios_raw=data.get("scenarios_val"),
                         y_prob_val=y_prob_val,
+                        green_class_idx=green_class_idx,
                     )
                     mlflow.log_metric("bias_gate_passed", int(bias_passed))
 

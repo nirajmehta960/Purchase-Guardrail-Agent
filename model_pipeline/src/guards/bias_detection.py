@@ -368,13 +368,14 @@ def _compute_all_slice_metrics(
     y_prob: Optional[np.ndarray],
     full_sf: pd.DataFrame,
     classes: np.ndarray,
+    green_class_idx: Optional[int] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, float]]:
     """
     Compute accuracy, F1, AUC, GREEN rate, and F1 disparity per group
     for every slice column. Returns a summary DataFrame and a flat dict
     ready for mlflow.log_metrics().
     """
-    green_idx = int(classes.min())  # GREEN=0 after LabelEncoder alphabetical sort
+    green_idx = green_class_idx if green_class_idx is not None else int(classes.min())
     agg_acc   = float(accuracy_score(y_true, y_pred))
     agg_f1    = float(f1_score(y_true, y_pred, average="weighted", zero_division=0))
     agg_auc   = _compute_auc(y_true, y_prob, classes)
@@ -447,6 +448,7 @@ def _compute_dpd_eod(
     y_pred: np.ndarray,
     full_sf: pd.DataFrame,
     classes: np.ndarray,
+    green_class_idx: Optional[int] = None,
 ) -> Tuple[Dict[str, float], List[str]]:
     """
     Compute DPD and EOD for each sensitive feature column.
@@ -459,7 +461,7 @@ def _compute_dpd_eod(
       EOD **monitor-only** (logged / tagged, do not fail the gate).
     - Product:     DPD ≤ 0.25, EOD ≤ 0.15
     """
-    green_idx  = int(classes.min())
+    green_idx  = green_class_idx if green_class_idx is not None else int(classes.min())
     y_bin_true = (pd.Series(y_true) == green_idx).astype(int).reset_index(drop=True)
     y_bin_pred = (pd.Series(y_pred) == green_idx).astype(int).reset_index(drop=True)
 
@@ -616,6 +618,7 @@ def evaluate_bias(
     sensitive_features: pd.DataFrame,
     y_prob: Optional[np.ndarray] = None,
     scenarios_raw: Optional[pd.DataFrame] = None,
+    green_class_idx: Optional[int] = None,
 ) -> Tuple[Dict[str, float], bool]:
     """
     Post-training bias detection across 17 slices.
@@ -627,9 +630,16 @@ def evaluate_bias(
         y_prob:             Predicted probabilities shape (n, n_classes). Optional.
         scenarios_raw:      Raw scenario DataFrame for deriving financial
                             and product slices. Optional but recommended.
+        green_class_idx:    Encoded integer for the GREEN label. Derive from
+                            label_encoder.transform(["GREEN"])[0] at the call
+                            site. When None, falls back to classes.min() which
+                            assumes alphabetical LabelEncoder order (GREEN=0).
 
     Returns:
-        (fairness_metrics dict, bias_passed bool)
+        (fairness_metrics dict, bias_passed bool, all_flags list)
+        ``all_flags`` contains the string identifiers of every violated
+        threshold and is used by detect_and_mitigate to select the
+        ThresholdOptimizer mitigation axis.
     """
     logger.info("=" * 60)
     logger.info("POST-TRAINING BIAS DETECTION")
@@ -647,12 +657,14 @@ def evaluate_bias(
 
     # Step 2 — per-group metrics (accuracy, F1, AUC, GREEN rate, disparity)
     slice_df, flat_metrics = _compute_all_slice_metrics(
-        y_true_arr, y_pred_arr, y_prob, full_sf, classes
+        y_true_arr, y_pred_arr, y_prob, full_sf, classes,
+        green_class_idx=green_class_idx,
     )
 
     # Step 3 — DPD and EOD via Fairlearn
     dpd_eod_metrics, dpd_eod_flags = _compute_dpd_eod(
-        y_true_arr, y_pred_arr, full_sf, classes
+        y_true_arr, y_pred_arr, full_sf, classes,
+        green_class_idx=green_class_idx,
     )
     flat_metrics.update(dpd_eod_metrics)
 
@@ -704,7 +716,7 @@ def evaluate_bias(
     except Exception as e:
         logger.warning("MLflow logging failed in evaluate_bias: %s", e)
 
-    return flat_metrics, bias_passed
+    return flat_metrics, bias_passed, all_flags
 
 
 # ---------------------------------------------------------------------------
@@ -738,11 +750,37 @@ def attach_savings_band_to_sensitive(
     return out
 
 
-def _primary_mitigation_axis(sensitive_df: pd.DataFrame) -> str:
+def _primary_mitigation_axis(
+    sensitive_df: pd.DataFrame,
+    dpd_eod_flags: Optional[List[str]] = None,
+) -> str:
     """
-    Sensitive column for ThresholdOptimizer: prefer ``savings_band`` when present,
-    then ``employment_status``, then ``region``, else first column.
+    Sensitive column for ThresholdOptimizer.
+
+    When ``dpd_eod_flags`` is provided (from _compute_dpd_eod), pick the
+    flagged column that is present in ``sensitive_df``, preferring demographic
+    slices over financial ones so the optimizer targets the root cause.
+    Falls back to the hard-coded priority order when no flagged column is
+    available in ``sensitive_df``.
     """
+    if dpd_eod_flags:
+        flagged_cols: List[str] = []
+        for flag in dpd_eod_flags:
+            for prefix in ("DPD_", "EOD_"):
+                if flag.startswith(prefix):
+                    col = flag[len(prefix):].split("=")[0]
+                    if col in sensitive_df.columns and col not in flagged_cols:
+                        flagged_cols.append(col)
+                    break
+        # Prefer demographic slices (the model must not discriminate on these).
+        for col in flagged_cols:
+            if col in DEMOGRAPHIC_SLICES:
+                return col
+        # Then any other flagged column present in sensitive_df.
+        for col in flagged_cols:
+            return col
+
+    # Hard-coded fallback priority.
     for col in ("savings_band", "employment_status", "region"):
         if col in sensitive_df.columns:
             return col
@@ -827,6 +865,7 @@ def mitigate_bias(
     sensitive_train: pd.DataFrame,
     green_class_idx: int,
     constraint: str = "demographic_parity",
+    dpd_eod_flags: Optional[List[str]] = None,
 ):
     """
     Apply Fairlearn ThresholdOptimizer to reduce disparity on GREEN vs not-GREEN.
@@ -836,9 +875,11 @@ def mitigate_bias(
     predict_proba[:, 1].     Uses `prefit=True` so the multiclass base model is not
     re-fit on binary labels.
 
-    Fairness axis priority: ``savings_band`` → ``employment_status`` → ``region``.
+    The mitigation axis is chosen from the actual flagged slices in
+    ``dpd_eod_flags`` (demographic columns preferred), falling back to a
+    hard-coded priority order when no flagged column is available.
     """
-    primary_col = _primary_mitigation_axis(sensitive_train)
+    primary_col = _primary_mitigation_axis(sensitive_train, dpd_eod_flags=dpd_eod_flags)
     primary_sf = sensitive_train[primary_col].astype(str)
 
     y_train_arr = np.asarray(y_train)
@@ -879,6 +920,7 @@ def detect_and_mitigate(
     sensitive_val: pd.DataFrame,
     scenarios_raw: Optional[pd.DataFrame] = None,
     y_prob_val: Optional[np.ndarray] = None,
+    green_class_idx: Optional[int] = None,
 ) -> Tuple[object, bool, Dict[str, float]]:
     """
     Full post-training bias detection + conditional mitigation.
@@ -890,20 +932,23 @@ def detect_and_mitigate(
         4. Return (final_model, bias_passed, fairness_metrics)
 
     Args:
-        scenarios_raw: Per evaluate_bias — typically **scenarios_val** (row-aligned with val).
+        scenarios_raw:    Per evaluate_bias — typically **scenarios_val** (row-aligned with val).
+        green_class_idx:  Encoded integer for the GREEN label from label_encoder.
+                          When None, falls back to the minimum encoded class value.
     """
     # Step 1 — detect
-    fairness_metrics, bias_passed = evaluate_bias(
+    fairness_metrics, bias_passed, dpd_eod_flags = evaluate_bias(
         y_val, y_pred_val, sensitive_val,
         y_prob=y_prob_val,
         scenarios_raw=scenarios_raw,
+        green_class_idx=green_class_idx,
     )
 
     if bias_passed:
         mlflow.log_metric("bias_mitigation_applied", 0)
         return model, True, fairness_metrics
 
-    green_idx = _green_class_index(y_train)
+    green_idx = green_class_idx if green_class_idx is not None else _green_class_index(y_train)
 
     # Step 2 — mitigate (binary GREEN vs rest; Fairlearn requires 0/1 labels)
     logger.warning("Bias gate FAILED — applying ThresholdOptimizer.")
@@ -912,10 +957,11 @@ def detect_and_mitigate(
             model, X_train, y_train, sensitive_train,
             green_class_idx=green_idx,
             constraint="demographic_parity",
+            dpd_eod_flags=dpd_eod_flags,
         )
 
-        # Step 3 — re-predict on validation (same sensitive axis as fit)
-        primary_col = _primary_mitigation_axis(sensitive_val)
+        # Step 3 — re-predict on validation using the same axis the optimizer was fit on.
+        primary_col = _primary_mitigation_axis(sensitive_val, dpd_eod_flags=dpd_eod_flags)
         primary_sf_val = sensitive_val[primary_col].astype(str)
 
         if len(X_val) != len(y_val) or len(primary_sf_val) != len(y_val):
@@ -933,9 +979,10 @@ def detect_and_mitigate(
         )
 
         logger.info("Re-evaluating after mitigation...")
-        fairness_metrics_after, bias_passed_after = evaluate_bias(
+        fairness_metrics_after, bias_passed_after, _ = evaluate_bias(
             y_val, y_pred_mitigated, sensitive_val,
             scenarios_raw=scenarios_raw,
+            green_class_idx=green_class_idx,
         )
 
         mlflow.log_metric("bias_mitigation_applied", 1)

@@ -230,5 +230,6 @@ class TestTuneBestCandidate:
         X_tr, y_tr, X_val, y_val = small_dataset
         result = tune_best_candidate(mixed, X_tr, y_tr, X_val, y_val)
 
+        # random_forest is not tunable so xgboost should be picked
         model_type, _, _, _ = result
         assert model_type == "xgboost"

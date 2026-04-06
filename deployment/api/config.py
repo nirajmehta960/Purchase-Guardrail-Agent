@@ -91,6 +91,15 @@ class APIConfig:
     MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "")
 
     # ---------------------------------------------------------------------------
+    # Monitoring (Prometheus / Grafana)
+    # ---------------------------------------------------------------------------
+    METRICS_ENABLED = os.getenv("METRICS_ENABLED", "true").lower() == "true"
+    METRICS_PREFIX = os.getenv("METRICS_PREFIX", "savvio")
+    GRAFANA_CLOUD_REMOTE_WRITE_URL = os.getenv("GRAFANA_CLOUD_REMOTE_WRITE_URL", "")
+    GRAFANA_CLOUD_USERNAME = os.getenv("GRAFANA_CLOUD_USERNAME", "")
+    GRAFANA_CLOUD_API_KEY = os.getenv("GRAFANA_CLOUD_API_KEY", "")
+
+    # ---------------------------------------------------------------------------
     # Model Pipeline Source Paths (for importing existing modules)
     # ---------------------------------------------------------------------------
     MODEL_PIPELINE_SRC = str(_PROJECT_ROOT / "model_pipeline" / "src")

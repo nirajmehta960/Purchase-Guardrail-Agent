@@ -178,6 +178,15 @@ jobs:
         run: |
           MLFLOW_TRACKING_URI=http://127.0.0.1:5000 python src/run_pipeline.py
 
+      - name: Upload Metrics Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-metrics
+          path: |
+            model_pipeline/metrics.txt
+            model_pipeline/bias_metrics.txt
+          if-no-files-found: ignore
+
   # ===========================================================================
   # JOB 3 — DB Connection Check
   # ===========================================================================
@@ -261,6 +270,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Download Metrics Artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: model-metrics
+          path: model_pipeline
+
       - name: Check validation thresholds
         working-directory: model_pipeline
         env:
@@ -314,6 +330,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Download Metrics Artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: model-metrics
+          path: model_pipeline
+
       - name: Check bias thresholds
         working-directory: model_pipeline
         env:
@@ -357,6 +380,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Download Metrics Artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: model-metrics
+          path: model_pipeline
 
       - name: Check rollback threshold
         working-directory: model_pipeline

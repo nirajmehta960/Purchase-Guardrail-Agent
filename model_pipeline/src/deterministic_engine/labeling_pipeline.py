@@ -114,9 +114,14 @@ def apply_deterministic_labels(
 ) -> pd.DataFrame:
     """Apply Layer 1 financial labels and optional Layer 2 downgrade labels."""
     engine = DecisionEngine()
+    engine_logger = logging.getLogger("deterministic_engine.financial_engine")
+    old_level = engine_logger.level
+    engine_logger.setLevel(logging.WARNING)
 
     labeled = scenarios.copy()
     labeled["_l1_label"] = labeled.apply(engine.decide_row, axis=1)
+    
+    engine_logger.setLevel(old_level)
     labeled["final_recommendation"] = labeled["_l1_label"]
 
     if reviews_df is None:

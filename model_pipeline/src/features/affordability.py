@@ -36,12 +36,12 @@ def compute_affordability_values(
     cumulative_spend: float = 0.0,
 ) -> Dict[str, Optional[float]]:
     """Compute the six financial affordability features for one user-product pair."""
-    income = user_financial_profile.get("monthly_income", 0.0)
-    discretionary = user_financial_profile.get("discretionary_income", 0.0)
-    savings = user_financial_profile.get("liquid_savings", 0.0)
-    expenses = user_financial_profile.get("monthly_expenses", 0.0)
-    emi = user_financial_profile.get("monthly_emi", 0.0)
-    loan_amount = user_financial_profile.get("loan_amount", 0.0)
+    income = float(user_financial_profile.get("monthly_income") or 0.0)
+    discretionary = float(user_financial_profile.get("discretionary_income") or 0.0)
+    savings = float(user_financial_profile.get("liquid_savings") or 0.0)
+    expenses = float(user_financial_profile.get("monthly_expenses") or 0.0)
+    emi = float(user_financial_profile.get("monthly_emi") or 0.0)
+    loan_amount = float(user_financial_profile.get("loan_amount") or 0.0)
     credit_score = user_financial_profile.get("credit_score")
 
     # Spend prior approved purchases from discretionary income first, then savings.

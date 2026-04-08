@@ -139,14 +139,14 @@ jobs:
           prods_df.to_sql('products', engine, if_exists='append', index=False)
           
           reviews_df = pd.DataFrame({
-              'user_id': np.random.choice(users_df['user_id'], 100),
-              'product_id': np.random.choice(prods_df['product_id'], 100),
-              'rating': np.random.uniform(1, 5, 100),
-              'verified_purchase': [True] * 100,
-              'helpful_vote': [0] * 100
-          })
+              'user_id': np.random.choice(users_df['user_id'], 200),
+              'product_id': np.random.choice(prods_df['product_id'], 200),
+              'rating': np.random.uniform(1, 5, 200),
+              'verified_purchase': [True] * 200,
+              'helpful_vote': [0] * 200
+          }).drop_duplicates(subset=['user_id', 'product_id'])
           reviews_df.to_sql('reviews', engine, if_exists='append', index=False)
-          print('Successfully seeded database with 50 mock users and 50 mock products!')
+          print(f'Successfully seeded database with 50 mock users, 50 products, and {len(reviews_df)} reviews!')
           "
 
       - name: Start MLflow server

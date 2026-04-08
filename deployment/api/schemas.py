@@ -60,43 +60,12 @@ class PredictRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Layer 2 — product / review signals for UI (matches feature engineering)
+# Financial Features View
 # ---------------------------------------------------------------------------
 
 
-class ProductSignalsView(BaseModel):
-    """Listing stats + engineered product features used in Layer 2 / ML."""
-
-    average_rating: Optional[float] = None
-    rating_count: Optional[int] = None
-    rating_variance: Optional[float] = None
-    category: Optional[str] = None
-    price: Optional[float] = None
-    price_position_in_category: Optional[str] = None
-    rating_vs_category: Optional[str] = None
-    cold_start: Optional[bool] = None
-    value_density: Optional[float] = None
-    review_confidence: Optional[float] = None
-    rating_polarization: Optional[float] = None
-    quality_risk_score: Optional[float] = None
-    price_category_rank: Optional[float] = None
-    category_rating_deviation: Optional[float] = None
-
-
-class ReviewSignalsView(BaseModel):
-    """Aggregated review features (same signals as training)."""
-
-    verified_purchase_ratio: Optional[float] = None
-    helpful_concentration: Optional[float] = None
-    sentiment_spread: Optional[float] = None
-    review_depth_score: Optional[float] = None
-    reviewer_diversity: Optional[float] = None
-    extreme_rating_ratio: Optional[float] = None
-    sentiment_interpretation: Optional[str] = None
-
-
 class FinancialFeaturesView(BaseModel):
-    """Layer 1 financial inputs: 5 DB profile ratios + 6 affordability features."""
+    """Financial inputs: 5 DB profile ratios + 6 affordability features."""
 
     discretionary_income: Optional[float] = None
     debt_to_income_ratio: Optional[float] = None
@@ -116,28 +85,30 @@ class FinancialFeaturesView(BaseModel):
 # ---------------------------------------------------------------------------
 
 class PredictResponse(BaseModel):
-    """Response body for the /predict endpoint."""
+    """Response body for the /predict endpoint.
+
+    The ML model is the authority for GREEN/YELLOW/RED decisions.
+    """
     recommendation: str = Field(
         ...,
-        description="Recommendation color: GREEN, YELLOW, or RED.",
+        description="Recommendation color: GREEN, YELLOW, or RED (from ML model).",
     )
     confidence: Optional[float] = Field(
         default=None,
         description=(
-            "ML model confidence for the label (0–1) when the classifier is loaded; "
-            "null if the model is not available (deterministic engine still applies)."
+            "ML model confidence for the predicted label (0–1); "
+            "null if the model is not available."
         ),
     )
     ml_unavailable_reason: Optional[str] = Field(
         default=None,
         description=(
-            "When confidence is null: no_model, no_pipeline, or scoring_error — "
-            "for clearer UI than a generic 'not loaded' message."
+            "When confidence is null: no_model, no_pipeline, or scoring_error."
         ),
     )
     explanation: str = Field(
         ...,
-        description="Natural language explanation from the LLM wrapper.",
+        description="Natural language explanation from the LLM.",
     )
     product_name: Optional[str] = Field(
         default=None,
@@ -147,77 +118,37 @@ class PredictResponse(BaseModel):
         default=None,
         description="Resolved product price.",
     )
-    triggered_rules: list[str] = Field(
-        default_factory=list,
-        description="List of deterministic engine rules that triggered.",
-    )
-    was_downgraded: bool = Field(
-        default=False,
-        description="Whether the Layer 2 downgrade engine changed the color.",
-    )
-    guardrail_passed: bool = Field(
-        default=True,
-        description="Whether the LLM response passed all 6 safety guardrail checks.",
-    )
     evaluation_mode: str = Field(
         default="catalog",
         description="'catalog' if a product row was matched; 'hypothetical' if only price + description from the query.",
     )
-    layer2_evaluated: bool = Field(
-        default=False,
-        description="True when Layer 2 (DowngradeEngine) ran with product + review features.",
-    )
-    review_count: int = Field(
-        default=0,
-        description="Number of review rows loaded for this product_id (0 if none).",
-    )
-    layer2_product_triggers: list[str] = Field(
-        default_factory=list,
-        description="Product-side downgrade rule ids evaluated (may be empty).",
-    )
-    layer2_review_triggers: list[str] = Field(
-        default_factory=list,
-        description="Review-side downgrade rule ids evaluated (may be empty).",
-    )
-    product_signals: Optional[ProductSignalsView] = Field(
-        default=None,
-        description="Product listing + engineered product features when Layer 2 ran.",
-    )
-    review_signals: Optional[ReviewSignalsView] = Field(
-        default=None,
-        description="Engineered review aggregate features when Layer 2 ran.",
-    )
     affordability_score: Optional[float] = Field(
         default=None,
-        description="discretionary − price for this evaluation (Layer 1 inputs).",
+        description="Discretionary income minus price for this evaluation.",
     )
     affordability_score_unreliable: bool = Field(
         default=False,
-        description="True when raw affordability was outside safe bounds (clamped for rules).",
+        description="True when raw affordability was outside safe bounds.",
     )
     emergency_fund_months: Optional[float] = Field(
         default=None,
-        description="User emergency fund runway (months) from profile — for UI summaries.",
+        description="User emergency fund runway (months) from profile.",
     )
     debt_to_income_ratio: Optional[float] = Field(
         default=None,
-        description="User debt-to-income ratio 0–1 from profile — for UI summaries.",
+        description="User debt-to-income ratio 0–1 from profile.",
     )
     financial_features: Optional[FinancialFeaturesView] = Field(
         default=None,
-        description="Full Layer 1 feature snapshot (user profile + purchase pair).",
-    )
-    layer1_recommendation: Optional[str] = Field(
-        default=None,
-        description="Deterministic engine label before Layer 2 downgrade (GREEN/YELLOW/RED).",
+        description="Full financial feature snapshot (user profile + purchase pair).",
     )
     ml_predicted_label: Optional[str] = Field(
         default=None,
-        description="ML classifier label when scoring succeeds (informational only).",
+        description="ML classifier predicted label (GREEN/YELLOW/RED).",
     )
     ml_model_name: str = Field(
         default="SavVio classifier",
-        description="Display name for ML layer in UI.",
+        description="Display name for ML model in UI.",
     )
 
 

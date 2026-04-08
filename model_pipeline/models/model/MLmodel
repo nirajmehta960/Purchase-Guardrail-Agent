@@ -1,0 +1,25 @@
+flavors:
+  python_function:
+    artifacts:
+      classifier:
+        path: artifacts/classifier.pkl
+        uri: /app/models/classifier.pkl
+      feature_pipeline:
+        path: artifacts/feature_pipeline.pkl
+        uri: /app/models/artifacts/feature_pipeline.pkl
+      label_encoder:
+        path: artifacts/label_encoder.pkl
+        uri: /app/models/label_encoder.pkl
+    cloudpickle_version: 3.1.2
+    code: null
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.pyfunc.model
+    python_model: python_model.pkl
+    python_version: 3.11.15
+    streamable: false
+mlflow_version: 2.19.0
+model_size_bytes: 476221
+model_uuid: 9b30139638e6443fa562fcef08a815bd
+utc_time_created: '2026-04-03 23:17:11.189092'

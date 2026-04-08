@@ -26,10 +26,8 @@ MANIFEST
 
 # Virtual Environment
 venv/
-env/
-ENV/
 .venv
-.savvio_venv/
+test_venv/
 
 # IDEs
 .vscode/
@@ -63,7 +61,7 @@ data_pipeline/dags/data/quarantine/*
 !data_pipeline/data/validated/.gitkeep
 
 # Model artifacts (tracked with DVC or model registry)
-model_pipeline/models/*
+# model_pipeline/models/*
 !model_pipeline/models/.gitkeep
 model_pipeline/data/*
 !model_pipeline/data/.gitkeep
@@ -163,3 +161,9 @@ coverage/
 model_pipeline/reports/
 model_pipeline/reports/sensitivity/
 !model_pipeline/reports/.gitkeep
+
+
+# Copilot and claude instructions
+CLAUDE.md
+copilot-instructions.mddeployment/monitoring/.env
+deployment/monitoring/reports/

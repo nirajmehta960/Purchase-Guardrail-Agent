@@ -11,28 +11,7 @@ import {
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { useUser } from "../context/UserContext";
-
-function fmtMoney(n: number | null | undefined): string {
-  if (n == null || Number.isNaN(n)) return "—";
-  return `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-}
-
-function fmtPct(n: number | null | undefined): string {
-  if (n == null || Number.isNaN(n)) return "—";
-  return `${(n * 100).toFixed(1)}%`;
-}
-
-/** Interpret ratio 0–1; green / yellow / red */
-function ratioHealth(
-  value: number | null | undefined,
-  goodMax: number,
-  warnMax: number,
-): "good" | "warn" | "bad" | "unknown" {
-  if (value == null || Number.isNaN(value)) return "unknown";
-  if (value <= goodMax) return "good";
-  if (value <= warnMax) return "warn";
-  return "bad";
-}
+import { fmtMoney, fmtPct, ratioHealth } from "../lib/formatters";
 
 const container = { hidden: {}, show: { transition: { staggerChildren: 0.06 } } };
 const item = { hidden: { opacity: 0, y: 16 }, show: { opacity: 1, y: 0 } };

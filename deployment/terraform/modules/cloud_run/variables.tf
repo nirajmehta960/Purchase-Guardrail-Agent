@@ -80,3 +80,31 @@ variable "labels" {
   type        = map(string)
   default     = {}
 }
+
+# ---------------------------------------------------------------------------
+# Monitoring (Prometheus / Grafana Cloud)
+# ---------------------------------------------------------------------------
+
+variable "metrics_enabled" {
+  description = "Enable Prometheus metrics on the API container"
+  type        = bool
+  default     = true
+}
+
+variable "grafana_remote_write_url" {
+  description = "Grafana Cloud Prometheus remote-write URL"
+  type        = string
+  default     = ""
+}
+
+variable "grafana_cloud_username" {
+  description = "Grafana Cloud Prometheus instance username"
+  type        = string
+  default     = ""
+}
+
+variable "grafana_cloud_api_key_secret" {
+  description = "Secret Manager secret ID for Grafana Cloud API key"
+  type        = string
+  default     = ""
+}

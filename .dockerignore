@@ -1,0 +1,15 @@
+.git
+.github
+node_modules
+venv
+.venv
+__pycache__
+*.pyc
+tmp/
+temp/
+.vscode
+.idea
+data_pipeline/data/raw/
+data_pipeline/data/processed/
+data_pipeline/data/validated/
+data_pipeline/dags/data/quarantine/

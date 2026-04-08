@@ -163,3 +163,6 @@ coverage/
 model_pipeline/reports/
 model_pipeline/reports/sensitivity/
 !model_pipeline/reports/.gitkeep
+
+!.dockerignore
+!deployment/frontend/.dockerignore

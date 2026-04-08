@@ -166,3 +166,4 @@ model_pipeline/reports/sensitivity/
 # Copilot and claude instructions
 CLAUDE.md
 copilot-instructions.mddeployment/monitoring/.env
+deployment/monitoring/reports/

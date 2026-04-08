@@ -97,12 +97,14 @@ jobs:
         env:
           IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-api
         run: |
+          mv .gitignore .gitignore.bak || true
           docker buildx build \
             --platform linux/amd64 \
             -f deployment/api/Dockerfile \
             -t $IMAGE:${{ github.sha }} \
             -t $IMAGE:latest \
             --push .
+          mv .gitignore.bak .gitignore || true
 
   build-push-frontend:
     name: Build & Push Frontend
@@ -124,6 +126,7 @@ jobs:
         env:
           IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-frontend
         run: |
+          mv .gitignore .gitignore.bak || true
           docker buildx build \
             --platform linux/amd64 \
             -f deployment/frontend/Dockerfile \
@@ -131,6 +134,7 @@ jobs:
             -t $IMAGE:${{ github.sha }} \
             -t $IMAGE:latest \
             --push deployment/frontend/
+          mv .gitignore.bak .gitignore || true
 
   # ---------------------------------------------------------------------------
   # Deploy to Cloud Run

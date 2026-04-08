@@ -33,8 +33,8 @@ logger = logging.getLogger(__name__)
 # Load environment variables and config
 # ---------------------------------------------------------------------------
 
-# Load .env from the same directory as this file
-_ENV_PATH = Path(__file__).parent / ".env"
+# Load .env from monitoring/ (one level up — shared with the monitoring stack)
+_ENV_PATH = Path(__file__).parent.parent / ".env"
 load_dotenv(_ENV_PATH)
 
 # Load alert_config.yaml from the same directory as this file
@@ -121,7 +121,7 @@ def send_slack_alert(summary: Dict) -> None:
 def run_drift_detection(
     baseline_path: str,
     current_data_path: str,
-    output_dir: str = "deployment/monitoring/reports",
+    output_dir: str = str(Path(__file__).parent.parent / "reports"),
 ) -> Dict:
     """
     Compare current production data against training baseline.
@@ -278,10 +278,10 @@ if __name__ == "__main__":
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
+    _monitoring_dir = Path(__file__).parent.parent
     summary = run_drift_detection(
-        baseline_path="deployment/monitoring/baseline_data.csv",
-        current_data_path="deployment/monitoring/current_production_data.csv",
-        output_dir="deployment/monitoring/reports",
+        baseline_path=str(_monitoring_dir / "data" / "baseline_data.csv"),
+        current_data_path=str(_monitoring_dir / "data" / "current_production_data.csv"),
     )
 
     print(f"\nDrift Detection Complete")

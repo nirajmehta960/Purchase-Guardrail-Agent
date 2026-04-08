@@ -2,6 +2,8 @@ name: Deployment CI/CD
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 8 * * 1"
   #   inputs:
   #     environment:
   #       description: "Target environment"
@@ -179,3 +181,29 @@ jobs:
     if: success()
     steps:
       - run: echo "PASSED — ${{ env.ENVIRONMENT }} — ${{ github.sha }}"
+  drift-detection:
+    name: Drift Detection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install evidently==0.4.30 pandas numpy scikit-learn
+
+      - name: Run drift detector
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          python deployment/monitoring/drift_detector.py
+
+      - name: Upload drift report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-report-${{ github.run_id }}
+          path: deployment/monitoring/reports/
+          retention-days: 30

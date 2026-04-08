@@ -442,6 +442,8 @@ def save_best_model_local(best, label_encoder):
         artifact_uri=champion_model_uri,
         dst_path=Config.MODEL_SAVE_DIR,
     )
+    import os
+    os.makedirs(Config.ENCODER_SAVE_DIR, exist_ok=True)
     joblib.dump(label_encoder, f"{Config.ENCODER_SAVE_DIR}/label_encoder.pkl")
     logger.info("Saved champion model locally at %s and encoder at %s", downloaded_model_path, Config.ENCODER_SAVE_DIR)
 

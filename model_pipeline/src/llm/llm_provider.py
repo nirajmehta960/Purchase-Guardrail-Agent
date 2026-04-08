@@ -2,9 +2,9 @@
 LLM provider abstraction for SavVio.
 
 Active provider: OpenRouter (paid, no rate limits).
-  Model: google/gemini-2.0-flash-001
-  Why: best instruction-following for structured 4-part financial advice prompts,
-       ~$0.10/M input + $0.40/M output tokens — fractions of a cent per query.
+  Model: google/gemini-2.5-flash
+  Why: strong instruction-following for structured 4-part financial advice prompts,
+       production-stable (no deprecation risk), ~$0.30/M input + $2.50/M output tokens.
 
 Fallback: MockProvider (deterministic stub for tests / no-key environments).
 
@@ -108,10 +108,10 @@ class OpenRouterProvider(BaseLLMProvider):
     """
     OpenRouter unified API (OpenAI-compatible format).
 
-    Model: google/gemini-2.0-flash-001
-      - Best instruction-following for structured financial advice prompts
-      - ~$0.10 / M input tokens, $0.40 / M output tokens
-      - Fast: median ~1.5 s for 700-token completions
+    Model: google/gemini-2.5-flash
+      - Strong instruction-following for structured financial advice prompts
+      - ~$0.30 / M input tokens, $2.50 / M output tokens
+      - Production-stable (no deprecation), thinking mode off by default
       - No RPM / RPD limits on paid credits
 
     Switch model via OPENROUTER_MODEL env var if needed, e.g.:
@@ -121,7 +121,7 @@ class OpenRouterProvider(BaseLLMProvider):
 
     provider_name = "openrouter"
     _API_URL = "https://openrouter.ai/api/v1/chat/completions"
-    _DEFAULT_MODEL = "google/gemini-2.0-flash-001"
+    _DEFAULT_MODEL = "google/gemini-2.5-flash"
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         key = api_key or os.environ.get("OPEN_ROUTER_API_KEY", "").strip()

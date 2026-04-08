@@ -1,76 +1,97 @@
 """
 Inference Orchestrator — Full prediction pipeline for the /predict endpoint.
 
-Ties together all existing SavVio modules for a single inference request:
-    1. Load user financial profile from DB
-    2. Parse intent via LLM (or skip if product_id provided)
-    3. Resolve product via pgvector similarity search (or direct DB lookup)
-    4. Look up product reviews from DB
-    5. Compute affordability features (6 financial features)
-    6. Compute product features (7 features) + review features (6 features)
-    7. Run Deterministic Engine (Layer 1) → authoritative GREEN/YELLOW/RED
-    8. Run Downgrade Engine (Layer 2) → potential one-step downgrade
-    9. Run ML Model → confidence score (cannot override deterministic color)
-    10. Run LLM response generation + guardrail verification
-    11. Return structured PredictResponse
+    _load_user_financial_profile()  → DB lookup
+    _resolve_product()              → intent parsing / product resolution
+    _load_product_data()            → product row + reviews from DB
+    _score_ml_model()               → ML prediction (AUTHORITY)
+    _generate_explanation()         → LLM response + guardrails
 
-Usage:
-    from deployment.api.inference import run_inference
-    from deployment.api.model_loader import model_manager
-
-    response = run_inference(request, model_manager)
+    run_inference()                 → orchestrates the above stages
 """
 
 from __future__ import annotations
 
 import logging
-import math
 import time
+from dataclasses import dataclass
+from typing import Any
 
 import pandas as pd
 from sqlalchemy import text
 
 from deployment.api.config import APIConfig
-from deployment.api.schemas import FinancialFeaturesView, PredictRequest, PredictResponse
+from deployment.api.model_loader import _ensure_import_paths
+
+_ensure_import_paths()
+
+from llm.intent_parser import parse_user_input
+from llm.product_resolver import resolve_product, resolve_product_by_id
+from llm.response_generator import RecommendationContext, generate_response, _generate_from_template
+from llm.guardrails import check_response
+from llm.prompts.response_templates import (
+    OUT_OF_SCOPE_RESPONSE,
+    PRODUCT_NOT_FOUND_RESPONSE,
+    USER_NOT_FOUND_RESPONSE,
+)
+from features.product_features import (
+    ProductFeatures,
+    compute_product_features,
+    compute_category_stats,
+)
+from features.review_features import ReviewFeatures, compute_review_features
+from deterministic_engine.downgrade_engine import DowngradeEngine
+
+from deployment.api.metrics import (
+    record_inference,
+    record_guardrail_failure,
+    record_layer2_downgrade,
+    observe_ml_confidence,
+    observe_llm_latency,
+)
+from deployment.api.schemas import (
+    FinancialFeaturesView,
+    PredictRequest,
+    PredictResponse,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _opt_float_financial(val) -> float | None:
-    if val is None:
-        return None
-    try:
-        x = float(val)
-        if math.isnan(x):
-            return None
-        return x
-    except (TypeError, ValueError):
-        return None
+# ---------------------------------------------------------------------------
+# Result Types
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ProductResolution:
+    product_name: str | None = None
+    product_price: float | None = None
+    product_id: str | None = None
+    evaluation_mode: str = "catalog"
+    user_context: str | None = None
+    parsed_intent: Any = None
 
 
-def _financial_features_view(user_profile: dict, financial_dict: dict) -> FinancialFeaturesView:
-    """Snapshot of Layer 1 features for API / technical UI."""
-    return FinancialFeaturesView(
-        discretionary_income=float(user_profile.get("discretionary_income", 0) or 0),
-        debt_to_income_ratio=float(financial_dict.get("debt_to_income_ratio", 0) or 0),
-        saving_to_income_ratio=float(user_profile.get("saving_to_income_ratio", 0) or 0),
-        monthly_expense_burden_ratio=float(financial_dict.get("monthly_expense_burden_ratio", 0) or 0),
-        emergency_fund_months=float(financial_dict.get("emergency_fund_months", 0) or 0),
-        affordability_score=float(financial_dict.get("affordability_score", 0) or 0),
-        price_to_income_ratio=_opt_float_financial(financial_dict.get("price_to_income_ratio")),
-        residual_utility_score=_opt_float_financial(financial_dict.get("residual_utility_score")),
-        savings_to_price_ratio=_opt_float_financial(financial_dict.get("savings_to_price_ratio")),
-        net_worth_indicator=_opt_float_financial(financial_dict.get("net_worth_indicator")),
-        credit_risk_indicator=_opt_float_financial(financial_dict.get("credit_risk_indicator")),
-    )
+@dataclass
+class MLScore:
+    confidence: float | None = None
+    predicted_label: str | None = None
+    unavailable_reason: str | None = None
+    # Financial features returned by model for API response / LLM
+    affordability_score: float = 0.0
+    affordability_unreliable: bool = False
+    savings_to_price_ratio: float = 0.0
+    price_to_income_ratio: float = 0.0
+    residual_utility_score: float = 0.0
+    net_worth_indicator: float = 0.0
+    credit_risk_indicator: float = 0.0
 
 
 # ---------------------------------------------------------------------------
-# User & Product Lookup Helpers
+# Stage 1: Load User Financial Profile
 # ---------------------------------------------------------------------------
 
 def _load_user_financial_profile(user_id: str, db_engine) -> dict | None:
-    """Load a user's financial profile from the financial_profiles table."""
     sql = text("""
         SELECT user_id, monthly_income, monthly_expenses, savings_balance,
                has_loan, loan_amount, monthly_emi, loan_interest_rate,
@@ -81,7 +102,6 @@ def _load_user_financial_profile(user_id: str, db_engine) -> dict | None:
         FROM financial_profiles
         WHERE user_id = :user_id
     """)
-
     try:
         with db_engine.connect() as conn:
             row = conn.execute(sql, {"user_id": user_id}).fetchone()
@@ -92,7 +112,6 @@ def _load_user_financial_profile(user_id: str, db_engine) -> dict | None:
     if row is None:
         return None
 
-    # Convert row to dict — handles both Row and LegacyRow
     columns = [
         "user_id", "monthly_income", "monthly_expenses", "savings_balance",
         "has_loan", "loan_amount", "monthly_emi", "loan_interest_rate",
@@ -104,572 +123,355 @@ def _load_user_financial_profile(user_id: str, db_engine) -> dict | None:
     return dict(zip(columns, row))
 
 
-_REVIEW_NOISE_RE = None
+# ---------------------------------------------------------------------------
+# Stage 2: Resolve Product
+# ---------------------------------------------------------------------------
+
+def _resolve_product(request: PredictRequest, manager) -> ProductResolution | PredictResponse:
+    if request.product_id:
+        match = resolve_product_by_id(request.product_id, manager.db_engine)
+        if match:
+            return ProductResolution(
+                product_name=match.product_name, product_price=match.price,
+                product_id=match.product_id,
+            )
+        return PredictResponse(
+            recommendation="YELLOW", confidence=None,
+            explanation=PRODUCT_NOT_FOUND_RESPONSE, evaluation_mode="none",
+        )
+
+    _t0 = time.time()
+    parsed = parse_user_input(request.user_query, manager.llm_provider)
+    observe_llm_latency(
+        provider=getattr(manager.llm_provider, "provider_name", "unknown"),
+        operation="intent_parse",
+        latency=time.time() - _t0,
+    )
+
+    if parsed.intent == "out_of_scope":
+        return PredictResponse(
+            recommendation="YELLOW", confidence=None,
+            explanation=OUT_OF_SCOPE_RESPONSE, evaluation_mode="none",
+        )
+
+    price_hint = getattr(parsed, "price_hint", None)
+    user_ctx = getattr(parsed, "user_context", None)
+    match = None
+
+    if parsed.product_reference:
+        match = resolve_product(parsed.product_reference, manager.db_engine, price_hint=price_hint)
+
+    if match:
+        return ProductResolution(
+            product_name=match.product_name, product_price=match.price,
+            product_id=match.product_id, user_context=user_ctx, parsed_intent=parsed,
+        )
+
+    if price_hint is not None and parsed.product_reference:
+        return ProductResolution(
+            product_name=parsed.product_reference.strip(), product_price=float(price_hint),
+            evaluation_mode="hypothetical", user_context=user_ctx, parsed_intent=parsed,
+        )
+
+    return PredictResponse(
+        recommendation="YELLOW", confidence=None,
+        explanation=PRODUCT_NOT_FOUND_RESPONSE, evaluation_mode="none",
+    )
 
 
-def _clean_review_text(text: str) -> str:
-    """Strip Amazon-specific noise from review text before injecting into LLM context."""
-    import re
-    # Remove [[VIDEOID:...]] and [[IMAGEID:...]] placeholders
-    text = re.sub(r"\[\[(?:VIDEO|IMAGE)ID:[^\]]*\]\]", "", text)
-    # Replace HTML line breaks with a space
-    text = re.sub(r"<br\s*/?>", " ", text, flags=re.IGNORECASE)
-    # Strip other HTML tags
-    text = re.sub(r"<[^>]+>", "", text)
-    # Collapse multiple spaces/newlines
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+# ---------------------------------------------------------------------------
+# Stage 3: Load Product Data
+# ---------------------------------------------------------------------------
 
-
-def _select_review_snippets(reviews_df: pd.DataFrame, n_positive: int = 3, n_critical: int = 2) -> list:
-    """Return up to n_positive + n_critical formatted review snippets for LLM context.
-
-    Selects the most helpful positive reviews (rating >= 4) and most helpful
-    critical reviews (rating <= 2) so the LLM can reference real customer
-    experiences from both sides. Each snippet is truncated to ~160 chars.
-    """
+def _format_review_snippets(reviews_df) -> list:
+    """Return up to 5 formatted review snippets sorted by helpfulness."""
     if reviews_df.empty:
         return []
-
-    df = reviews_df.copy()
-    df["helpful_vote"] = pd.to_numeric(df.get("helpful_vote", 0), errors="coerce").fillna(0)
-    df["rating"] = pd.to_numeric(df.get("rating", 3), errors="coerce").fillna(3)
-
-    positive = df[df["rating"] >= 4].nlargest(n_positive, "helpful_vote")
-    critical = df[df["rating"] <= 2].nlargest(n_critical, "helpful_vote")
-    selected = pd.concat([positive, critical])
-
+    top = reviews_df.sort_values("helpful_vote", ascending=False).head(5)
     snippets = []
-    for _, row in selected.iterrows():
-        rating = int(row.get("rating", 0))
-        title = _clean_review_text(str(row.get("review_title", "") or ""))
-        text = _clean_review_text(str(row.get("review_text", "") or ""))
-
-        if title and text:
-            body = f"{title}: {text}"
-        elif text:
-            body = text
-        elif title:
-            body = title
-        else:
-            continue
-
-        if len(body) > 160:
-            body = body[:157] + "..."
-
-        snippets.append(f"[{rating}★] {body}")
-
+    for _, r in top.iterrows():
+        rating = int(r.get("rating") or 0)
+        title = str(r.get("review_title") or "").strip()
+        text = str(r.get("review_text") or "").strip()
+        snippet = f"[{rating}\u2605]"
+        if title:
+            snippet += f" {title}"
+        if text:
+            snippet += f": {text[:120]}{'...' if len(text) > 120 else ''}"
+        if len(snippet) > 5:
+            snippets.append(snippet)
     return snippets
 
 
-def _load_product_reviews(product_id: str, db_engine) -> pd.DataFrame:
-    """Load all reviews for a product from the reviews table."""
-    sql = text("""
-        SELECT user_id, product_id, rating, review_title, review_text,
-               verified_purchase, helpful_vote
-        FROM reviews
-        WHERE product_id = :product_id
-    """)
+def _load_product_data(product: ProductResolution, manager) -> tuple[dict, list]:
+    """Load product row + reviews from DB.
 
+    Returns:
+        (feature_dict, review_snippets) — feature_dict is used for ML scoring,
+        review_snippets are formatted strings for the LLM explanation.
+    """
+    empty = {
+        "average_rating": 0, "rating_number": 0, "rating_variance": 0, "category": "unknown",
+        "value_density": 0, "review_confidence": 0, "rating_polarization": 0,
+        "quality_risk_score": 0, "cold_start_flag": 0, "price_category_rank": 0,
+        "category_rating_deviation": 0, "verified_purchase_ratio": 0,
+        "helpful_concentration": 0, "sentiment_spread": 0, "review_depth_score": 0,
+        "reviewer_diversity": 0, "extreme_rating_ratio": 0,
+    }
+
+    if not product.product_id or not manager.db_engine:
+        return empty, []
+
+    # Load product row
     try:
-        with db_engine.connect() as conn:
-            rows = conn.execute(sql, {"product_id": product_id}).fetchall()
+        with manager.db_engine.connect() as conn:
+            row = conn.execute(text(
+                "SELECT product_id, product_name, price, average_rating, "
+                "rating_number, rating_variance, category FROM products WHERE product_id = :pid"
+            ), {"pid": product.product_id}).fetchone()
     except Exception as e:
-        logger.error("Failed to load reviews for product_id=%s: %s", product_id, e)
-        return pd.DataFrame()
-
-    if not rows:
-        return pd.DataFrame()
-
-    columns = [
-        "user_id", "product_id", "rating", "review_title", "review_text",
-        "verified_purchase", "helpful_vote",
-    ]
-    return pd.DataFrame(rows, columns=columns)
-
-
-def _load_product_row(product_id: str, db_engine) -> pd.Series | None:
-    """Load a single product row for feature computation."""
-    sql = text("""
-        SELECT product_id, product_name, price, average_rating,
-               rating_number, rating_variance, category
-        FROM products
-        WHERE product_id = :product_id
-    """)
-
-    try:
-        with db_engine.connect() as conn:
-            row = conn.execute(sql, {"product_id": product_id}).fetchone()
-    except Exception as e:
-        logger.error("Failed to load product row for product_id=%s: %s", product_id, e)
-        return None
+        logger.error("Failed to load product %s: %s", product.product_id, e)
+        return empty, []
 
     if row is None:
-        return None
+        return empty, []
 
-    columns = [
-        "product_id", "product_name", "price", "average_rating",
-        "rating_number", "rating_variance", "category",
-    ]
-    return pd.Series(dict(zip(columns, row)))
+    cols = ["product_id", "product_name", "price", "average_rating", "rating_number", "rating_variance", "category"]
+    product_row = pd.Series(dict(zip(cols, row)))
+
+    # Load reviews
+    try:
+        with manager.db_engine.connect() as conn:
+            review_rows = conn.execute(text(
+                "SELECT user_id, product_id, rating, review_title, review_text, "
+                "verified_purchase, helpful_vote FROM reviews WHERE product_id = :pid"
+            ), {"pid": product.product_id}).fetchall()
+    except Exception as e:
+        logger.error("Failed to load reviews for %s: %s", product.product_id, e)
+        review_rows = []
+
+    review_cols = ["user_id", "product_id", "rating", "review_title", "review_text", "verified_purchase", "helpful_vote"]
+    reviews_df = pd.DataFrame(review_rows, columns=review_cols) if review_rows else pd.DataFrame()
+
+    # Compute product + review features
+    products_df = pd.read_sql("SELECT product_id, price, average_rating, rating_number, rating_variance, category FROM products", manager.db_engine)
+    cat_stats = compute_category_stats(products_df)
+    max_rn = float(products_df["rating_number"].max() or 0)
+
+    pf = compute_product_features(product_row, cat_stats, max_rn)
+    rf = compute_review_features(reviews_df)
+    snippets = _format_review_snippets(reviews_df)
+
+    return {
+        "average_rating": float(product_row["average_rating"] or 0),
+        "rating_number": float(product_row["rating_number"] or 0),
+        "rating_variance": float(product_row["rating_variance"] or 0),
+        "category": str(product_row["category"] or "unknown"),
+        **pf.to_dict(), **rf.to_dict(),
+    }, snippets
 
 
 # ---------------------------------------------------------------------------
-# Main Inference Flow
+# Stage 4: ML Model Scoring (AUTHORITY)
+# ---------------------------------------------------------------------------
+
+def _score_ml_model(user_profile: dict, product: ProductResolution, product_data: dict, manager) -> MLScore:
+    if manager.model is None:
+        return MLScore(unavailable_reason="no_model")
+
+    try:
+        raw_row = {**user_profile, "product_price": float(product.product_price or 0), **product_data}
+        result = manager.predict(pd.DataFrame([raw_row]))
+
+        r = result.iloc[0]
+        return MLScore(
+            predicted_label=str(r["label"]).strip().upper(),
+            confidence=float(r["confidence"]),
+            affordability_score=float(r.get("affordability_score", 0)),
+            affordability_unreliable=bool(r.get("affordability_score_unreliable", False)),
+            savings_to_price_ratio=float(r.get("savings_to_price_ratio", 0)),
+            price_to_income_ratio=float(r.get("price_to_income_ratio", 0)),
+            residual_utility_score=float(r.get("residual_utility_score", 0)),
+            net_worth_indicator=float(r.get("net_worth_indicator", 0)),
+            credit_risk_indicator=float(r.get("credit_risk_indicator", 0)),
+        )
+
+    except Exception as e:
+        logger.warning("ML model scoring failed: %s", e, exc_info=True)
+        return MLScore(unavailable_reason="scoring_error")
+
+
+# ---------------------------------------------------------------------------
+# Stage 4b: Layer 2 Downgrade (product/review quality signals)
+# ---------------------------------------------------------------------------
+
+def _apply_layer2_downgrade(ml_label: str, product_data: dict):
+    """Run the DowngradeEngine against product/review features from product_data."""
+    pf = ProductFeatures(
+        value_density=float(product_data.get("value_density", 0)),
+        review_confidence=float(product_data.get("review_confidence", 0)),
+        rating_polarization=float(product_data.get("rating_polarization", 0)),
+        quality_risk_score=float(product_data.get("quality_risk_score", 0)),
+        cold_start_flag=int(product_data.get("cold_start_flag", 0)),
+        price_category_rank=float(product_data.get("price_category_rank", 0)),
+        category_rating_deviation=float(product_data.get("category_rating_deviation", 0)),
+    )
+    rf = ReviewFeatures(
+        verified_purchase_ratio=float(product_data.get("verified_purchase_ratio", 0)),
+        helpful_concentration=float(product_data.get("helpful_concentration", 0)),
+        sentiment_spread=float(product_data.get("sentiment_spread", 0)),
+        review_depth_score=float(product_data.get("review_depth_score", 0)),
+        reviewer_diversity=float(product_data.get("reviewer_diversity", 0)),
+        extreme_rating_ratio=float(product_data.get("extreme_rating_ratio", 0)),
+    )
+    return DowngradeEngine().evaluate(ml_label, pf, rf)
+
+
+# ---------------------------------------------------------------------------
+# Stage 5: LLM Response Generation + Guardrails
+# ---------------------------------------------------------------------------
+
+def _generate_explanation(product: ProductResolution, ml: MLScore, user_profile: dict, manager, downgrade_result=None, review_snippets: list = None) -> str:
+    final_color =(downgrade_result.final_label if downgrade_result else None) or ml.predicted_label or "YELLOW"
+    original_color = (downgrade_result.original_label if downgrade_result else None) or final_color
+    was_downgraded = downgrade_result.was_downgraded if downgrade_result else False
+    triggered_rules = (
+        (downgrade_result.product_triggers + downgrade_result.review_triggers)
+        if downgrade_result and was_downgraded
+        else []
+    )
+
+    context = RecommendationContext(
+        product_name=product.product_name or "the product",
+        product_price=product.product_price or 0.0,
+        recommendation_color=final_color,
+        original_color=original_color,
+        was_downgraded=was_downgraded,
+        triggered_rules=triggered_rules,
+        confidence_scores={final_color: ml.confidence or 0.0},
+        ml_confidence=ml.confidence,
+        ml_unavailable_reason=ml.unavailable_reason,
+        hypothetical_purchase=(product.evaluation_mode == "hypothetical"),
+        user_context=product.user_context,
+        affordability_score=ml.affordability_score,
+        affordability_score_unreliable=ml.affordability_unreliable,
+        savings_to_price_ratio=ml.savings_to_price_ratio,
+        emergency_fund_months=float(user_profile.get("emergency_fund_months", 0) or 0),
+        debt_to_income_ratio=float(user_profile.get("debt_to_income_ratio", 0) or 0),
+        monthly_income=float(user_profile.get("monthly_income", 0) or 0),
+        monthly_expense_burden_ratio=float(user_profile.get("monthly_expense_burden_ratio", 0) or 0),
+        price_to_income_ratio=ml.price_to_income_ratio,
+        credit_score=user_profile.get("credit_score"),
+        review_snippets=review_snippets or [],
+    )
+
+    _t0 = time.time()
+    response_text = generate_response(context, manager.llm_provider)
+    observe_llm_latency(
+        provider=getattr(manager.llm_provider, "provider_name", "unknown"),
+        operation="response_gen",
+        latency=time.time() - _t0,
+    )
+    guardrail = check_response(response_text, final_color, context)
+
+    if not guardrail.passed:
+        record_guardrail_failure()
+        logger.warning("Guardrail violations: %s — falling back to template", guardrail.violations)
+        response_text = _generate_from_template(context)
+
+    return response_text
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator
 # ---------------------------------------------------------------------------
 
 def run_inference(request: PredictRequest, manager) -> PredictResponse:
-    """Execute the full inference pipeline for a single /predict request.
-
-    Args:
-        request: Validated PredictRequest from the API endpoint.
-        manager: The ModelManager singleton with loaded resources.
-
-    Returns:
-        PredictResponse with recommendation, confidence, and explanation.
-    """
     start_time = time.time()
 
-    # Import existing modules (already on sys.path via model_loader)
-    from deterministic_engine.financial_engine import DecisionEngine
-    from deterministic_engine.downgrade_engine import DowngradeEngine
-    from features.financial_features import compute_affordability
-    from features.product_features import compute_product_features, ProductFeatures
-    from features.review_features import compute_review_features, ReviewFeatures
-    from llm.response_generator import RecommendationContext, generate_response, _generate_from_template
-    from llm.guardrails import check_response
-    from llm.product_resolver import resolve_product, resolve_product_by_id
-    from llm.intent_parser import parse_user_input
-    from llm.prompts.response_templates import (
-        OUT_OF_SCOPE_RESPONSE,
-        PRODUCT_NOT_FOUND_RESPONSE,
-        USER_NOT_FOUND_RESPONSE,
-    )
-    from deployment.api.quality_signals import build_quality_signal_views
-
-    # parsed is only assigned in the NL branch; initialise so the
-    # context-building step at the bottom can safely reference it.
-    parsed = None
-    user_context_val = None
-
-    # ------------------------------------------------------------------
-    # Step 1: Load user financial profile
-    # ------------------------------------------------------------------
     if manager.db_engine is None:
-        logger.error("No DB connection — cannot process request.")
         return PredictResponse(
-            recommendation="YELLOW",
-            confidence=None,
-            explanation="Service is temporarily unavailable. Please try again later.",
-            guardrail_passed=True,
-            evaluation_mode="none",
+            recommendation="YELLOW", confidence=None,
+            explanation="Service is temporarily unavailable.", evaluation_mode="none",
         )
 
     user_profile = _load_user_financial_profile(request.user_id, manager.db_engine)
     if user_profile is None:
-        logger.warning("User not found: %s", request.user_id)
         return PredictResponse(
-            recommendation="YELLOW",
-            confidence=None,
-            explanation=USER_NOT_FOUND_RESPONSE,
-            guardrail_passed=True,
-            evaluation_mode="none",
+            recommendation="YELLOW", confidence=None,
+            explanation=USER_NOT_FOUND_RESPONSE, evaluation_mode="none",
         )
 
-    logger.info("User profile loaded for: %s", request.user_id)
+    resolution = _resolve_product(request, manager)
+    if isinstance(resolution, PredictResponse):
+        return resolution
 
-    # ------------------------------------------------------------------
-    # Step 2: Parse intent / Resolve product
-    # ------------------------------------------------------------------
-    product_match = None
-    product_name = None
-    product_price = None
-    product_id = None
-    evaluation_mode = "catalog"
+    product_data, review_snippets = _load_product_data(resolution, manager)
 
-    if request.product_id:
-        # Direct product_id mode — skip intent parsing
-        product_match = resolve_product_by_id(request.product_id, manager.db_engine)
-        if product_match:
-            product_name = product_match.product_name
-            product_price = product_match.price
-            product_id = product_match.product_id
-            logger.info("Direct product lookup: %s → %s ($%.2f)", request.product_id, product_name, product_price)
-        else:
-            return PredictResponse(
-                recommendation="YELLOW",
-                confidence=None,
-                explanation=PRODUCT_NOT_FOUND_RESPONSE,
-                guardrail_passed=True,
-                evaluation_mode="none",
-            )
-    else:
-        # Natural language mode — parse intent first
-        parsed = parse_user_input(request.user_query, manager.llm_provider)
-        logger.info(
-            "Intent parsed: %s, product_ref=%s, price_hint=%s",
-            parsed.intent,
-            parsed.product_reference,
-            getattr(parsed, "price_hint", None),
-        )
+    ml = _score_ml_model(user_profile, resolution, product_data, manager)
 
-        if parsed.intent == "out_of_scope":
-            return PredictResponse(
-                recommendation="YELLOW",
-                confidence=None,
-                explanation=OUT_OF_SCOPE_RESPONSE,
-                guardrail_passed=True,
-                evaluation_mode="none",
-            )
-
-        price_hint = getattr(parsed, "price_hint", None)
-        if parsed.product_reference:
-            product_match = resolve_product(
-                parsed.product_reference,
-                manager.db_engine,
-                price_hint=price_hint,
-            )
-
-        if product_match:
-            product_name = product_match.product_name
-            product_price = product_match.price
-            product_id = product_match.product_id
-            user_context_val = getattr(parsed, "user_context", None)
-            logger.info("Product resolved: '%s' → '%s' ($%.2f)",
-                        parsed.product_reference, product_name, product_price)
-        elif price_hint is not None and parsed.product_reference:
-            # No catalog row (or price/name mismatch) — evaluate at the user-stated price
-            evaluation_mode = "hypothetical"
-            product_name = parsed.product_reference.strip()
-            product_price = float(price_hint)
-            product_id = None
-            user_context_val = getattr(parsed, "user_context", None)
-            logger.info(
-                "Hypothetical evaluation (stated price): '%s' at $%.2f",
-                product_name,
-                product_price,
-            )
-        else:
-            return PredictResponse(
-                recommendation="YELLOW",
-                confidence=None,
-                explanation=PRODUCT_NOT_FOUND_RESPONSE,
-                guardrail_passed=True,
-                evaluation_mode="none",
-            )
-
-    # ------------------------------------------------------------------
-    # Step 3: Compute affordability features (6 financial features)
-    # ------------------------------------------------------------------
-    affordability = compute_affordability(
-        user_financial_profile=user_profile,
-        product_price=product_price,
-    )
-    financial_dict = affordability.to_dict()
-    affordability_unreliable = bool(affordability.affordability_score_unreliable)
-    financial_dict.pop("affordability_score_unreliable", None)
-
-    # Merge DB-level financial features into the dict for the engine
-    financial_dict["debt_to_income_ratio"] = float(user_profile.get("debt_to_income_ratio", 0) or 0)
-    financial_dict["monthly_expense_burden_ratio"] = float(user_profile.get("monthly_expense_burden_ratio", 0) or 0)
-    financial_dict["emergency_fund_months"] = float(user_profile.get("emergency_fund_months", 0) or 0)
-    financial_dict["saving_to_income_ratio"] = float(user_profile.get("saving_to_income_ratio", 0) or 0)
-
-    # Guard computed features that can be None for degenerate profiles (e.g. zero
-    # income, zero price, or missing credit_score). The engine's _safe() raises
-    # ValueError on None — use conservative defaults so the engine can still run
-    # and produce a meaningful (cautious) result rather than a cryptic 500 error.
-    #   price_to_income_ratio → None when income=0: default 1.0 (100% of income)
-    #   savings_to_price_ratio → None when price=0:  default 0.0 (no coverage)
-    #   net_worth_indicator   → None when income=0:  default 0.0 (neutral)
-    #   credit_risk_indicator → None when credit_score missing: default 0.0 (worst)
-    if financial_dict.get("price_to_income_ratio") is None:
-        financial_dict["price_to_income_ratio"] = 1.0
-        logger.warning("price_to_income_ratio is None (income=0?) — defaulting to 1.0 for engine")
-    if financial_dict.get("savings_to_price_ratio") is None:
-        financial_dict["savings_to_price_ratio"] = 0.0
-        logger.warning("savings_to_price_ratio is None (price=0?) — defaulting to 0.0 for engine")
-    if financial_dict.get("net_worth_indicator") is None:
-        financial_dict["net_worth_indicator"] = 0.0
-        logger.warning("net_worth_indicator is None (income=0?) — defaulting to 0.0 for engine")
-    if financial_dict.get("credit_risk_indicator") is None:
-        financial_dict["credit_risk_indicator"] = 0.0
-        logger.warning("credit_risk_indicator is None (no credit_score?) — defaulting to 0.0 for engine")
-
-    logger.info(
-        "Affordability computed: score=%.2f, SPR=%.2f, AFS_unreliable=%s",
-        financial_dict.get("affordability_score", 0),
-        financial_dict.get("savings_to_price_ratio", 0),
-        affordability_unreliable,
-    )
-    logger.info(
-        "Layer1 snapshot (align with dashboard): credit_score=%s → CRI=%.4f, "
-        "MEB=%.4f, DTI=%.4f, EFM=%.2f, STIR_db=%.4f, PIR=%s, SPR=%s, NWI=%s",
-        user_profile.get("credit_score"),
-        float(financial_dict.get("credit_risk_indicator") or 0),
-        float(financial_dict.get("monthly_expense_burden_ratio") or 0),
-        float(financial_dict.get("debt_to_income_ratio") or 0),
-        float(financial_dict.get("emergency_fund_months") or 0),
-        float(financial_dict.get("saving_to_income_ratio") or 0),
-        financial_dict.get("price_to_income_ratio"),
-        financial_dict.get("savings_to_price_ratio"),
-        financial_dict.get("net_worth_indicator"),
-    )
-
-    financial_features_view = _financial_features_view(user_profile, financial_dict)
-
-    # ------------------------------------------------------------------
-    # Step 4: Run Deterministic Engine (Layer 1)
-    # ------------------------------------------------------------------
-    engine = DecisionEngine()
-    decision = engine.decide(financial_dict, {"price": product_price})
-
-    l1_color = decision.decision_category
-    triggered_rules = list(decision.triggered_rules)
-    if evaluation_mode == "hypothetical":
-        triggered_rules.insert(0, "evaluation:hypothetical_stated_price")
-    logger.info("Layer 1 decision: %s, rules=%s", l1_color, triggered_rules)
-
-    # ------------------------------------------------------------------
-    # Step 5: Run Downgrade Engine (Layer 2)
-    # ------------------------------------------------------------------
-    was_downgraded = False
-    final_color = l1_color
-    product_row = None
-    product_feats = None
-    review_feats = None
-    layer2_evaluated = False
-    review_count = 0
-    layer2_product_triggers: list[str] = []
-    layer2_review_triggers: list[str] = []
-    product_signals = None
-    review_signals = None
-
-    review_snippets: list = []
-
-    if product_id:
-        product_row = _load_product_row(product_id, manager.db_engine)
-        reviews_df = _load_product_reviews(product_id, manager.db_engine)
-        review_count = len(reviews_df)
-        review_snippets = _select_review_snippets(reviews_df)
-
-        if product_row is not None:
-            product_feats = compute_product_features(
-                product_row,
-                manager.category_stats,
-                manager.max_rating_number,
-            )
-            review_feats = compute_review_features(reviews_df)
-
-            downgrade_engine = DowngradeEngine()
-            downgrade_result = downgrade_engine.evaluate(
-                financial_label=l1_color,
-                product_features=product_feats,
-                review_features=review_feats,
-            )
-            final_color = downgrade_result.final_label
-            was_downgraded = downgrade_result.was_downgraded
-            layer2_evaluated = True
-            layer2_product_triggers = list(downgrade_result.product_triggers)
-            layer2_review_triggers = list(downgrade_result.review_triggers)
-
-            if was_downgraded:
-                triggered_rules.extend(downgrade_result.product_triggers)
-                triggered_rules.extend(downgrade_result.review_triggers)
-                logger.info("Layer 2 downgrade: %s → %s", l1_color, final_color)
-            else:
-                logger.info(
-                    "Layer 2 evaluated: L1=%s → final=%s, reviews=%d, PR triggers=%s, RR triggers=%s",
-                    l1_color,
-                    final_color,
-                    review_count,
-                    layer2_product_triggers,
-                    layer2_review_triggers,
-                )
-
-            product_signals, review_signals = build_quality_signal_views(
-                product_row,
-                product_feats,
-                review_feats,
-            )
-
-    # ------------------------------------------------------------------
-    # Step 6: Run ML Model → confidence score
-    # ------------------------------------------------------------------
-    # The ML model provides a confidence score but CANNOT override the
-    # deterministic engine's color. It's informational only.
-    model_confidence: float | None = None
-    ml_unavailable_reason: str | None = None
-    ml_predicted_label: str | None = None
-    if manager.model is None:
-        ml_unavailable_reason = "no_model"
-    elif manager.feature_pipeline is None:
-        ml_unavailable_reason = "no_pipeline"
-    else:
+    # Layer 2 downgrade — catalog products only (hypothetical have no real features)
+    downgrade_result = None
+    if ml.predicted_label and resolution.product_id:
         try:
-            import numpy as np
-            import pandas as _pd
-
-            # Assemble the raw feature row matching the training schema.
-            # Raw user fields from DB
-            raw_row = {
-                "monthly_income":          float(user_profile.get("monthly_income", 0) or 0),
-                "monthly_expenses":        float(user_profile.get("monthly_expenses", 0) or 0),
-                "savings_balance":         float(user_profile.get("savings_balance", 0) or 0),
-                "has_loan":                int(bool(user_profile.get("has_loan", 0))),
-                "loan_amount":             float(user_profile.get("loan_amount", 0) or 0),
-                "monthly_emi":             float(user_profile.get("monthly_emi", 0) or 0),
-                "loan_interest_rate":      float(user_profile.get("loan_interest_rate", 0) or 0),
-                "loan_term_months":        float(user_profile.get("loan_term_months", 0) or 0),
-                "credit_score":            float(user_profile.get("credit_score", 0) or 0),
-                "employment_status":       str(user_profile.get("employment_status", "unknown") or "unknown"),
-                "region":                  str(user_profile.get("region", "unknown") or "unknown"),
-                # DB-precomputed financial ratios
-                "liquid_savings":          float(user_profile.get("liquid_savings", 0) or 0),
-                "discretionary_income":    float(user_profile.get("discretionary_income", 0) or 0),
-                "debt_to_income_ratio":    float(financial_dict.get("debt_to_income_ratio", 0)),
-                "saving_to_income_ratio":  float(user_profile.get("saving_to_income_ratio", 0) or 0),
-                "monthly_expense_burden_ratio": float(financial_dict.get("monthly_expense_burden_ratio", 0)),
-                "emergency_fund_months":   float(financial_dict.get("emergency_fund_months", 0)),
-                # Affordability computed features (must match training schema — includes residual_utility_score)
-                "affordability_score":     float(financial_dict.get("affordability_score", 0)),
-                "price_to_income_ratio":   float(financial_dict.get("price_to_income_ratio", 0)),
-                "residual_utility_score":  float(financial_dict.get("residual_utility_score") or 0),
-                "savings_to_price_ratio":  float(financial_dict.get("savings_to_price_ratio", 0)),
-                "net_worth_indicator":     float(financial_dict.get("net_worth_indicator", 0)),
-                "credit_risk_indicator":   float(financial_dict.get("credit_risk_indicator", 0) or 0),
-                # Product raw fields — column name matches training data
-                "product_price":           float(product_price or 0),
-                "average_rating":          float(product_row["average_rating"] if product_row is not None else 0),
-                "rating_number":           float(product_row["rating_number"] if product_row is not None else 0),
-                "rating_variance":         float(product_row["rating_variance"] if product_row is not None else 0),
-                "category":                str(product_row["category"] if product_row is not None else "unknown"),
-                # Product computed features
-                "value_density":           float(product_feats.value_density if product_row is not None else 0),
-                "review_confidence":       float(product_feats.review_confidence if product_row is not None else 0),
-                "rating_polarization":     float(product_feats.rating_polarization if product_row is not None else 0),
-                "quality_risk_score":      float(product_feats.quality_risk_score if product_row is not None else 0),
-                "cold_start_flag":         int(product_feats.cold_start_flag if product_row is not None else 0),
-                "price_category_rank":     float(product_feats.price_category_rank if product_row is not None else 0),
-                "category_rating_deviation": float(product_feats.category_rating_deviation if product_row is not None else 0),
-                # Review computed features
-                "verified_purchase_ratio": float(review_feats.verified_purchase_ratio if product_row is not None else 0),
-                "helpful_concentration":   float(review_feats.helpful_concentration if product_row is not None else 0),
-                "sentiment_spread":        float(review_feats.sentiment_spread if product_row is not None else 0),
-                "review_depth_score":      float(review_feats.review_depth_score if product_row is not None else 0),
-                "reviewer_diversity":      float(review_feats.reviewer_diversity if product_row is not None else 0),
-                "extreme_rating_ratio":    float(review_feats.extreme_rating_ratio if product_row is not None else 0),
-                # Training schema + MLflow signature — see labeling_pipeline / run_pipeline
-                "downgraded":              int(was_downgraded),
-            }
-            feature_df = _pd.DataFrame([raw_row])
-            X_preprocessed = manager.feature_pipeline.transform(feature_df)
-            # MLflow pyfunc validates inputs against the saved signature. credit_score and
-            # downgraded must be int64 (long); StandardScaler / pandas leave them as float64.
-            if isinstance(X_preprocessed, _pd.DataFrame):
-                X_preprocessed = X_preprocessed.copy()
-                if "credit_score" in X_preprocessed.columns:
-                    cs = np.asarray(X_preprocessed["credit_score"].values, dtype=float).ravel()
-                    if cs.size and np.all(np.isfinite(cs)) and np.allclose(
-                        cs, np.round(cs), atol=1e-5
-                    ):
-                        X_preprocessed["credit_score"] = np.round(cs).astype(np.int64)
-                    else:
-                        X_preprocessed["credit_score"] = np.int64(
-                            int(user_profile.get("credit_score") or 0)
-                        )
-                if "downgraded" in X_preprocessed.columns:
-                    X_preprocessed["downgraded"] = (
-                        X_preprocessed["downgraded"].astype(np.int64)
-                    )
-            label_ml, conf = manager.predict(X_preprocessed)
-            if label_ml is not None:
-                ml_predicted_label = str(label_ml).strip().upper()
-            if conf is None:
-                model_confidence = None
-                ml_unavailable_reason = "scoring_error"
-                logger.warning("ML predict returned no confidence (label=%s)", label_ml)
-            else:
-                model_confidence = float(conf)
-                logger.info("ML confidence: %.4f", model_confidence)
+            downgrade_result = _apply_layer2_downgrade(ml.predicted_label, product_data)
+            if downgrade_result.was_downgraded:
+                record_layer2_downgrade(
+                    from_color=downgrade_result.original_label,
+                    to_color=downgrade_result.final_label,
+                )
+                logger.info(
+                    "Layer 2 downgrade: %s → %s (triggers: %s)",
+                    downgrade_result.original_label,
+                    downgrade_result.final_label,
+                    downgrade_result.product_triggers + downgrade_result.review_triggers,
+                )
         except Exception as e:
-            logger.warning("ML model scoring failed: %s", e, exc_info=True)
-            model_confidence = None
-            ml_unavailable_reason = "scoring_error"
+            logger.warning("Layer 2 downgrade engine failed: %s", e)
 
-    # ------------------------------------------------------------------
-    # Step 7: Run LLM response generation + guardrails
-    # ------------------------------------------------------------------
-    _mc = model_confidence if model_confidence is not None else 0.0
-    context = RecommendationContext(
-        product_name=product_name or "the product",
-        product_price=product_price or 0.0,
-        recommendation_color=final_color,
-        original_color=l1_color if was_downgraded else final_color,
-        was_downgraded=was_downgraded,
-        triggered_rules=triggered_rules,
-        confidence_scores={final_color: _mc},
-        ml_confidence=model_confidence,
-        ml_unavailable_reason=ml_unavailable_reason,
-        hypothetical_purchase=(evaluation_mode == "hypothetical"),
-        user_context=user_context_val,
-        affordability_score=float(financial_dict.get("affordability_score", 0.0)),
-        affordability_score_unreliable=affordability_unreliable,
-        savings_to_price_ratio=float(financial_dict.get("savings_to_price_ratio", 0.0)),
-        emergency_fund_months=float(financial_dict.get("emergency_fund_months", 0.0)),
-        debt_to_income_ratio=float(financial_dict.get("debt_to_income_ratio", 0.0)),
-        monthly_income=float(user_profile.get("monthly_income", 0) or 0),
-        monthly_expense_burden_ratio=float(financial_dict.get("monthly_expense_burden_ratio", 0.0)),
-        price_to_income_ratio=float(financial_dict.get("price_to_income_ratio", 0.0)),
-        credit_score=user_profile.get("credit_score"),
-        review_snippets=review_snippets,
-    )
+    final_label = (downgrade_result.final_label if downgrade_result else None) or ml.predicted_label or "YELLOW"
 
-    response_text = generate_response(context, manager.llm_provider)
-    guardrail_result = check_response(response_text, final_color, context)
-
-    if not guardrail_result.passed:
-        logger.warning(
-            "Guardrail violations: %s — falling back to template",
-            guardrail_result.violations,
-        )
-        response_text = _generate_from_template(context)
-        guardrail_result = check_response(response_text, final_color, context)
+    explanation = _generate_explanation(resolution, ml, user_profile, manager, downgrade_result, review_snippets)
 
     elapsed = time.time() - start_time
-    logger.info(
-        "Inference complete: color=%s, ml_confidence=%s, downgraded=%s, "
-        "guardrail_passed=%s, latency=%.3fs",
-        final_color,
-        f"{model_confidence:.2f}" if model_confidence is not None else "n/a",
-        was_downgraded,
-        guardrail_result.passed,
-        elapsed,
+    logger.info("Inference complete: %s (%.3fs)", final_label, elapsed)
+
+    # ------------------------------------------------------------------
+    # Prometheus Metrics Recording
+    # ------------------------------------------------------------------
+    record_inference(
+        color=final_label,
+        evaluation_mode=resolution.evaluation_mode,
+        latency=elapsed,
     )
+    if ml.confidence is not None:
+        observe_ml_confidence(ml.confidence)
 
     return PredictResponse(
-        recommendation=final_color,
-        confidence=model_confidence,
-        ml_unavailable_reason=ml_unavailable_reason,
-        explanation=response_text,
-        product_name=product_name,
-        product_price=product_price,
-        triggered_rules=triggered_rules,
-        was_downgraded=was_downgraded,
-        guardrail_passed=guardrail_result.passed,
-        evaluation_mode=evaluation_mode,
-        layer2_evaluated=layer2_evaluated,
-        review_count=review_count,
-        layer2_product_triggers=layer2_product_triggers,
-        layer2_review_triggers=layer2_review_triggers,
-        product_signals=product_signals,
-        review_signals=review_signals,
-        affordability_score=float(financial_dict.get("affordability_score", 0.0)),
-        affordability_score_unreliable=affordability_unreliable,
-        emergency_fund_months=float(financial_dict.get("emergency_fund_months", 0) or 0),
-        debt_to_income_ratio=float(financial_dict.get("debt_to_income_ratio", 0) or 0),
-        financial_features=financial_features_view,
-        layer1_recommendation=l1_color,
-        ml_predicted_label=ml_predicted_label,
+        recommendation=final_label,
+        confidence=ml.confidence,
+        ml_unavailable_reason=ml.unavailable_reason,
+        explanation=explanation,
+        product_name=resolution.product_name,
+        product_price=resolution.product_price,
+        evaluation_mode=resolution.evaluation_mode,
+        affordability_score=ml.affordability_score,
+        affordability_score_unreliable=ml.affordability_unreliable,
+        emergency_fund_months=float(user_profile.get("emergency_fund_months", 0) or 0),
+        debt_to_income_ratio=float(user_profile.get("debt_to_income_ratio", 0) or 0),
+        financial_features=FinancialFeaturesView(
+            discretionary_income=float(user_profile.get("discretionary_income", 0) or 0),
+            debt_to_income_ratio=float(user_profile.get("debt_to_income_ratio", 0) or 0),
+            saving_to_income_ratio=float(user_profile.get("saving_to_income_ratio", 0) or 0),
+            monthly_expense_burden_ratio=float(user_profile.get("monthly_expense_burden_ratio", 0) or 0),
+            emergency_fund_months=float(user_profile.get("emergency_fund_months", 0) or 0),
+            affordability_score=ml.affordability_score,
+            price_to_income_ratio=ml.price_to_income_ratio,
+            residual_utility_score=ml.residual_utility_score,
+            savings_to_price_ratio=ml.savings_to_price_ratio,
+            net_worth_indicator=ml.net_worth_indicator,
+            credit_risk_indicator=ml.credit_risk_indicator,
+        ),
+        ml_predicted_label=ml.predicted_label,
         ml_model_name=APIConfig.ML_MODEL_DISPLAY_NAME,
     )

@@ -1,0 +1,12 @@
+{
+  "pythonVersion": "3.11",
+  "extraPaths": [
+    "model_pipeline/src",
+    "savviocore/src"
+  ],
+  "exclude": [
+    ".venv",
+    "model_pipeline/.venv",
+    "**/node_modules"
+  ]
+}

@@ -1,13 +1,7 @@
-import sys
-import os
+"""
+tests/conftest.py — shared test fixtures for data_pipeline.
 
-# Add dags/ to path so 'src' package is importable
-dags_dir = os.path.join(os.path.dirname(__file__), '..', 'dags')
-dags_dir = os.path.abspath(dags_dir)
-if dags_dir not in sys.path:
-    sys.path.insert(0, dags_dir)
-
-# Add dags/src to path so direct module imports work
-src_dir = os.path.join(dags_dir, 'src')
-if src_dir not in sys.path:
-    sys.path.insert(0, src_dir)
+sys.path / 'src' package setup is handled by the root-level conftest.py
+(data_pipeline/conftest.py), which pytest loads before this file.
+"""
+# Nothing extra needed here — root conftest handles sys.path and src registration.

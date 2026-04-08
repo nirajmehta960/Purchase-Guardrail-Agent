@@ -176,9 +176,17 @@ def generate_response(context: RecommendationContext, llm_provider: Any) -> str:
         else "Credit score: not available"
     )
 
+    downgrade_note = (
+        f"\nDOWNGRADE: The ML model initially scored this as {context.original_color}, "
+        f"but product/review quality signals downgraded it to {context.recommendation_color}. "
+        f"Briefly acknowledge this — e.g. 'While your finances could support this purchase, "
+        f"product and review signals raised enough concern to warrant caution.'"
+        if context.was_downgraded else ""
+    )
+
     prompt = f"""You are SavVio, a fiduciary financial advisor. Your job is to explain a purchase recommendation clearly, using the exact numbers provided.
 
-DECISION: {context.recommendation_color} — do NOT contradict this.
+DECISION: {context.recommendation_color} — do NOT contradict this.{downgrade_note}
 {"Do NOT suggest buying, going ahead, or that this is safe." if context.recommendation_color == "RED" else ""}
 {"Do NOT tell the user to avoid the purchase or that it is risky." if context.recommendation_color == "GREEN" else ""}
 
@@ -199,13 +207,14 @@ FINANCIAL PROFILE (use these exact values — never invent numbers):
 
 {reviews_block}
 
-REQUIRED OUTPUT STRUCTURE — write exactly these 3 parts, no headers, no JSON:
-1. OPENING (1–2 sentences): State the {context.recommendation_color} verdict and the single strongest reason, using at least one specific number.
-2. FINANCIAL PICTURE (2–3 sentences): Explain what 2–3 of the financial numbers above mean for this user in plain English. Make it feel personal — e.g. "On a $1,110 income, this $600 purchase would consume more than half your monthly earnings."
-3. {"PRODUCT VOICE (1–2 sentences): Reference what real buyers say — quote or paraphrase a specific detail from the customer reviews above." if context.review_snippets else "PRODUCT NOTE (1 sentence): Note that no customer reviews are available for this product."}
-4. ACTION (1 sentence): One concrete next step the user can take right now.
+Write exactly 4 parts in order, as flowing prose. Do NOT include any numbers, labels, headers, or section names — just the text itself:
 
-Use **bold** for key numbers. Write warmly but honestly. Do not use bullet points."""
+Part 1 (1–2 sentences): State the {context.recommendation_color} verdict and the single strongest reason, using at least one specific number.
+Part 2 (2–3 sentences): Explain what 2–3 of the financial numbers above mean for this user in plain English. Make it feel personal — e.g. "On a $1,110 income, this $600 purchase would consume more than half your monthly earnings."
+Part 3 (1–2 sentences): {"Reference what real buyers say — quote or paraphrase a specific detail from the customer reviews above." if context.review_snippets else "Note that no customer reviews are available for this product."}
+Part 4 (1 sentence): One concrete next step the user can take right now.
+
+Separate each part with a blank line. Use **bold** for key numbers. Write warmly but honestly. Do not use bullet points. Do not start any line with a number or label."""
 
     try:
         raw = llm_provider.generate(prompt, max_tokens=700, temperature=0.35)

@@ -24,7 +24,73 @@ pip install -r deployment/requirements.txt
 
 ## 2. API Architecture
 
-The FastAPI application follows a clean request flow:
+The backend follows a **dependency-injected, stage-decomposed** architecture:
+
+### Module Responsibilities
+
+| Module | Responsibility |
+|--------|---------------|
+| `main.py` | FastAPI app, endpoints, middleware. Endpoints receive resources via `Depends()`. |
+| `dependencies.py` | FastAPI dependency providers (`get_model_manager`, `require_db`). Enables clean test overrides. |
+| `inference.py` | Inference orchestrator, decomposed into 7 pipeline stages (see below). |
+| `model_loader.py` | Resource lifecycle — focused loader classes composed by `ModelManager`. |
+| `schemas.py` | Pydantic request/response models. |
+| `products_catalog.py` | Product filtering and pagination for catalog browse. |
+| `quality_signals.py` | Maps Layer 2 features into API-friendly signal views. |
+| `config.py` | Centralized environment configuration. |
+
+### Inference Pipeline Stages
+
+`inference.py` decomposes the prediction into independently testable stages:
+
+```
+run_inference(request, manager)
+  │
+  ├─ Stage 1: _load_user_financial_profile()  → DB lookup
+  ├─ Stage 2: _resolve_product()              → intent parsing / product match
+  ├─ Stage 3: _compute_financial_features()   → affordability + feature guards
+  ├─ Stage 4: _run_layer1_engine()            → deterministic GREEN/YELLOW/RED
+  ├─ Stage 5: _run_layer2_engine()            → downgrade via product/review signals
+  ├─ Stage 6: _score_ml_model()               → XGBoost confidence (informational)
+  ├─ Stage 7: _generate_explanation()          → LLM response + guardrails
+  │
+  └─ _build_response()                        → assemble PredictResponse
+```
+
+Each stage returns a typed dataclass (`ProductResolution`, `FinancialResult`, `L1Result`, `L2Result`, `MLScore`) so inputs and outputs are explicit.
+
+### Resource Loaders (model_loader.py)
+
+`ModelManager` is a composition root that delegates to focused classes:
+
+| Class | Owns |
+|-------|------|
+| `ModelArtifactLoader` | ML model (MLflow pyfunc + XGBoost fallback) |
+| `LabelEncoderLoader` | sklearn LabelEncoder |
+| `FeaturePipelineLoader` | sklearn preprocessing pipeline |
+| `DatabaseManager` | SQLAlchemy engine lifecycle |
+| `LLMManager` | LLM provider (Groq / Gemini / mock) |
+
+### Dependency Injection (dependencies.py)
+
+Endpoints declare what they need via FastAPI's `Depends()`:
+
+```python
+@app.post("/predict")
+async def predict(
+    request: PredictRequest,
+    manager: ModelManager = Depends(get_model_manager),
+):
+    return run_inference(request, manager)
+```
+
+Tests override dependencies cleanly — no monkeypatching:
+
+```python
+app.dependency_overrides[get_model_manager] = lambda: mock_manager
+```
+
+### Request Flow
 
 1. **`main.py`** intercepts `/predict` and validates inputs (Pydantic models in `schemas.py`).
 2. **`inference.py`** is the orchestrator: 
@@ -40,7 +106,7 @@ The FastAPI application follows a clean request flow:
        `confidence` may be `null` (check server logs for the scoring reason).
    - Requests a response generation block from the LLM based on specific inputs.
    - Triggers LLM Guardrails to ensure output safety.
-3. **`model_loader.py`** manages singletons (the Database Engine, the XGBoost MLflow artifact, the Label Encoder, and Precomputed category statistics) to stay loaded in memory for fast performance.
+3. **`model_loader.py`** manages resource lifecycle (the Database Engine, the XGBoost MLflow artifact, the Label Encoder, and Precomputed category statistics) to stay loaded in memory for fast performance.
 
 ### Catalog browse, reviews, and hypothetical mode
 
@@ -56,6 +122,10 @@ Run Uvicorn from the **SavVio repository root** (the folder that contains `deplo
 ```bash
 cd /path/to/SavVio
 
+# Option A: run script (handles PYTHONPATH automatically)
+./deployment/run.sh api
+
+# Option B: manual
 export PYTHONPATH="model_pipeline/src:savviocore/src:."
 uvicorn deployment.api.main:app --host 0.0.0.0 --port 3500 --reload
 ```
@@ -63,8 +133,6 @@ uvicorn deployment.api.main:app --host 0.0.0.0 --port 3500 --reload
 If you run from another directory (for example only `model_pipeline/src`) without this `PYTHONPATH`, you will get `ModuleNotFoundError: No module named 'deployment'` or import errors for `llm` / `savviocore`.
 
 **Note:** `model_pipeline/src/data/db_loader.py` is used only by the **training pipeline** (`run_pipeline.py`), not by this API. Changing or reverting it does not start or stop the backend.
-
-Alternatively, from the repo root: `./run_api.sh` (sets `PYTHONPATH` and runs Uvicorn).
 
 The server initializes everything and will typically output:
 ```log
@@ -141,6 +209,13 @@ curl -s -X POST http://localhost:3500/predict \
 ## 5. Running the Unit Tests
 
 We have complete test coverage over the core deterministic engine (`test_decision_logic.py`), the request orchestration logic (`test_inference.py`), and the FastAPI definitions (`test_api.py`).
+
+Tests use FastAPI's `dependency_overrides` for clean mocking — no monkeypatching required:
+
+```python
+# conftest.py sets up DI overrides automatically
+app.dependency_overrides[get_model_manager] = lambda: mock_manager
+```
 
 **Run the suite (38 total tests ensures total coverage across rule logic & configurations):**
 

@@ -33,19 +33,10 @@ class APIConfig:
     PROJECT_ROOT = _PROJECT_ROOT
     DEPLOYMENT_DIR = _DEPLOYMENT_DIR
 
-    # Model artifacts — saved by run_pipeline.py's save_best_model_local()
+    # Model artifact — single bundled pyfunc saved by run_pipeline.py's save_best_model_local()
     MODEL_ARTIFACT_DIR = os.getenv(
         "MODEL_ARTIFACT_DIR",
-        str(_PROJECT_ROOT / "model_pipeline" / "models" / "artifacts"),
-    )
-    LABEL_ENCODER_PATH = os.getenv(
-        "LABEL_ENCODER_PATH",
-        str(_PROJECT_ROOT / "model_pipeline" / "models" / "preprocessing" / "label_encoder.pkl"),
-    )
-    # Fitted sklearn feature pipeline (saved by FeaturePipeline.save() during training)
-    FEATURE_PIPELINE_PATH = os.getenv(
-        "FEATURE_PIPELINE_PATH",
-        str(_PROJECT_ROOT / "model_pipeline" / "models" / "artifacts" / "feature_pipeline.pkl"),
+        str(_PROJECT_ROOT / "model_pipeline" / "models" / "model"),
     )
 
     # ---------------------------------------------------------------------------
@@ -98,6 +89,15 @@ class APIConfig:
     # MLflow (for loading models from registry — optional)
     # ---------------------------------------------------------------------------
     MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "")
+
+    # ---------------------------------------------------------------------------
+    # Monitoring (Prometheus / Grafana)
+    # ---------------------------------------------------------------------------
+    METRICS_ENABLED = os.getenv("METRICS_ENABLED", "true").lower() == "true"
+    METRICS_PREFIX = os.getenv("METRICS_PREFIX", "savvio")
+    GRAFANA_CLOUD_REMOTE_WRITE_URL = os.getenv("GRAFANA_CLOUD_REMOTE_WRITE_URL", "")
+    GRAFANA_CLOUD_USERNAME = os.getenv("GRAFANA_CLOUD_USERNAME", "")
+    GRAFANA_CLOUD_API_KEY = os.getenv("GRAFANA_CLOUD_API_KEY", "")
 
     # ---------------------------------------------------------------------------
     # Model Pipeline Source Paths (for importing existing modules)

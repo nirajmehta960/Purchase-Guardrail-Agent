@@ -52,8 +52,8 @@ docker-compose -f docker-compose.monitoring.yml up -d
 ### 2. Start the SavVio API
 
 ```bash
-# From project root
-PYTHONPATH=. uvicorn deployment.api.main:app --host 0.0.0.0 --port 3500 --reload
+# From the project root directory (/SavVio)
+./deployment/run.sh api
 ```
 
 ### 3. Access Dashboards

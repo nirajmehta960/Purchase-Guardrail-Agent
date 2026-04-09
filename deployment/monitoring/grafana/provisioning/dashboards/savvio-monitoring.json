@@ -301,7 +301,7 @@
       "type": "piechart",
       "targets": [
         {
-          "expr": "sum by (recommendation) (savvio_inference_total)",
+          "expr": "sum by (recommendation) (increase(savvio_inference_total[$__range]))",
           "legendFormat": "{{recommendation}}",
           "refId": "A",
           "instant": true

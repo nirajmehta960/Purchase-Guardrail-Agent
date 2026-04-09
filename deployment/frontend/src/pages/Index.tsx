@@ -22,11 +22,8 @@ const Index = () => {
       {/* Header */}
       <header className="border-b border-border/50 backdrop-blur-md bg-background/80 sticky top-0 z-50">
         <div className="container flex items-center justify-between h-16 px-4 md:px-6">
-          <div className="flex items-center gap-2.5">
-            <img src="/favicon.svg" alt="SavVio" className="w-8 h-8" />
-            <span className="font-heading font-semibold text-lg tracking-tight">
-              Sav<span className="text-gradient">Vio</span>
-            </span>
+          <div className="flex items-center">
+            <img src="/savvio-wordmark.svg" alt="SavVio" className="h-8 w-auto" />
           </div>
 
           <div className="flex flex-wrap items-center gap-3 flex-1 justify-end min-w-0">

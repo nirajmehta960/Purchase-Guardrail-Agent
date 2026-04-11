@@ -11,8 +11,9 @@ The application is split into two compute tiers on GCP:
 │    - Redis (Celery broker)                   (port 6379)        │
 │    - (connects to Cloud SQL — no local Postgres on VM)          │
 │                                                                  │
-│  ML Training (on-demand, SSH-triggered by CI/CD):               │
-│    - python model_pipeline/src/run_pipeline.py                  │
+│  ML Training (on-demand, triggered by CI/CD):                   │
+│    - Runs on GitHub Actions runner (XGBoost, not deep learning) │
+│    - Connects to Cloud SQL via DB secrets                        │
 │    - Artifacts written to GCS mlflow bucket                     │
 └──────────────────────────────────────────────────────────────────┘
 
@@ -37,7 +38,7 @@ The application is split into two compute tiers on GCP:
 | Component | Where | Reason |
 |-----------|-------|--------|
 | Airflow (data pipeline) | GCE VM | Needs persistent state, Redis, long-running scheduler — not suited to serverless |
-| ML Training | GCE VM (same) | Needs real DB access, takes minutes to hours — GitHub runner timeout would kill it |
+| ML Training | GitHub Actions runner | XGBoost training is fast enough for a 6h runner limit; connects to Cloud SQL via secrets |
 | FastAPI inference | Cloud Run | Stateless, bursty traffic — auto-scales to 0 when idle, cost-efficient |
 | React frontend | Cloud Run | Static nginx serving — serverless is ideal |
 | MLflow UI | Cloud Run | Lightweight, stateless UI backed by GCS artifacts |
@@ -62,10 +63,11 @@ Each component has its own GitHub Actions workflow with automated triggers:
 ┌─ Code push to model_pipeline/** ─────────────────────────────────┐
 │  modelpipeline_ci.yml                                            │
 │    1. Unit tests                                                 │
-│    2. SSH → VM → run full training pipeline                      │
+│    2. Run training on GitHub runner (connects to Cloud SQL)      │
 │    3. Quality gates: F1 > 0.70, ROC-AUC > 0.75, bias < 0.10    │
-│    4. [gates pass] Model artifacts → GCS                        │
-│    5. [gates pass] Trigger deployment_ci.yml to redeploy API    │
+│    4. Rollback check: F1 drop < 0.02 vs previous model          │
+│    5. [gates pass] Model artifacts → GCS                        │
+│    6. [gates pass] Trigger deployment_ci.yml to redeploy API    │
 └──────────────────────────────────────────────────────────────────┘
 
 ┌─ Code push to deployment/** or savviocore/** or model artifacts ─┐
@@ -79,8 +81,8 @@ Each component has its own GitHub Actions workflow with automated triggers:
 
 ┌─ Code push to deployment/terraform/** ───────────────────────────┐
 │  terraform.yml                                                   │
-│    PR:   terraform plan  (shows what will change)                │
-│    main: terraform apply (provisions/updates infrastructure)     │
+│    push to main: plan + apply in one step (dev environment)      │
+│    NOTE: no PR plan-only check exists yet — apply runs directly  │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -128,13 +130,13 @@ Defined in `deployment/terraform/environments/{dev,prod}/main.tf`.
 |--------|---------|------------|
 | `GCP_SA_KEY` | All workflows | GCP service account JSON key |
 | `GCP_PROJECT_ID` | All workflows | GCP project ID |
-| `GCE_VM_IP` | datapipeline, modelpipeline | External IP of pipeline VM |
-| `GCE_SSH_PRIVATE_KEY` | datapipeline, modelpipeline | SSH private key for VM access |
-| `DB_HOST` | datapipeline | Cloud SQL host |
-| `DB_PORT` | datapipeline | 5432 |
-| `DB_NAME` | datapipeline | Database name |
-| `DB_USER` | datapipeline | Database user |
-| `DB_PASSWORD` | datapipeline | Database password |
+| `GCE_VM_IP` | datapipeline | External IP of pipeline VM (for DAG deployment) |
+| `GCE_SSH_PRIVATE_KEY` | datapipeline | SSH private key for VM access |
+| `DB_HOST` | datapipeline, modelpipeline | Cloud SQL host |
+| `DB_PORT` | datapipeline, modelpipeline | 5432 |
+| `DB_NAME` | datapipeline, modelpipeline | Database name |
+| `DB_USER` | datapipeline, modelpipeline | Database user |
+| `DB_PASSWORD` | datapipeline, modelpipeline | Database password |
 | `API_URL_DEV` | deployment | Cloud Run API URL (baked into frontend image at build time) |
 | `SLACK_WEBHOOK_URL` | deployment | Optional — drift detection alerts |
 
@@ -159,20 +161,73 @@ Defined in `deployment/terraform/environments/{dev,prod}/main.tf`.
 - [ ] `deploy`: change `gcloud run services update` → `gcloud run deploy` (update fails on first deploy)
 - [ ] `deploy`: add `actions/checkout@v4` step (missing — gcloud needs the workspace)
 
+### `modelpipeline_ci.yml`
+- [ ] Add `push` / `pull_request` triggers — currently `workflow_dispatch` only
+- [ ] **Critical**: `metrics.txt` and `bias_metrics.txt` are written in the `run-pipeline` job but read in `validation-gate` and `bias-gate` jobs — each job runs in a fresh environment so these files are lost between jobs. Fix: upload as artifacts after `run-pipeline` and download them in each gate job using `actions/upload-artifact` / `actions/download-artifact`
+- [ ] **Critical**: `previous_metrics.txt` (needed by rollback-check) is never generated or stored anywhere — rollback check always skips. Fix: persist the last passing `metrics.txt` to GCS and download it as `previous_metrics.txt` at the start of each run
+- [ ] DB password is not URL-encoded in the connection string (unlike datapipeline_ci.yml) — will fail if password contains special characters
+- [ ] Add pip caching
+- [ ] After all gates pass: trigger `deployment_ci.yml` via `workflow_dispatch` to redeploy the API with the new model
+
+### `terraform.yml`
+- [ ] Add `pull_request` trigger with `terraform plan` only — currently `terraform apply` runs directly on push to main with no PR preview step
+- [ ] Replace hardcoded `sed -i 's/project_id = "savvio-ai"/.../` with `${{ secrets.GCP_PROJECT_ID }}` via `-var` flag — the sed approach is fragile and will break if the tfvars file changes
+
 ### `deployment/terraform/environments/dev/main.tf`
 - [ ] Add `google_compute_instance` resource for pipeline VM
 - [ ] Add `google_compute_firewall` resource for SSH access
 - [ ] Add VM IP to `outputs.tf`
+- [ ] Change API `min_instances` from `0` to `1` to eliminate cold starts on the inference API
 
 ---
 
-## First-Time Setup Checklist
+## First-Time Deployment Order
 
-1. **GCP project** — enable billing, create project
-2. **Terraform** — run `terraform apply` in `deployment/terraform/environments/dev/` to provision all infrastructure
-3. **VM setup** — SSH into the new GCE VM, clone the repo to `/opt/savvio`, set up `.env`, run `docker-compose up -d` for Airflow
-4. **Cloud SQL** — run database migrations / initial schema via `savviocore`
-5. **GitHub secrets** — add all secrets listed above to the repo
-6. **SSH key** — generate a key pair, add public key to VM metadata, add private key as `GCE_SSH_PRIVATE_KEY` secret
-7. **First deployment** — manually trigger `deployment_ci.yml` via `workflow_dispatch` to build and deploy the initial Cloud Run images
-8. **Verify** — check `GET /health` on the Cloud Run API URL returns `{"status": "ok"}`
+> **Important:** The database currently only exists locally. Cloud SQL must be provisioned AND populated with data before CI/CD can run model training or the API can serve requests. Follow this order exactly.
+
+### Step 1 — Provision Infrastructure
+```bash
+cd deployment/terraform/environments/dev
+terraform init
+terraform apply -var-file="terraform.tfvars"
+```
+This creates: Cloud SQL (empty), GCE VM, GCS buckets, Artifact Registry, Secret Manager entries.
+
+### Step 2 — GitHub Secrets
+Add all secrets listed in the table above to the repo (`Settings → Secrets and variables → Actions`).
+
+### Step 3 — Set Up the GCE VM
+```bash
+# SSH into the VM
+gcloud compute ssh savvio-dev-pipeline-vm --zone us-east1-b
+
+# On the VM:
+sudo git clone https://github.com/your-org/savvio /opt/savvio
+cd /opt/savvio/data_pipeline
+cp .env.example .env      # fill in Cloud SQL credentials from Terraform outputs
+sudo docker-compose up -d
+```
+
+### Step 4 — Populate Cloud SQL (one-time)
+The database schema is empty after Terraform. You must run the Airflow DAG once to load data:
+```bash
+# From the Airflow UI (port 8080 on the VM) or via CLI:
+airflow dags trigger Data_pipeline_airflow
+```
+This runs the full pipeline: ingestion → preprocessing → feature engineering → DB loading.
+Cloud SQL will now have `financial_profiles`, `products`, `reviews`, and vector embeddings.
+
+### Step 5 — Run Model Training
+Trigger `modelpipeline_ci.yml` manually via `workflow_dispatch` in GitHub Actions.
+The runner connects to Cloud SQL, trains the XGBoost model, runs quality gates, and writes artifacts to GCS.
+
+### Step 6 — Deploy the Application
+Trigger `deployment_ci.yml` manually via `workflow_dispatch`.
+This builds the Docker images, pushes to Artifact Registry, and deploys to Cloud Run.
+
+### Step 7 — Verify
+```bash
+# Get the API URL from Terraform output or GCP Console
+curl https://savvio-dev-api-xxx.run.app/health
+# Expected: {"status": "ok", "model": "loaded", "db": "connected"}
+```

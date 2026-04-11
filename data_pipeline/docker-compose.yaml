@@ -126,6 +126,24 @@ services:
       start_period: 30s
     restart: always
 
+  # ---- Cloud SQL Auth Proxy (application data) ----
+  # Provides a TCP connection to Cloud SQL for DAGs that read/write application
+  # data (financial_profiles, products, reviews, vector embeddings, etc.).
+  # Airflow's own metadata DB remains the local 'postgres' service above.
+  # Auth: uses the GCE VM's service account via the metadata server.
+  # Set DB_INSTANCE_CONNECTION_NAME in .env to your Cloud SQL connection name
+  # (e.g. savvio-purchase-guardrail:us-east1:savvio-dev-db-instance).
+  # Point application DB_HOST=cloud-sql-proxy in .env for DAG tasks.
+  cloud-sql-proxy:
+    image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.1
+    command:
+      - "${DB_INSTANCE_CONNECTION_NAME:-savvio-purchase-guardrail:us-east1:savvio-dev-db-instance}"
+      - "--address=0.0.0.0"
+      - "--port=5432"
+    expose:
+      - "5432"
+    restart: always
+
   airflow-apiserver:
     <<: *airflow-common
     command: api-server

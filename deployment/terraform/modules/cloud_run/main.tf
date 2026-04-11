@@ -67,6 +67,14 @@ resource "google_cloud_run_v2_service" "this" {
   }
 
   labels = var.labels
+
+  # Image is managed by CI/CD (gcloud run deploy), not Terraform.
+  # Prevents Terraform from reverting to the placeholder or failing on first apply.
+  lifecycle {
+    ignore_changes = [
+      template[0].containers[0].image,
+    ]
+  }
 }
 
 resource "google_cloud_run_v2_service_iam_member" "public" {

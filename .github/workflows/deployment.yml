@@ -1,29 +1,20 @@
 name: Deployment CI/CD
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "deployment/api/**"
+      - "deployment/frontend/src/**"
+      - "deployment/frontend/package.json"
+      - "deployment/requirements.txt"
+      - "deployment/__init__.py"
+      - "savviocore/**"
+      - "model_pipeline/src/**"
+      - "model_pipeline/models/model/**"
   workflow_dispatch:
   schedule:
     - cron: "0 8 * * 1"
-  #   inputs:
-  #     environment:
-  #       description: "Target environment"
-  #       required: true
-  #       default: "dev"
-  #       type: choice
-  #       options:
-  #         - dev
-  #         - prod
-  # push:
-  #   branches: [main]
-  #   paths:
-  #     - "deployment/api/**"
-  #     - "deployment/frontend/src/**"
-  #     - "deployment/frontend/package.json"
-  #     - "deployment/requirements.txt"
-  #     - "deployment/__init__.py"
-  #     - "savviocore/**"
-  #     - "model_pipeline/src/**"
-  #     - "model_pipeline/models/model/**"
 
 env:
   ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
@@ -45,7 +36,10 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -r deployment/requirements.txt && pip install pytest httpx
+        run: |
+          pip install -e savviocore
+          pip install -r deployment/requirements.txt
+          pip install pytest httpx
 
       - name: Run tests
         env:
@@ -140,50 +134,44 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-push-api, build-push-frontend]
     steps:
+      - uses: actions/checkout@v4
+
       - uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Deploy API
+        env:
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-api
         run: |
-          gcloud run services update savvio-${{ env.ENVIRONMENT }}-api \
-            --image ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-api:${{ github.sha }} \
-            --region ${{ env.REGION }} --quiet
+          gcloud run deploy savvio-${{ env.ENVIRONMENT }}-api \
+            --image $IMAGE:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --quiet
 
       - name: Deploy Frontend
+        env:
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-frontend
         run: |
-          gcloud run services update savvio-${{ env.ENVIRONMENT }}-frontend \
-            --image ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-frontend:${{ github.sha }} \
-            --region ${{ env.REGION }} --quiet
+          gcloud run deploy savvio-${{ env.ENVIRONMENT }}-frontend \
+            --image $IMAGE:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --quiet
 
       - name: Verify API health
         run: |
           API_URL=$(gcloud run services describe savvio-${{ env.ENVIRONMENT }}-api \
             --region ${{ env.REGION }} --format='value(status.url)')
           echo "API: $API_URL"
-          curl -sf "$API_URL/health" || echo "Warning: health check non-200"
+          curl -sf "$API_URL/health" || { echo "ERROR: health check failed"; exit 1; }
 
   # ---------------------------------------------------------------------------
-  # Notifications
+  # Drift Detection (runs after deploy)
   # ---------------------------------------------------------------------------
-  notify-on-failure:
-    name: Notify Failure
-    runs-on: ubuntu-latest
-    needs: [test-api, test-frontend, build-push-api, build-push-frontend, deploy]
-    if: failure()
-    steps:
-      - run: echo "FAILED — ${{ env.ENVIRONMENT }} — ${{ github.sha }}"
-
-  notify-on-success:
-    name: Notify Success
-    runs-on: ubuntu-latest
-    needs: [test-api, test-frontend, build-push-api, build-push-frontend, deploy]
-    if: success()
-    steps:
-      - run: echo "PASSED — ${{ env.ENVIRONMENT }} — ${{ github.sha }}"
   drift-detection:
     name: Drift Detection
     runs-on: ubuntu-latest
+    needs: [deploy]
     steps:
       - uses: actions/checkout@v4
 
@@ -198,7 +186,7 @@ jobs:
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
-          python deployment/monitoring/drift_detector.py
+          python deployment/monitoring/drift/drift_detector.py
 
       - name: Upload drift report
         if: always()
@@ -207,3 +195,28 @@ jobs:
           name: drift-report-${{ github.run_id }}
           path: deployment/monitoring/reports/
           retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Notifications
+  # ---------------------------------------------------------------------------
+  notify-on-failure:
+    name: Notify Failure
+    runs-on: ubuntu-latest
+    needs: [test-api, test-frontend, build-push-api, build-push-frontend, deploy, drift-detection]
+    if: failure()
+    steps:
+      - run: |
+          echo "FAILED — ${{ env.ENVIRONMENT }} — ${{ github.sha }}"
+          echo "Branch:       ${{ github.ref_name }}"
+          echo "Triggered by: ${{ github.actor }}"
+
+  notify-on-success:
+    name: Notify Success
+    runs-on: ubuntu-latest
+    needs: [test-api, test-frontend, build-push-api, build-push-frontend, deploy, drift-detection]
+    if: success()
+    steps:
+      - run: |
+          echo "PASSED — ${{ env.ENVIRONMENT }} — ${{ github.sha }}"
+          echo "Branch:       ${{ github.ref_name }}"
+          echo "Triggered by: ${{ github.actor }}"

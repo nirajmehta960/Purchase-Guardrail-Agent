@@ -111,6 +111,55 @@ module "docker_repo" {
   depends_on    = [google_project_service.apis]
 }
 
+# ---- GCE VM (Airflow + ML Training) ----
+resource "google_compute_instance" "pipeline_vm" {
+  name         = "${local.prefix}-pipeline-vm"
+  machine_type = "e2-standard-2"
+  zone         = var.zone
+  labels       = local.labels
+  tags         = ["ssh-access"]
+
+  boot_disk {
+    initialize_params {
+      image = "debian-cloud/debian-12"
+      size  = 50
+    }
+  }
+
+  network_interface {
+    network = "default"
+    access_config {}  # ephemeral public IP for SSH
+  }
+
+  service_account {
+    email  = google_service_account.cloud_run.email
+    scopes = ["cloud-platform"]
+  }
+
+  metadata_startup_script = <<-EOF
+    #!/bin/bash
+    apt-get update && apt-get install -y docker.io docker-compose-plugin git
+    systemctl enable docker
+    systemctl start docker
+    usermod -aG docker github-actions 2>/dev/null || true
+  EOF
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_compute_firewall" "allow_ssh" {
+  name    = "${local.prefix}-allow-ssh"
+  network = "default"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22"]
+  }
+
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["ssh-access"]
+}
+
 # ---- Cloud Run: API ----
 module "api" {
   source                = "../../modules/cloud_run"
@@ -121,7 +170,7 @@ module "api" {
   service_account_email = google_service_account.cloud_run.email
   cloud_sql_connection  = module.database.connection_name
   public_access         = true
-  min_instances         = 0
+  min_instances         = 1   # keep one warm instance — eliminates cold start on inference requests
   max_instances         = 2
   cpu                   = "1"
   memory                = "1Gi"

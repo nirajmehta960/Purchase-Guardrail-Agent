@@ -170,4 +170,5 @@ CLAUDE.md
 copilot-instructions.md
 deployment/monitoring/.env
 deployment/monitoring/reports/
-deployment/monitoring/data/
+deployment/monitoring/data/*
+!deployment/monitoring/data/baseline_data.csv

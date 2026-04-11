@@ -10,16 +10,13 @@ The application is split into two compute tiers on GCP:
 │    - Airflow webserver + scheduler + worker  (port 8080)        │
 │    - Redis (Celery broker)                   (port 6379)        │
 │    - (connects to Cloud SQL — no local Postgres on VM)          │
-│                                                                  │
-│  ML Training (on-demand, SSH-triggered by CI/CD):               │
-│    - python model_pipeline/src/run_pipeline.py                  │
-│    - Artifacts written to GCS mlflow bucket                     │
 └──────────────────────────────────────────────────────────────────┘
 
 ┌──────── Cloud Run (serverless, auto-scales to 0) ───────────────┐
 │  savvio-{env}-api        FastAPI inference    port 8080          │
 │  savvio-{env}-frontend   Nginx / React        port 8501          │
 │  savvio-{env}-mlflow     MLflow tracking UI   port 5000          │
+│  savvio-{env}-training   ML training job      (on-demand)        │
 └─────────────────────────────────────────────────────────────────┘
 
 ┌──────── Managed GCP Services ───────────────────────────────────┐
@@ -37,7 +34,7 @@ The application is split into two compute tiers on GCP:
 | Component | Where | Reason |
 |-----------|-------|--------|
 | Airflow (data pipeline) | GCE VM | Needs persistent state, Redis, long-running scheduler — not suited to serverless |
-| ML Training | GCE VM (same) | Needs real DB access, takes minutes to hours — GitHub runner timeout would kill it |
+| ML Training | Cloud Run (job) | On-demand containerized job — scales to 0 when idle, no SSH/VM overhead, Cloud Run jobs support up to 24 h timeout with `--task-timeout` |
 | FastAPI inference | Cloud Run | Stateless, bursty traffic — auto-scales to 0 when idle, cost-efficient |
 | React frontend | Cloud Run | Static nginx serving — serverless is ideal |
 | MLflow UI | Cloud Run | Lightweight, stateless UI backed by GCS artifacts |
@@ -62,10 +59,11 @@ Each component has its own GitHub Actions workflow with automated triggers:
 ┌─ Code push to model_pipeline/** ─────────────────────────────────┐
 │  modelpipeline_ci.yml                                            │
 │    1. Unit tests                                                 │
-│    2. SSH → VM → run full training pipeline                      │
-│    3. Quality gates: F1 > 0.70, ROC-AUC > 0.75, bias < 0.10    │
-│    4. [gates pass] Model artifacts → GCS                        │
-│    5. [gates pass] Trigger deployment_ci.yml to redeploy API    │
+│    2. Build training Docker image → push to Artifact Registry   │
+│    3. Execute Cloud Run job (savvio-{env}-training)              │
+│    4. Quality gates: F1 > 0.70, ROC-AUC > 0.75, bias < 0.10    │
+│    5. [gates pass] Model artifacts → GCS                        │
+│    6. [gates pass] Trigger deployment_ci.yml to redeploy API    │
 └──────────────────────────────────────────────────────────────────┘
 
 ┌─ Code push to deployment/** or savviocore/** or model artifacts ─┐
@@ -107,7 +105,8 @@ Defined in `deployment/terraform/environments/{dev,prod}/main.tf`.
 
 | Resource | Type | Purpose |
 |----------|------|---------|
-| `savvio-{env}-pipeline-vm` | `google_compute_instance` | GCE VM for Airflow + training |
+| `savvio-{env}-pipeline-vm` | `google_compute_instance` | GCE VM for Airflow |
+| `savvio-{env}-training` | Cloud Run job | On-demand ML training |
 | `savvio-{env}-db-instance` | Cloud SQL (PostgreSQL 15) | Shared database |
 | `savvio-{env}-api` | Cloud Run service | FastAPI inference |
 | `savvio-{env}-frontend` | Cloud Run service | React frontend |
@@ -128,8 +127,8 @@ Defined in `deployment/terraform/environments/{dev,prod}/main.tf`.
 |--------|---------|------------|
 | `GCP_SA_KEY` | All workflows | GCP service account JSON key |
 | `GCP_PROJECT_ID` | All workflows | GCP project ID |
-| `GCE_VM_IP` | datapipeline, modelpipeline | External IP of pipeline VM |
-| `GCE_SSH_PRIVATE_KEY` | datapipeline, modelpipeline | SSH private key for VM access |
+| `GCE_VM_IP` | datapipeline | External IP of pipeline VM |
+| `GCE_SSH_PRIVATE_KEY` | datapipeline | SSH private key for VM access |
 | `DB_HOST` | datapipeline | Cloud SQL host |
 | `DB_PORT` | datapipeline | 5432 |
 | `DB_NAME` | datapipeline | Database name |
@@ -159,20 +158,28 @@ Defined in `deployment/terraform/environments/{dev,prod}/main.tf`.
 - [ ] `deploy`: change `gcloud run services update` → `gcloud run deploy` (update fails on first deploy)
 - [ ] `deploy`: add `actions/checkout@v4` step (missing — gcloud needs the workspace)
 
+### `modelpipeline_ci.yml`
+- [ ] Replace SSH-to-VM training step with Cloud Run job execution (`gcloud run jobs execute`)
+- [ ] Add step to build and push training Docker image to Artifact Registry
+- [ ] Add `--wait` flag to `gcloud run jobs execute` so CI blocks until training completes
+- [ ] Parse Cloud Run job logs for quality gate metrics (F1, ROC-AUC, bias)
+
 ### `deployment/terraform/environments/dev/main.tf`
 - [ ] Add `google_compute_instance` resource for pipeline VM
 - [ ] Add `google_compute_firewall` resource for SSH access
 - [ ] Add VM IP to `outputs.tf`
+- [ ] Add `google_cloud_run_v2_job` resource for `savvio-{env}-training`
 
 ---
 
 ## First-Time Setup Checklist
 
 1. **GCP project** — enable billing, create project
-2. **Terraform** — run `terraform apply` in `deployment/terraform/environments/dev/` to provision all infrastructure
+2. **Terraform** — run `terraform apply` in `deployment/terraform/environments/dev/` to provision all infrastructure (including the Cloud Run training job)
 3. **VM setup** — SSH into the new GCE VM, clone the repo to `/opt/savvio`, set up `.env`, run `docker-compose up -d` for Airflow
 4. **Cloud SQL** — run database migrations / initial schema via `savviocore`
 5. **GitHub secrets** — add all secrets listed above to the repo
-6. **SSH key** — generate a key pair, add public key to VM metadata, add private key as `GCE_SSH_PRIVATE_KEY` secret
-7. **First deployment** — manually trigger `deployment_ci.yml` via `workflow_dispatch` to build and deploy the initial Cloud Run images
-8. **Verify** — check `GET /health` on the Cloud Run API URL returns `{"status": "ok"}`
+6. **SSH key** — generate a key pair, add public key to VM metadata, add private key as `GCE_SSH_PRIVATE_KEY` secret (only needed for Airflow/data pipeline)
+7. **Training image** — build and push the training Docker image to Artifact Registry, create the Cloud Run job via `gcloud run jobs create`
+8. **First deployment** — manually trigger `deployment_ci.yml` via `workflow_dispatch` to build and deploy the initial Cloud Run images
+9. **Verify** — check `GET /health` on the Cloud Run API URL returns `{"status": "ok"}`

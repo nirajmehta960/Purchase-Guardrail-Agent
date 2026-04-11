@@ -3,6 +3,11 @@ name: Model Pipeline CI/CD
 on:
   workflow_dispatch:  # Manual trigger only
 
+env:
+  ENVIRONMENT: dev
+  REGION: us-east1
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+
 jobs:
   # ===========================================================================
   # JOB 1 — Unit Tests
@@ -19,6 +24,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
+          cache-dependency-path: model_pipeline/model-requirements.txt
 
       - name: Install dependencies
         working-directory: model_pipeline
@@ -46,59 +53,7 @@ jobs:
             -v --tb=short
 
   # ===========================================================================
-  # JOB 2 — Run Model Pipeline
-  # ===========================================================================
-  run-pipeline:
-    name: Run Model Pipeline
-    runs-on: ubuntu-latest
-    needs: unit-tests
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Authenticate to GCP
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        working-directory: model_pipeline
-        run: |
-          pip install --upgrade pip
-          pip install -e ../savviocore   # install savviocore from root
-          pip install -e .
-          if [ -f model-requirements.txt ]; then pip install -r model-requirements.txt; fi
-          pip install --force-reinstall "sqlalchemy>=2.0"
-
-      - name: Start MLflow server
-        run: |
-          cd model_pipeline
-          mlflow server \
-            --backend-store-uri sqlite:///mlflow.db \
-            --default-artifact-root ./mlruns \
-            --host 127.0.0.1 \
-            --port 5000 &
-          sleep 5
-
-      - name: Run pipeline
-        working-directory: model_pipeline
-        env:
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-        run: |
-          MLFLOW_TRACKING_URI=http://127.0.0.1:5000 python src/run_pipeline.py
-
-  # ===========================================================================
-  # JOB 3 — DB Connection Check
+  # JOB 2 — DB Connection Check
   # ===========================================================================
   db-connection-check:
     name: DB Connection Check
@@ -153,51 +108,137 @@ jobs:
           EOF
 
   # ===========================================================================
-  # JOB 4 — Validation Gate
-  # Blocks if F1 < 0.70 or ROC AUC < 0.75
+  # JOB 3 — Build & Push Training Image, Execute Cloud Run Job
   # ===========================================================================
-  validation-gate:
-    name: Validation Gate
+  run-training:
+    name: Cloud Run Training Job
     runs-on: ubuntu-latest
-    needs: run-pipeline
+    needs: [unit-tests, db-connection-check]
+
+    outputs:
+      f1_score: ${{ steps.parse-metrics.outputs.f1_score }}
+      roc_auc: ${{ steps.parse-metrics.outputs.roc_auc }}
+      bias_passed: ${{ steps.parse-metrics.outputs.bias_passed }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Check validation thresholds
-        working-directory: model_pipeline
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push training image
         env:
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-training
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            -f model_pipeline/Dockerfile \
+            -t $IMAGE:${{ github.sha }} \
+            -t $IMAGE:latest \
+            --push .
+
+      - name: Update Cloud Run job with new image
+        env:
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-training
+          JOB_NAME: savvio-${{ env.ENVIRONMENT }}-training
+        run: |
+          # Update the job to use the new image (job must already exist via Terraform)
+          gcloud run jobs update $JOB_NAME \
+            --image $IMAGE:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --quiet
+
+      - name: Execute Cloud Run training job
+        env:
+          JOB_NAME: savvio-${{ env.ENVIRONMENT }}-training
+        run: |
+          gcloud run jobs execute $JOB_NAME \
+            --region ${{ env.REGION }} \
+            --wait \
+            --format="value(metadata.name)" | tee /tmp/execution_name.txt
+
+      - name: Fetch training logs
+        env:
+          JOB_NAME: savvio-${{ env.ENVIRONMENT }}-training
+        run: |
+          EXECUTION=$(cat /tmp/execution_name.txt)
+          # Give logs a moment to propagate
+          sleep 10
+          gcloud logging read \
+            "resource.type=cloud_run_job AND resource.labels.job_name=$JOB_NAME AND labels.\"run.googleapis.com/execution_name\"=$EXECUTION" \
+            --limit=500 \
+            --format="value(textPayload)" \
+            --project=${{ env.PROJECT_ID }} | tee /tmp/training_logs.txt
+
+      - name: Parse metrics from logs
+        id: parse-metrics
+        run: |
+          python3 - <<'PYEOF'
+          import re, os
+
+          metrics = {}
+          with open("/tmp/training_logs.txt") as f:
+              for line in f:
+                  m = re.match(r"SAVVIO_METRIC::(\w+)=([\d.]+)", line.strip())
+                  if m:
+                      metrics[m.group(1)] = m.group(2)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as gh:
+              gh.write(f"f1_score={metrics.get('f1_score', '0.0')}\n")
+              gh.write(f"roc_auc={metrics.get('roc_auc', '0.0')}\n")
+              gh.write(f"bias_passed={metrics.get('bias_passed', '0')}\n")
+
+          print("Parsed metrics:")
+          for k, v in metrics.items():
+              print(f"  {k} = {v}")
+          PYEOF
+
+  # ===========================================================================
+  # JOB 4 — Validation Gate
+  # ===========================================================================
+  validation-gate:
+    name: Validation Gate
+    runs-on: ubuntu-latest
+    needs: run-training
+
+    steps:
+      - name: Check quality thresholds
+        env:
+          F1_SCORE: ${{ needs.run-training.outputs.f1_score }}
+          ROC_AUC: ${{ needs.run-training.outputs.roc_auc }}
+          BIAS_PASSED: ${{ needs.run-training.outputs.bias_passed }}
           F1_THRESHOLD: "0.70"
           ROC_AUC_THRESHOLD: "0.75"
+          BIAS_THRESHOLD: "1"
         run: |
           python3 - <<'EOF'
           import os, sys
 
-          metrics_file = "metrics.txt"
-          if not os.path.exists(metrics_file):
-              print("No metrics file found — skipping validation gate.")
-              sys.exit(0)
-
-          metrics = {}
-          with open(metrics_file) as f:
-              for line in f:
-                  k, v = line.strip().split("=")
-                  metrics[k.strip()] = float(v.strip())
-
-          f1      = metrics.get("f1_score", 0.0)
-          roc_auc = metrics.get("roc_auc", 0.0)
+          f1       = float(os.environ.get("F1_SCORE", "0.0"))
+          roc_auc  = float(os.environ.get("ROC_AUC", "0.0"))
+          bias_ok  = os.environ.get("BIAS_PASSED", "0")
           f1_thresh  = float(os.environ["F1_THRESHOLD"])
           roc_thresh = float(os.environ["ROC_AUC_THRESHOLD"])
 
-          print(f"F1 Score: {f1:.4f} (threshold: >{f1_thresh})")
-          print(f"ROC AUC:  {roc_auc:.4f} (threshold: >{roc_thresh})")
+          print(f"F1 Score:     {f1:.4f}  (threshold: >{f1_thresh})")
+          print(f"ROC AUC:      {roc_auc:.4f}  (threshold: >{roc_thresh})")
+          print(f"Bias Passed:  {bias_ok}")
 
           failed = []
           if f1 < f1_thresh:
               failed.append(f"F1 {f1:.4f} < {f1_thresh}")
           if roc_auc < roc_thresh:
               failed.append(f"ROC AUC {roc_auc:.4f} < {roc_thresh}")
+          if bias_ok != "1":
+              failed.append(f"Bias gate did not pass (value={bias_ok})")
 
           if failed:
               print(f"VALIDATION GATE FAILED: {', '.join(failed)}")
@@ -206,132 +247,53 @@ jobs:
           EOF
 
   # ===========================================================================
-  # JOB 5 — Bias Detection Gate
-  # Blocks if Max F1 disparity >= 0.10
+  # JOB 5 — Trigger Deployment (on success)
   # ===========================================================================
-  bias-gate:
-    name: Bias Detection Gate
+  trigger-deploy:
+    name: Trigger Deployment
     runs-on: ubuntu-latest
-    needs: run-pipeline
+    needs: validation-gate
+    if: github.ref == 'refs/heads/main'
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Check bias thresholds
-        working-directory: model_pipeline
+      - name: Trigger deployment workflow
         env:
-          BIAS_THRESHOLD: "0.10"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python3 - <<'EOF'
-          import os, sys
-
-          bias_file = "bias_metrics.txt"
-          if not os.path.exists(bias_file):
-              print("No bias metrics file found — skipping bias gate.")
-              sys.exit(0)
-
-          threshold  = float(os.environ["BIAS_THRESHOLD"])
-          violations = []
-
-          with open(bias_file) as f:
-              for line in f:
-                  k, v = line.strip().split("=")
-                  val = float(v.strip())
-                  if abs(val) >= threshold:
-                      violations.append(f"{k.strip()}={val:.4f}")
-
-          if violations:
-              print(f"BIAS GATE FAILED — disparity >= {threshold}:")
-              for v in violations:
-                  print(f"  {v}")
-              sys.exit(1)
-          print(f"BIAS GATE PASSED -- all disparities < {threshold}")
-          EOF
+          gh workflow run deployment.yml \
+            --repo ${{ github.repository }} \
+            --ref main
 
   # ===========================================================================
-  # JOB 6 — Rollback Check
-  # Blocks if F1 drops more than 0.02 vs previous model
-  # ===========================================================================
-  rollback-check:
-    name: Rollback Check
-    runs-on: ubuntu-latest
-    needs: [validation-gate, bias-gate]
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Check rollback threshold
-        working-directory: model_pipeline
-        env:
-          ROLLBACK_THRESHOLD: "0.02"
-        run: |
-          python3 - <<'EOF'
-          import os, sys
-
-          current_file  = "metrics.txt"
-          previous_file = "previous_metrics.txt"
-
-          if not os.path.exists(current_file) or not os.path.exists(previous_file):
-              print("Metrics files not found — skipping rollback check.")
-              sys.exit(0)
-
-          def read_metrics(path):
-              m = {}
-              with open(path) as f:
-                  for line in f:
-                      k, v = line.strip().split("=")
-                      m[k.strip()] = float(v.strip())
-              return m
-
-          current   = read_metrics(current_file)
-          previous  = read_metrics(previous_file)
-          curr_f1   = current.get("f1_score", 0.0)
-          prev_f1   = previous.get("f1_score", 0.0)
-          threshold = float(os.environ["ROLLBACK_THRESHOLD"])
-          drop      = prev_f1 - curr_f1
-
-          print(f"Previous F1: {prev_f1:.4f}")
-          print(f"Current F1:  {curr_f1:.4f}")
-          print(f"Drop:        {drop:.4f} (max allowed: {threshold})")
-
-          if drop > threshold:
-              print(f"ROLLBACK CHECK FAILED — F1 dropped by {drop:.4f}")
-              sys.exit(1)
-          print("ROLLBACK CHECK PASSED ✅")
-          EOF
-
-  # ===========================================================================
-  # JOB 7 — Notify on Failure
+  # JOB 6 — Notify on Failure
   # ===========================================================================
   notify-on-failure:
     name: Notify on Failure
     runs-on: ubuntu-latest
-    needs: [unit-tests, run-pipeline, db-connection-check, validation-gate, bias-gate, rollback-check]
+    needs: [unit-tests, db-connection-check, run-training, validation-gate]
     if: failure()
 
     steps:
       - name: Send failure notification
         run: |
-          echo "CI/CD pipeline FAILED"
+          echo "Model Pipeline CI/CD FAILED"
           echo "Branch:       ${{ github.ref_name }}"
           echo "Commit:       ${{ github.sha }}"
           echo "Triggered by: ${{ github.actor }}"
 
   # ===========================================================================
-  # JOB 8 — Notify on Success
+  # JOB 7 — Notify on Success
   # ===========================================================================
   notify-on-success:
     name: Notify on Success
     runs-on: ubuntu-latest
-    needs: [unit-tests, run-pipeline, db-connection-check, validation-gate, bias-gate, rollback-check]
+    needs: [unit-tests, db-connection-check, run-training, validation-gate]
     if: success()
 
     steps:
       - name: Send success notification
         run: |
-          echo "CI/CD pipeline PASSED"
+          echo "Model Pipeline CI/CD PASSED"
           echo "Branch:       ${{ github.ref_name }}"
           echo "Commit:       ${{ github.sha }}"
           echo "Triggered by: ${{ github.actor }}"

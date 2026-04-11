@@ -142,33 +142,33 @@ Defined in `deployment/terraform/environments/{dev,prod}/main.tf`.
 ## Known Issues to Fix in Existing Workflows
 
 ### `datapipeline_ci.yml`
-- [ ] Add `push` / `pull_request` triggers — currently `workflow_dispatch` only (never runs automatically)
-- [ ] Remove "Run data pipeline" step — runs real ingestion in CI (wrong)
-- [ ] Remove `cp -r dags/src/data/raw/` — source path does not exist
-- [ ] Add DAG parse validation step
-- [ ] Add pip caching
-- [ ] `data-quality-check` job: add GCP auth (currently missing), remove duplicate `tests/validation/`
-- [ ] Add `tests/database/` to unit-tests (currently never run by any job)
-- [ ] Add `deploy-dags` job (SSH to VM on main merge)
+- [ ] Add `push` / `pull_request` triggers — currently `workflow_dispatch` only (keeping manual per team decision)
+- [x] Remove "Run data pipeline" step — runs real ingestion in CI (wrong)
+- [x] Remove `cp -r dags/src/data/raw/` — source path does not exist
+- [x] Add DAG parse validation step
+- [x] Add pip caching
+- [x] `data-quality-check` job: add GCP auth (currently missing), remove duplicate `tests/validation/`
+- [x] Add `tests/database/` to unit-tests (currently never run by any job)
+- [x] Add `deploy-dags` job (SSH to VM on main merge)
 
 ### `deployment_ci.yml`
-- [ ] Uncomment the `push` trigger block (already written, just commented out)
-- [ ] `test-api`: add `pip install -e savviocore` (API imports from it)
-- [ ] `drift-detection`: add `needs: [deploy]` (currently runs in parallel with tests)
-- [ ] `deploy`: change `gcloud run services update` → `gcloud run deploy` (update fails on first deploy)
-- [ ] `deploy`: add `actions/checkout@v4` step (missing — gcloud needs the workspace)
+- [ ] Uncomment the `push` trigger block (already written, just commented out — keeping manual per team decision)
+- [x] `test-api`: add `pip install -e savviocore` (API imports from it)
+- [x] `drift-detection`: add `needs: [deploy]` (currently runs in parallel with tests)
+- [x] `deploy`: change `gcloud run services update` → `gcloud run deploy` (update fails on first deploy)
+- [x] `deploy`: add `actions/checkout@v4` step (missing — gcloud needs the workspace)
 
 ### `modelpipeline_ci.yml`
-- [ ] Replace SSH-to-VM training step with Cloud Run job execution (`gcloud run jobs execute`)
-- [ ] Add step to build and push training Docker image to Artifact Registry
-- [ ] Add `--wait` flag to `gcloud run jobs execute` so CI blocks until training completes
-- [ ] Parse Cloud Run job logs for quality gate metrics (F1, ROC-AUC, bias)
+- [x] Replace SSH-to-VM training step with Cloud Run job execution (`gcloud run jobs execute`)
+- [x] Add step to build and push training Docker image to Artifact Registry
+- [x] Add `--wait` flag to `gcloud run jobs execute` so CI blocks until training completes
+- [x] Parse Cloud Run job logs for quality gate metrics (F1, ROC-AUC, bias)
 
-### `deployment/terraform/environments/dev/main.tf`
-- [ ] Add `google_compute_instance` resource for pipeline VM
-- [ ] Add `google_compute_firewall` resource for SSH access
-- [ ] Add VM IP to `outputs.tf`
-- [ ] Add `google_cloud_run_v2_job` resource for `savvio-{env}-training`
+### `deployment/terraform/environments/{dev,prod}/main.tf`
+- [x] Add `google_compute_instance` resource for pipeline VM
+- [x] Add `google_compute_firewall` resource for SSH access
+- [x] Add VM IP to `outputs.tf`
+- [x] Add `google_cloud_run_v2_job` resource for `savvio-{env}-training`
 
 ---
 

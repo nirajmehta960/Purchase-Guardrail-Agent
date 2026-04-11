@@ -111,6 +111,116 @@ module "docker_repo" {
   depends_on    = [google_project_service.apis]
 }
 
+# ---- Cloud Run Job: ML Training ----
+resource "google_cloud_run_v2_job" "training" {
+  name     = "${local.prefix}-training"
+  location = var.region
+
+  template {
+    task_count = 1
+
+    template {
+      service_account = google_service_account.cloud_run.email
+      timeout         = "7200s"   # 2 hours for prod training
+
+      containers {
+        image = var.training_image
+
+        resources {
+          limits = {
+            cpu    = "4"
+            memory = "8Gi"
+          }
+        }
+
+        env {
+          name  = "ENVIRONMENT"
+          value = var.environment
+        }
+        env {
+          name  = "DB_USER"
+          value = module.database.user_name
+        }
+        env {
+          name  = "DB_NAME"
+          value = module.database.database_name
+        }
+        env {
+          name  = "INSTANCE_CONNECTION_NAME"
+          value = module.database.connection_name
+        }
+        env {
+          name  = "MLFLOW_TRACKING_URI"
+          value = module.mlflow.service_url
+        }
+        env {
+          name  = "MLFLOW_ARTIFACT_ROOT"
+          value = "gs://${module.mlflow_bucket.bucket_name}/artifacts"
+        }
+        env {
+          name = "DB_PASS"
+          value_source {
+            secret_key_ref {
+              secret  = module.db_password_secret.secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
+    }
+  }
+
+  labels     = local.labels
+  depends_on = [google_project_service.apis, module.db_password_secret, module.mlflow]
+}
+
+# ---- GCE VM: Airflow Pipeline ----
+resource "google_compute_instance" "pipeline_vm" {
+  name         = "${local.prefix}-pipeline-vm"
+  machine_type = "e2-standard-2"
+  zone         = var.zone
+
+  boot_disk {
+    initialize_params {
+      image = "debian-cloud/debian-12"
+      size  = 50
+    }
+  }
+
+  network_interface {
+    network = "default"
+    access_config {}
+  }
+
+  service_account {
+    email  = google_service_account.cloud_run.email
+    scopes = ["cloud-platform"]
+  }
+
+  metadata_startup_script = <<-SCRIPT
+    #!/bin/bash
+    apt-get update && apt-get install -y docker.io docker-compose git
+    systemctl enable docker && systemctl start docker
+  SCRIPT
+
+  labels     = local.labels
+  tags       = ["savvio-ssh"]
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_compute_firewall" "ssh" {
+  name    = "${local.prefix}-allow-ssh"
+  network = "default"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22"]
+  }
+
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["savvio-ssh"]
+}
+
 # ---- Cloud Run: API ----
 module "api" {
   source                = "../../modules/cloud_run"

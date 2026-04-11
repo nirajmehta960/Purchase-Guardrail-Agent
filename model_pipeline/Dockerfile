@@ -1,40 +1,33 @@
 # =============================================================================
-# SavVio ML Pipeline — Compute Environment
+# SavVio ML Pipeline — Cloud Run Job Container
 # =============================================================================
-# This Dockerfile builds the container where model training code executes.
-# By default it uses a lightweight Python image (CPU-only).
-# To enable GPU/CUDA support for large datasets, swap the FROM line below.
+# Builds the training image executed as a Cloud Run job.
+# CI pushes this image to Artifact Registry, then runs it via
+# `gcloud run jobs execute`.
 # =============================================================================
 
-# --------------------------------------------------------------
-# Option 1: CPU-only (Default — lightweight, fast builds)
-# --------------------------------------------------------------
 FROM python:3.11-slim
-
-# --------------------------------------------------------------
-# Option 2: GPU/CUDA (Uncomment below AND comment out Option 1)
-# Requires: NVIDIA Container Toolkit on host machine
-# --------------------------------------------------------------
-# FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
-# ENV DEBIAN_FRONTEND=noninteractive
-# RUN apt-get update && apt-get install -y \
-#     python3 python3-pip python3-dev \
-#     build-essential cmake gcc g++ \
-#     && rm -rf /var/lib/apt/lists/*
-# --------------------------------------------------------------
 
 WORKDIR /app
 
-# Copy and install requirements
-COPY model-requirements.txt .
-RUN pip install --upgrade pip && \
-    pip install -r model-requirements.txt
-
+# System deps: libgomp1 for XGBoost, libpq-dev + gcc for psycopg2
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgomp1 \
+    libgomp1 libpq-dev gcc \
     && rm -rf /var/lib/apt/lists/*
-# Copy pyproject.toml so pip recognizes this as a package
-COPY pyproject.toml .
 
-# Default: open a shell (runtime command is defined in docker-compose.yml)
-CMD ["bash"]
+# Python deps (cache-friendly layer)
+COPY model_pipeline/model-requirements.txt /app/model-requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r model-requirements.txt
+
+# Install savviocore
+COPY savviocore/ /app/savviocore/
+RUN pip install --no-cache-dir -e /app/savviocore
+
+# Install model_pipeline as editable package (pyproject.toml discovers src/)
+COPY model_pipeline/ /app/model_pipeline/
+RUN pip install --no-cache-dir -e /app/model_pipeline
+
+ENV PYTHONPATH="/app/model_pipeline/src:/app"
+
+CMD ["python", "model_pipeline/src/run_pipeline.py"]

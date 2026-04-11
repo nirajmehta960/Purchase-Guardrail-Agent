@@ -776,6 +776,15 @@ def main():
     else:
         print("\nPipeline Complete — no valid model selected.")
 
+    # Structured output for CI quality-gate parsing (Cloud Run job logs).
+    # CI greps for lines starting with "SAVVIO_METRIC::" to extract values.
+    if final_metrics:
+        for k, v in final_metrics.items():
+            print(f"SAVVIO_METRIC::{k}={v}")
+    if best:
+        bias_passed = best.get("bias_passed", False)
+        print(f"SAVVIO_METRIC::bias_passed={'1' if bias_passed else '0'}")
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")

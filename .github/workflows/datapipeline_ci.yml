@@ -3,6 +3,11 @@ name: Data Pipeline CI/CD
 on:
   workflow_dispatch:  # Manual trigger only
 
+env:
+  ENVIRONMENT: dev
+  REGION: us-east1
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+
 jobs:
   # ===========================================================================
   # JOB 1 — Unit Tests
@@ -32,9 +37,6 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -e ../savviocore
-          # 'pip install -e .' intentionally omitted: pyproject.toml has no
-          # [project.dependencies], so editable install is not needed and
-          # can corrupt sys.path by inserting the project root into .pth files.
           if [ -f data-requirements.txt ]; then pip install -r data-requirements.txt; fi
           pip install pytest pytest-cov
 
@@ -113,13 +115,26 @@ jobs:
           pip install --upgrade pip
           pip install sqlalchemy psycopg2-binary
 
+      - name: Fetch DB credentials from GCP
+        id: db-creds
+        run: |
+          DB_HOST=$(gcloud sql instances describe savvio-${{ env.ENVIRONMENT }}-db-instance \
+            --project=${{ env.PROJECT_ID }} \
+            --format='value(ipAddresses[0].ipAddress)' 2>/dev/null || echo "")
+          DB_PASSWORD=$(gcloud secrets versions access latest \
+            --secret=savvio-${{ env.ENVIRONMENT }}-db-password \
+            --project=${{ env.PROJECT_ID }} 2>/dev/null || echo "")
+          echo "::add-mask::$DB_PASSWORD"
+          echo "db_host=$DB_HOST" >> "$GITHUB_OUTPUT"
+          echo "db_password=$DB_PASSWORD" >> "$GITHUB_OUTPUT"
+
       - name: Check DB connection
         env:
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ steps.db-creds.outputs.db_host }}
+          DB_PORT: "5432"
+          DB_NAME: savvio-${{ env.ENVIRONMENT }}-db
+          DB_USER: ${{ env.ENVIRONMENT }}-db-admin
+          DB_PASSWORD: ${{ steps.db-creds.outputs.db_password }}
         run: |
           python3 - <<'EOF'
           import os, sys
@@ -138,8 +153,7 @@ jobs:
                   print(f"DB connection OK: {result.scalar()}")
           except Exception as e:
               print(f"DB connection FAILED: {e}")
-              print("Hint: Check DB_HOST / DB_USER GitHub Secrets are set correctly.")
-              print("Note: If using Supabase, you may need an IPv4 connection pooler.")
+              print("Hint: Check Cloud SQL instance is running and accessible.")
               sys.exit(1)
           EOF
 
@@ -188,13 +202,34 @@ jobs:
     if: github.ref == 'refs/heads/main'
 
     steps:
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Fetch VM IP and SSH key from GCP
+        id: vm-creds
+        run: |
+          VM_IP=$(gcloud compute instances describe savvio-${{ env.ENVIRONMENT }}-pipeline-vm \
+            --zone=${{ env.REGION }}-b \
+            --project=${{ env.PROJECT_ID }} \
+            --format='value(networkInterfaces[0].accessConfigs[0].natIP)')
+          SSH_KEY=$(gcloud secrets versions access latest \
+            --secret=savvio-${{ env.ENVIRONMENT }}-deploy-ssh-key \
+            --project=${{ env.PROJECT_ID }})
+          echo "::add-mask::$SSH_KEY"
+          echo "vm_ip=$VM_IP" >> "$GITHUB_OUTPUT"
+          echo "ssh_key<<SSHEOF" >> "$GITHUB_OUTPUT"
+          echo "$SSH_KEY" >> "$GITHUB_OUTPUT"
+          echo "SSHEOF" >> "$GITHUB_OUTPUT"
+
       - name: Deploy to pipeline VM
         env:
-          SSH_KEY: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
-          VM_IP: ${{ secrets.GCE_VM_IP }}
+          VM_IP: ${{ steps.vm-creds.outputs.vm_ip }}
+          SSH_KEY: ${{ steps.vm-creds.outputs.ssh_key }}
         run: |
           if [ -z "$VM_IP" ]; then
-            echo "GCE_VM_IP not set — skipping deploy."
+            echo "VM IP not found — skipping deploy."
             exit 0
           fi
           mkdir -p ~/.ssh

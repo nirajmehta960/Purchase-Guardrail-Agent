@@ -127,15 +127,10 @@ Defined in `deployment/terraform/environments/{dev,prod}/main.tf`.
 |--------|---------|------------|
 | `GCP_SA_KEY` | All workflows | GCP service account JSON key |
 | `GCP_PROJECT_ID` | All workflows | GCP project ID |
-| `GCE_VM_IP` | datapipeline | External IP of pipeline VM |
-| `GCE_SSH_PRIVATE_KEY` | datapipeline | SSH private key for VM access |
-| `DB_HOST` | datapipeline | Cloud SQL host |
-| `DB_PORT` | datapipeline | 5432 |
-| `DB_NAME` | datapipeline | Database name |
-| `DB_USER` | datapipeline | Database user |
-| `DB_PASSWORD` | datapipeline | Database password |
-| `API_URL_DEV` | deployment | Cloud Run API URL (baked into frontend image at build time) |
 | `SLACK_WEBHOOK_URL` | deployment | Optional — drift detection alerts |
+
+> All other credentials (DB host/user/password, VM IP, SSH key, API URL) are fetched
+> from GCP at runtime via `gcloud` commands. No manual secret management needed.
 
 ---
 

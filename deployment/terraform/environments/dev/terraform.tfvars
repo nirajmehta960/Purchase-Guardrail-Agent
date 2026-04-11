@@ -1,4 +1,4 @@
-project_id  = "savvio-ai"
+project_id  = "savvio-purchase-guardrail"#"savvio-ai"
 region      = "us-east1"
 zone        = "us-east1-b"
 environment = "dev"

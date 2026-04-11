@@ -5,6 +5,8 @@ terraform {
       version = "~> 7.25.0" }
     random = { source = "hashicorp/random"
       version = "~> 3.8.1" }
+    tls = { source = "hashicorp/tls"
+      version = "~> 4.0" }
   }
 }
 
@@ -38,29 +40,27 @@ resource "google_project_service" "apis" {
   disable_on_destroy = false
 }
 
-# ---- Service Account ----
-resource "google_service_account" "cloud_run" {
-  account_id   = "${local.prefix}-run-sa"
-  display_name = "SavVio ${var.environment} Cloud Run SA"
-  depends_on   = [google_project_service.apis]
+# ---- Service Account (pre-existing, created manually in GCP) ----
+data "google_service_account" "cloud_run" {
+  account_id = "${local.prefix}-run-sa"
 }
 
 resource "google_project_iam_member" "run_sql_client" {
   project = var.project_id
   role    = "roles/cloudsql.client"
-  member  = "serviceAccount:${google_service_account.cloud_run.email}"
+  member  = "serviceAccount:${data.google_service_account.cloud_run.email}"
 }
 
 resource "google_storage_bucket_iam_member" "run_mlflow_storage" {
   bucket = module.mlflow_bucket.bucket_name
   role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.cloud_run.email}"
+  member = "serviceAccount:${data.google_service_account.cloud_run.email}"
 }
 
 resource "google_storage_bucket_iam_member" "run_dvc_storage" {
   bucket = module.dvc_bucket.bucket_name
   role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.cloud_run.email}"
+  member = "serviceAccount:${data.google_service_account.cloud_run.email}"
 }
 
 # ---- Cloud SQL ----
@@ -81,7 +81,7 @@ module "db_password_secret" {
   source                         = "../../modules/secrets"
   secret_id                      = "${local.prefix}-db-password"
   secret_data                    = module.database.password
-  accessor_service_account_email = google_service_account.cloud_run.email
+  accessor_service_account_email = data.google_service_account.cloud_run.email
   depends_on                     = [google_project_service.apis]
 }
 
@@ -102,6 +102,19 @@ module "mlflow_bucket" {
   labels        = local.labels
 }
 
+# ---- SSH Key for CI/CD DAG Deploy ----
+resource "tls_private_key" "deploy_ssh" {
+  algorithm = "ED25519"
+}
+
+module "ssh_key_secret" {
+  source                         = "../../modules/secrets"
+  secret_id                      = "${local.prefix}-deploy-ssh-key"
+  secret_data                    = tls_private_key.deploy_ssh.private_key_openssh
+  accessor_service_account_email = data.google_service_account.cloud_run.email
+  depends_on                     = [google_project_service.apis]
+}
+
 # ---- Artifact Registry ----
 module "docker_repo" {
   source        = "../../modules/artifact_registry"
@@ -120,7 +133,7 @@ resource "google_cloud_run_v2_job" "training" {
     task_count = 1
 
     template {
-      service_account = google_service_account.cloud_run.email
+      service_account = data.google_service_account.cloud_run.email
       timeout         = "3600s"   # 1 hour default; CI can override via gcloud
 
       containers {
@@ -192,20 +205,57 @@ resource "google_compute_instance" "pipeline_vm" {
     access_config {}   # Ephemeral external IP
   }
 
+  metadata = {
+    ssh-keys = "savvio:${tls_private_key.deploy_ssh.public_key_openssh}"
+  }
+
   service_account {
-    email  = google_service_account.cloud_run.email
+    email  = data.google_service_account.cloud_run.email
     scopes = ["cloud-platform"]
   }
 
   metadata_startup_script = <<-SCRIPT
     #!/bin/bash
+    set -e
+
+    # Install dependencies
     apt-get update && apt-get install -y docker.io docker-compose git
     systemctl enable docker && systemctl start docker
+
+    # Clone repo (skip if already cloned)
+    if [ ! -d /opt/savvio/.git ]; then
+      mkdir -p /opt/savvio
+      git clone https://github.com/nirajmehta960/SavVio.git /opt/savvio
+    fi
+
+    # Fetch DB password from Secret Manager
+    DB_PASSWORD=$(gcloud secrets versions access latest \
+      --secret="${module.db_password_secret.secret_id}" \
+      --project="${var.project_id}" 2>/dev/null || echo "")
+
+    # Get Cloud SQL public IP
+    DB_HOST=$(gcloud sql instances describe ${module.database.instance_name} \
+      --project="${var.project_id}" \
+      --format='value(ipAddresses[0].ipAddress)' 2>/dev/null || echo "")
+
+    # Write .env for Airflow docker-compose
+    cat > /opt/savvio/data_pipeline/.env <<EOF
+    DB_HOST=$DB_HOST
+    DB_PORT=5432
+    DB_NAME=${module.database.database_name}
+    DB_USER=${module.database.user_name}
+    DB_PASSWORD=$DB_PASSWORD
+    AIRFLOW_UID=50000
+    EOF
+
+    # Start Airflow
+    cd /opt/savvio/data_pipeline
+    docker-compose up -d
   SCRIPT
 
   labels     = local.labels
   tags       = ["savvio-ssh"]
-  depends_on = [google_project_service.apis]
+  depends_on = [google_project_service.apis, module.database, module.db_password_secret]
 }
 
 resource "google_compute_firewall" "ssh" {
@@ -228,7 +278,7 @@ module "api" {
   region                = var.region
   image                 = var.api_image
   port                  = 8080
-  service_account_email = google_service_account.cloud_run.email
+  service_account_email = data.google_service_account.cloud_run.email
   cloud_sql_connection  = module.database.connection_name
   public_access         = true
   min_instances         = 0
@@ -258,7 +308,7 @@ module "frontend" {
   region                = var.region
   image                 = var.frontend_image
   port                  = 8501
-  service_account_email = google_service_account.cloud_run.email
+  service_account_email = data.google_service_account.cloud_run.email
   cloud_sql_connection  = ""
   public_access         = true
   min_instances         = 0
@@ -282,7 +332,7 @@ module "mlflow" {
   region                = var.region
   image                 = var.mlflow_image
   port                  = 5000
-  service_account_email = google_service_account.cloud_run.email
+  service_account_email = data.google_service_account.cloud_run.email
   cloud_sql_connection  = module.database.connection_name
   public_access         = true
   min_instances         = 0

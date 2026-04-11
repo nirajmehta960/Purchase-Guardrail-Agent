@@ -81,14 +81,27 @@ jobs:
           pip install sqlalchemy psycopg2-binary
           if [ -f model-requirements.txt ]; then pip install -r model-requirements.txt; fi
 
+      - name: Fetch DB credentials from GCP
+        id: db-creds
+        run: |
+          DB_HOST=$(gcloud sql instances describe savvio-${{ env.ENVIRONMENT }}-db-instance \
+            --project=${{ env.PROJECT_ID }} \
+            --format='value(ipAddresses[0].ipAddress)' 2>/dev/null || echo "")
+          DB_PASSWORD=$(gcloud secrets versions access latest \
+            --secret=savvio-${{ env.ENVIRONMENT }}-db-password \
+            --project=${{ env.PROJECT_ID }} 2>/dev/null || echo "")
+          echo "::add-mask::$DB_PASSWORD"
+          echo "db_host=$DB_HOST" >> "$GITHUB_OUTPUT"
+          echo "db_password=$DB_PASSWORD" >> "$GITHUB_OUTPUT"
+
       - name: Check DB connection
         working-directory: model_pipeline
         env:
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ steps.db-creds.outputs.db_host }}
+          DB_PORT: "5432"
+          DB_NAME: savvio-${{ env.ENVIRONMENT }}-db
+          DB_USER: ${{ env.ENVIRONMENT }}-db-admin
+          DB_PASSWORD: ${{ steps.db-creds.outputs.db_password }}
         run: |
           python3 - <<'EOF'
           import os, sys

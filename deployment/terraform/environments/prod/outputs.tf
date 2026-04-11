@@ -7,3 +7,4 @@ output "mlflow_artifact_bucket" { value = module.mlflow_bucket.bucket_name }
 output "docker_repo_url"        { value = module.docker_repo.repository_url }
 output "training_job_name"      { value = google_cloud_run_v2_job.training.name }
 output "pipeline_vm_ip"         { value = google_compute_instance.pipeline_vm.network_interface[0].access_config[0].nat_ip }
+output "ssh_key_secret_id"      { value = module.ssh_key_secret.secret_id }

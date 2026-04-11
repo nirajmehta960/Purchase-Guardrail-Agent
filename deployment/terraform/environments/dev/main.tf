@@ -40,27 +40,29 @@ resource "google_project_service" "apis" {
   disable_on_destroy = false
 }
 
-# ---- Service Account (pre-existing, created manually in GCP) ----
-data "google_service_account" "cloud_run" {
-  account_id = "${local.prefix}-run-sa"
+# ---- Service Account ----
+resource "google_service_account" "cloud_run" {
+  account_id   = "${local.prefix}-run-sa"
+  display_name = "SavVio ${var.environment} Cloud Run SA"
+  depends_on   = [google_project_service.apis]
 }
 
 resource "google_project_iam_member" "run_sql_client" {
   project = var.project_id
   role    = "roles/cloudsql.client"
-  member  = "serviceAccount:${data.google_service_account.cloud_run.email}"
+  member  = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
 resource "google_storage_bucket_iam_member" "run_mlflow_storage" {
   bucket = module.mlflow_bucket.bucket_name
   role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${data.google_service_account.cloud_run.email}"
+  member = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
 resource "google_storage_bucket_iam_member" "run_dvc_storage" {
   bucket = module.dvc_bucket.bucket_name
   role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${data.google_service_account.cloud_run.email}"
+  member = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
 # ---- Cloud SQL ----
@@ -81,7 +83,7 @@ module "db_password_secret" {
   source                         = "../../modules/secrets"
   secret_id                      = "${local.prefix}-db-password"
   secret_data                    = module.database.password
-  accessor_service_account_email = data.google_service_account.cloud_run.email
+  accessor_service_account_email = google_service_account.cloud_run.email
   depends_on                     = [google_project_service.apis]
 }
 
@@ -111,7 +113,7 @@ module "ssh_key_secret" {
   source                         = "../../modules/secrets"
   secret_id                      = "${local.prefix}-deploy-ssh-key"
   secret_data                    = tls_private_key.deploy_ssh.private_key_openssh
-  accessor_service_account_email = data.google_service_account.cloud_run.email
+  accessor_service_account_email = google_service_account.cloud_run.email
   depends_on                     = [google_project_service.apis]
 }
 
@@ -133,7 +135,7 @@ resource "google_cloud_run_v2_job" "training" {
     task_count = 1
 
     template {
-      service_account = data.google_service_account.cloud_run.email
+      service_account = google_service_account.cloud_run.email
       timeout         = "3600s"   # 1 hour default; CI can override via gcloud
 
       containers {
@@ -210,7 +212,7 @@ resource "google_compute_instance" "pipeline_vm" {
   }
 
   service_account {
-    email  = data.google_service_account.cloud_run.email
+    email  = google_service_account.cloud_run.email
     scopes = ["cloud-platform"]
   }
 
@@ -278,7 +280,7 @@ module "api" {
   region                = var.region
   image                 = var.api_image
   port                  = 8080
-  service_account_email = data.google_service_account.cloud_run.email
+  service_account_email = google_service_account.cloud_run.email
   cloud_sql_connection  = module.database.connection_name
   public_access         = true
   min_instances         = 0
@@ -308,7 +310,7 @@ module "frontend" {
   region                = var.region
   image                 = var.frontend_image
   port                  = 8501
-  service_account_email = data.google_service_account.cloud_run.email
+  service_account_email = google_service_account.cloud_run.email
   cloud_sql_connection  = ""
   public_access         = true
   min_instances         = 0
@@ -332,7 +334,7 @@ module "mlflow" {
   region                = var.region
   image                 = var.mlflow_image
   port                  = 5000
-  service_account_email = data.google_service_account.cloud_run.email
+  service_account_email = google_service_account.cloud_run.email
   cloud_sql_connection  = module.database.connection_name
   public_access         = true
   min_instances         = 0

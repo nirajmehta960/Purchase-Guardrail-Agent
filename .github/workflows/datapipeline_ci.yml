@@ -177,7 +177,7 @@ jobs:
           script: |
             cd /opt/savvio
             git pull origin main
-            docker-compose exec -T airflow-apiserver airflow dags reserialize
+            docker compose exec -T airflow-apiserver airflow dags reserialize
             echo "DAGs reserialised successfully"
 
   # ===========================================================================

@@ -13,8 +13,6 @@ provider "google" {
   region  = var.region
 }
 
-data "google_project" "this" {}
-
 locals {
   prefix = "savvio-${var.environment}"
   labels = {

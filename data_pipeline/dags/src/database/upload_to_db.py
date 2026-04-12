@@ -20,7 +20,7 @@ from savviocore.database.db_schema import create_tables
 
 logger = logging.getLogger(__name__)
 
-JSONL_STREAM_CHUNKSIZE = 25_000
+JSONL_STREAM_CHUNKSIZE = 100_000
 
 # ---------------------------------------------------------------------------
 # Column mapping: source field → DB column
@@ -138,6 +138,14 @@ def _upsert_df(
         logger.info("Empty DataFrame — nothing to upsert into %s", table_name)
         return 0
 
+    # Deduplicate on conflict keys before chunking — PostgreSQL's ON CONFLICT DO UPDATE
+    # raises CardinalityViolation if two rows in the same statement share the same key.
+    before = len(df)
+    df = df.drop_duplicates(subset=conflict_cols, keep="last")
+    dropped = before - len(df)
+    if dropped:
+        logger.warning("Dropped %d intra-batch duplicates on %s before upsert into %s", dropped, conflict_cols, table_name)
+
     all_cols = list(df.columns)
     col_list = ", ".join(all_cols)
     conflict_list = ", ".join(conflict_cols)
@@ -191,68 +199,128 @@ def _ensure_jsonb(df: pd.DataFrame, col: str) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def load_financial(engine, csv_path: str) -> int:
-    """Upsert financial profiles from CSV into financial_profiles table."""
+    """Load financial profiles from CSV — TRUNCATE + bulk INSERT.
+    GCS always contains the full dataset so each run is a fresh mirror.
+    """
+    from psycopg2.extras import execute_values
+
     df = _read_csv(csv_path)
     df = _select_and_rename(df, FINANCIAL_COLS)
+    df = df.drop_duplicates(subset=["user_id"], keep="last")
 
-    conflict_cols = ["user_id"]
-    update_cols = [c for c in df.columns if c not in conflict_cols]
+    all_cols = list(df.columns)
+    col_list = ", ".join(all_cols)
+    sql = f"INSERT INTO financial_profiles ({col_list}) VALUES %s"
+    tuples = [tuple(row) for row in df.itertuples(index=False, name=None)]
 
-    return _upsert_df(engine, df, "financial_profiles", conflict_cols, update_cols)
+    with engine.begin() as conn:
+        conn.execute(text("TRUNCATE TABLE financial_profiles RESTART IDENTITY"))
+        raw = conn.connection
+        cursor = raw.cursor()
+        execute_values(cursor, sql, tuples)
+
+    logger.info("Inserted %d rows into financial_profiles", len(tuples))
+    return len(tuples)
 
 
 def load_products(engine, jsonl_path: str) -> int:
-    """Upsert products from JSONL into products table."""
-    conflict_cols = ["product_id"]
-    total_rows = 0
-    file_size_mb = os.path.getsize(jsonl_path) / (1024 * 1024)
-    logger.info(
-        "Products JSONL size: %.1f MB. Streaming in chunks of %d rows.",
-        file_size_mb, JSONL_STREAM_CHUNKSIZE,
-    )
-    for i, chunk in enumerate(pd.read_json(jsonl_path, lines=True, chunksize=JSONL_STREAM_CHUNKSIZE), start=1):
-        df = _select_and_rename(chunk, PRODUCT_COLS)
-        for col in ["description", "features"]:
-            if col in df.columns:
-                df[col] = df[col].fillna("")
-        df = _ensure_jsonb(df, "details")
-        update_cols = [c for c in df.columns if c not in conflict_cols]
-        rows = _upsert_df(engine, df, "products", conflict_cols, update_cols)
-        total_rows += rows
-        logger.info("Products chunk %d upserted: %d rows (running total: %d)", i, rows, total_rows)
-    return total_rows
+    """Load products from JSONL — TRUNCATE + bulk INSERT (no chunking, no upsert).
+    CASCADE on TRUNCATE clears reviews first (FK: reviews.product_id → products.product_id).
+    GCS always contains the full dataset so each run is a fresh mirror.
+    """
+    from psycopg2.extras import execute_values
+
+    df = _read_jsonl(jsonl_path)
+    df = _select_and_rename(df, PRODUCT_COLS)
+    for col in ["description", "features"]:
+        if col in df.columns:
+            df[col] = df[col].fillna("")
+    df = _ensure_jsonb(df, "details")
+    df = df.drop_duplicates(subset=["product_id"], keep="last")
+
+    all_cols = list(df.columns)
+    col_list = ", ".join(all_cols)
+    sql = f"INSERT INTO products ({col_list}) VALUES %s"
+    tuples = [tuple(row) for row in df.itertuples(index=False, name=None)]
+
+    with engine.begin() as conn:
+        conn.execute(text("TRUNCATE TABLE products RESTART IDENTITY CASCADE"))
+        raw = conn.connection
+        cursor = raw.cursor()
+        execute_values(cursor, sql, tuples)
+
+    logger.info("Inserted %d rows into products", len(tuples))
+    return len(tuples)
 
 
 def load_reviews(engine, jsonl_path: str) -> int:
-    """Upsert reviews from JSONL into reviews table."""
-    # Filter out reviews whose product_id doesn't exist in the products table
-    # to avoid ForeignKeyViolation errors.
+    """Load reviews from JSONL into reviews table.
+
+    Uses TRUNCATE + bulk INSERT instead of UPSERT because each pipeline run
+    loads the full dataset. TRUNCATE avoids per-row conflict checks against
+    millions of existing rows, which made runs take ~1 hour vs 10-15 minutes.
+    review_embeddings has no FK to reviews so TRUNCATE is safe.
+    """
+    # Fetch valid product_ids once to filter orphaned reviews (FK: reviews.product_id → products)
     with engine.connect() as conn:
         existing_ids_set = set(
             pd.read_sql(text("SELECT product_id FROM products"), conn)["product_id"].tolist()
         )
 
-    conflict_cols = ["user_id", "product_id"]
-    total_rows = 0
-    total_dropped = 0
     file_size_mb = os.path.getsize(jsonl_path) / (1024 * 1024)
     logger.info(
         "Reviews JSONL size: %.1f MB. Streaming in chunks of %d rows.",
         file_size_mb, JSONL_STREAM_CHUNKSIZE,
     )
-    for i, chunk in enumerate(pd.read_json(jsonl_path, lines=True, chunksize=JSONL_STREAM_CHUNKSIZE), start=1):
-        df = _select_and_rename(chunk, REVIEW_COLS)
-        if "verified_purchase" in df.columns:
-            df["verified_purchase"] = df["verified_purchase"].astype(bool)
-        if "helpful_vote" in df.columns:
-            df["helpful_vote"] = df["helpful_vote"].fillna(0).astype(int)
-        before_count = len(df)
-        df = df[df["product_id"].isin(existing_ids_set)]
-        total_dropped += before_count - len(df)
-        update_cols = [c for c in df.columns if c not in conflict_cols]
-        rows = _upsert_df(engine, df, "reviews", conflict_cols, update_cols)
-        total_rows += rows
-        logger.info("Reviews chunk %d upserted: %d rows (running total: %d)", i, rows, total_rows)
+
+    from psycopg2.extras import execute_values
+
+    all_cols = list(REVIEW_COLS.values())
+    col_list = ", ".join(all_cols)
+    sql = f"INSERT INTO reviews ({col_list}) VALUES %s"
+
+    total_rows = 0
+    total_dropped = 0
+    with engine.begin() as conn:
+        # TRUNCATE resets the table
+        conn.execute(text("TRUNCATE TABLE reviews RESTART IDENTITY"))
+
+        # Drop unique constraint and FK index before bulk insert —
+        # maintaining them per-row on 2.1M inserts is the main bottleneck.
+        # Recreated after all data is loaded.
+        conn.execute(text("ALTER TABLE reviews DROP CONSTRAINT IF EXISTS uq_reviews_user_product"))
+        conn.execute(text("ALTER TABLE reviews DROP CONSTRAINT IF EXISTS reviews_product_id_fkey"))
+        logger.info("Dropped reviews constraints for fast bulk load.")
+
+        raw = conn.connection
+        cursor = raw.cursor()
+        for i, chunk in enumerate(pd.read_json(jsonl_path, lines=True, chunksize=JSONL_STREAM_CHUNKSIZE), start=1):
+            df = _select_and_rename(chunk, REVIEW_COLS)
+            if "verified_purchase" in df.columns:
+                df["verified_purchase"] = df["verified_purchase"].astype(bool)
+            if "helpful_vote" in df.columns:
+                df["helpful_vote"] = df["helpful_vote"].fillna(0).astype(int)
+            before_count = len(df)
+            df = df[df["product_id"].isin(existing_ids_set)]
+            total_dropped += before_count - len(df)
+            df = df.drop_duplicates(subset=["user_id", "product_id"], keep="last")
+            if df.empty:
+                continue
+            tuples = [tuple(row) for row in df.itertuples(index=False, name=None)]
+            execute_values(cursor, sql, tuples, page_size=25_000)
+            total_rows += len(tuples)
+            logger.info("Reviews chunk %d inserted: %d rows (running total: %d)", i, len(tuples), total_rows)
+
+        # Recreate constraints after all data is loaded — single pass, much faster
+        cursor.execute(
+            "ALTER TABLE reviews ADD CONSTRAINT uq_reviews_user_product "
+            "UNIQUE (user_id, product_id)"
+        )
+        cursor.execute(
+            "ALTER TABLE reviews ADD CONSTRAINT reviews_product_id_fkey "
+            "FOREIGN KEY (product_id) REFERENCES products(product_id)"
+        )
+        logger.info("Recreated reviews constraints after bulk load.")
 
     if total_dropped:
         logger.warning("Dropped %d orphaned reviews (product_id not in products table)", total_dropped)
@@ -270,9 +338,9 @@ def load_all(
     env: str = "dev",
 ):
     """
-    Load all three datasets into PostgreSQL in FK-safe order.
-    Uses upsert (INSERT ... ON CONFLICT DO UPDATE) — no data is deleted.
-    Products first, then reviews (reviews reference products).
+    Load all three datasets into PostgreSQL — TRUNCATE + bulk INSERT.
+    Each run is a fresh mirror of GCS. FK-safe truncation order: reviews first,
+    then products (reviews.product_id → products.product_id), then financial.
     """
     engine = get_engine(env)
     create_tables(engine)

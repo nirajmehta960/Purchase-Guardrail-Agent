@@ -1,6 +1,4 @@
-"""
-Browse products from PostgreSQL for catalog-based evaluation (Layer 2 + reviews).
-"""
+"""DB-backed product catalog search and retrieval."""
 
 from __future__ import annotations
 

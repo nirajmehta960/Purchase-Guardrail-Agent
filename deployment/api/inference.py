@@ -1,13 +1,11 @@
 """
-Inference Orchestrator — Full prediction pipeline for the /predict endpoint.
-
-    _load_user_financial_profile()  → DB lookup
-    _resolve_product()              → intent parsing / product resolution
-    _load_product_data()            → product row + reviews from DB
-    _score_ml_model()               → ML prediction (AUTHORITY)
-    _generate_explanation()         → LLM response + guardrails
-
-    run_inference()                 → orchestrates the above stages
+Inference Orchestrator — Synchronous prediction pipeline stages:
+1. DB Profile Loading
+2. Intent Parsing / Product Matching
+3. Product Metadata & Review Retrieval
+4. ML Scoring (Layer 1)
+5. Quality Downgrade Engine (Layer 2)
+6. Response Generation & Guardrails
 """
 
 from __future__ import annotations
@@ -204,12 +202,7 @@ def _format_review_snippets(reviews_df) -> list:
 
 
 def _load_product_data(product: ProductResolution, manager) -> tuple[dict, list]:
-    """Load product row + reviews from DB.
-
-    Returns:
-        (feature_dict, review_snippets) — feature_dict is used for ML scoring,
-        review_snippets are formatted strings for the LLM explanation.
-    """
+    """Retrieves product specs and formatted review snippets for scoring and generation."""
     empty = {
         "average_rating": 0, "rating_number": 0, "rating_variance": 0, "category": "unknown",
         "value_density": 0, "review_confidence": 0, "rating_polarization": 0,
@@ -306,7 +299,7 @@ def _score_ml_model(user_profile: dict, product: ProductResolution, product_data
 # ---------------------------------------------------------------------------
 
 def _apply_layer2_downgrade(ml_label: str, product_data: dict):
-    """Run the DowngradeEngine against product/review features from product_data."""
+    """Evaluates product/review quality signals to determine if a secondary downgrade is required."""
     pf = ProductFeatures(
         value_density=float(product_data.get("value_density", 0)),
         review_confidence=float(product_data.get("review_confidence", 0)),
@@ -332,6 +325,7 @@ def _apply_layer2_downgrade(ml_label: str, product_data: dict):
 # ---------------------------------------------------------------------------
 
 def _generate_explanation(product: ProductResolution, ml: MLScore, user_profile: dict, manager, downgrade_result=None, review_snippets: list = None) -> str:
+    """Invokes LLM for natural language reasoning and validates output against decision color."""
     final_color =(downgrade_result.final_label if downgrade_result else None) or ml.predicted_label or "YELLOW"
     original_color = (downgrade_result.original_label if downgrade_result else None) or final_color
     was_downgraded = downgrade_result.was_downgraded if downgrade_result else False
@@ -410,7 +404,7 @@ def run_inference(request: PredictRequest, manager) -> PredictResponse:
 
     ml = _score_ml_model(user_profile, resolution, product_data, manager)
 
-    # Layer 2 downgrade — catalog products only (hypothetical have no real features)
+    # Layer 2 Quality Check (Down-ranking for problematic catalog items)
     downgrade_result = None
     if ml.predicted_label and resolution.product_id:
         try:

@@ -1,25 +1,6 @@
 """
-Prometheus Metrics Module for SavVio API.
-
-Configures HTTP-level instrumentation via prometheus-fastapi-instrumentator
-and defines custom SavVio-specific business metrics for the inference pipeline.
-
-Custom Metrics:
-    savvio_inference_duration_seconds   — Full pipeline latency (histogram)
-    savvio_inference_total              — Requests by color + mode (counter)
-    savvio_guardrail_failures_total     — LLM guardrail violations (counter)
-    savvio_layer2_downgrades_total      — Downgrade engine activations (counter)
-    savvio_ml_confidence                — ML confidence distribution (histogram)
-    savvio_active_requests              — In-flight request gauge
-
-Usage:
-    from deployment.api.metrics import setup_metrics, record_inference
-
-    # At startup:
-    setup_metrics(app)
-
-    # After each inference:
-    record_inference(color="GREEN", evaluation_mode="catalog", latency=0.45)
+Prometheus Metrics — HTTP and Business Logic instrumentation.
+Custom metrics: Latency histograms, Inference counters, Guardrail alerts, and Active requests.
 """
 
 from __future__ import annotations
@@ -97,16 +78,7 @@ LLM_LATENCY = Histogram(
 # ---------------------------------------------------------------------------
 
 def setup_metrics(app) -> None:
-    """Attach Prometheus metrics instrumentation to the FastAPI application.
-
-    This adds:
-    1. Automatic HTTP request metrics (latency, count, status) via
-       prometheus-fastapi-instrumentator
-    2. A /metrics endpoint that exposes all metrics in Prometheus format
-
-    Args:
-        app: The FastAPI application instance.
-    """
+    """Configures Prometheus FastAPI Instrumentator and exposes /metrics endpoint."""
     if not APIConfig.METRICS_ENABLED:
         logger.info("Prometheus metrics disabled (METRICS_ENABLED=false)")
         return
@@ -152,13 +124,7 @@ def record_inference(
     evaluation_mode: str,
     latency: float,
 ) -> None:
-    """Record a completed inference request.
-
-    Args:
-        color: Final recommendation color (GREEN/YELLOW/RED).
-        evaluation_mode: "catalog" or "hypothetical".
-        latency: End-to-end pipeline time in seconds.
-    """
+    """Updates inference counters and duration histograms."""
     if not APIConfig.METRICS_ENABLED:
         return
 

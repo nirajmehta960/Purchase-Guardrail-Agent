@@ -27,9 +27,7 @@ env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Tests (parallel)
-  # ---------------------------------------------------------------------------
+  # Testing Phase
   test-api:
     name: API Tests
     runs-on: ubuntu-latest
@@ -84,9 +82,7 @@ jobs:
         working-directory: deployment/frontend
         run: bun run test
 
-  # ---------------------------------------------------------------------------
-  # Build & push (parallel, after respective test passes)
-  # ---------------------------------------------------------------------------
+  # Artifact Build & Registry Push
   build-push-api:
     name: Build & Push API
     runs-on: ubuntu-latest
@@ -180,9 +176,7 @@ jobs:
             -t $IMAGE:latest \
             --push deployment/frontend/
 
-  # ---------------------------------------------------------------------------
-  # Deploy to Cloud Run (after both builds pass)
-  # ---------------------------------------------------------------------------
+  # Production Deployment
   deploy:
     name: Deploy to Cloud Run
     runs-on: ubuntu-latest
@@ -235,9 +229,7 @@ jobs:
           echo "API: $API_URL"
           curl -sf "$API_URL/health" || { echo "ERROR: health check failed"; exit 1; }
 
-  # ---------------------------------------------------------------------------
-  # Drift Detection (runs after deploy)
-  # ---------------------------------------------------------------------------
+  # Post-Deployment Validation
   drift-detection:
     name: Drift Detection
     runs-on: ubuntu-latest
@@ -310,12 +302,7 @@ jobs:
           path: deployment/monitoring/reports/
           retention-days: 30
 
-  # ---------------------------------------------------------------------------
-  # Deploy Monitoring (Prometheus on GCE VM → remote-write to Grafana Cloud)
-  # Uses direct SSH (appleboy) with GCE_SSH_PRIVATE_KEY — same pattern as deploy-dags.
-  # IAP tunneling avoided: SA lacks roles/iap.tunnelResourceAccessor and is unnecessary
-  # since the VM has a public IP and the SSH key is already provisioned.
-  # ---------------------------------------------------------------------------
+  # Observability Pipeline (Prometheus GCE SSH hook)
   deploy-monitoring:
     name: Deploy Monitoring
     runs-on: ubuntu-latest

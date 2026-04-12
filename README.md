@@ -12,7 +12,18 @@ The SavVio is an MLOps project that will integrate real-time product data with s
 
 The system will provide **Green/Yellow/Red** light recommendations before users complete their purchase.
 
-**Note**: This is the initial project setup phase. The project structure and documentation will evolve as development progresses.
+## Live Deployment (Production)
+
+| Component | Service | URL |
+|-----------|---------|-----|
+| **Frontend** | React / Vite Web App | [https://savvio-dev-frontend-ebw2ryzjkq-ue.a.run.app](https://savvio-dev-frontend-ebw2ryzjkq-ue.a.run.app) |
+| **Backend** | FastAPI Inference API | [https://savvio-dev-api-ebw2ryzjkq-ue.a.run.app](https://savvio-dev-api-ebw2ryzjkq-ue.a.run.app) |
+| **MLflow** | Experiment Tracking | [https://savvio-dev-mlflow-ebw2ryzjkq-ue.a.run.app](https://savvio-dev-mlflow-ebw2ryzjkq-ue.a.run.app) |
+
+> [!NOTE]
+> The backend services are deployed on **Google Cloud Run** and the infrastructure is managed via **Terraform**.
+
+---
 
 ## Team Members
 
@@ -155,11 +166,15 @@ Once implemented:
 
 ### Deployment
 
-Deployment will be handled on Google Cloud Platform (GCP):
-- Cloud Run for serverless containerized deployment
-- Vertex AI for model serving and versioning
-- Cloud Storage for data and model artifacts
-- See `deployment/README.md` for detailed deployment plans (to be added)
+The SavVio platform is fully deployed on **Google Cloud Platform (GCP)** using a hybrid serverless/compute architecture:
+
+- **Cloud Run**: Hosts the stateless components (FastAPI Backend, React Frontend, MLflow UI) for high scalability and cost-efficiency.
+- **Compute Engine (GCE)**: Runs the Airflow data pipeline and on-demand model training tasks.
+- **Cloud SQL**: Managed PostgreSQL 15 database with `pgvector` for product embeddings.
+- **Terraform**: Entire infrastructure defined as code in `deployment/terraform/`.
+- **CI/CD**: Automated testing, building, and deployment via GitHub Actions (see `.github/workflows/`).
+
+For detailed technical setup and architecture diagrams, see [GCP Deployment Strategy](file:///Users/nirajmehta/Documents/SavVio/deployment/GCP_DEPLOYMENT.md).
 
 ## Planned Testing
 

@@ -1,10 +1,4 @@
-"""
-FastAPI Dependency Injection for the SavVio API.
-
-Centralizes resource access so endpoints declare what they *need*
-rather than reaching into global state. Enables clean test overrides
-via ``app.dependency_overrides``.
-"""
+"""API Dependencies — Dependency injection for ModelManager and Database engine."""
 
 from __future__ import annotations
 

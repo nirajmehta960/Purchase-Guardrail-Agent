@@ -1,9 +1,6 @@
 """
-API Configuration for SavVio Deployment.
-
-Centralized settings for the FastAPI backend — model paths, DB environment,
-CORS origins, and logging. Reads from environment variables with sensible
-defaults for local development.
+API Configuration — Settings for FastAPI, database, CORS, and logging.
+Reads from .env with fallback defaults for local development.
 """
 
 import os
@@ -19,7 +16,7 @@ from dotenv import load_dotenv
 _DEPLOYMENT_DIR = Path(__file__).resolve().parent.parent
 _PROJECT_ROOT = _DEPLOYMENT_DIR.parent
 
-# Load env from project root and model_pipeline (DB_*, GROQ_API_KEY, etc.)
+# Load environment variables from project and pipeline dirs
 load_dotenv(_PROJECT_ROOT / ".env")
 load_dotenv(_PROJECT_ROOT / "model_pipeline" / ".env")
 

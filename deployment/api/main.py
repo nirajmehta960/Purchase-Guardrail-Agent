@@ -1,18 +1,11 @@
 """
-SavVio FastAPI Application — Production Inference API.
+SavVio Inference API — Production FastAPI entry point.
 
-Exposes the SavVio ML model as a REST API:
-    GET  /health   — Liveness check (model, DB, LLM status)
-    GET  /products — Browse catalog (price band + search) for product picker
-    POST /predict  — Full inference pipeline (prompt → recommendation)
-    GET  /user/{user_id}/evaluate — Direct product evaluation
-
-Startup:
-    The app loads model artifacts, initializes the DB connection, and sets up
-    the LLM provider on startup via the ModelManager singleton.
-
-Usage:
-    uvicorn deployment.api.main:app --host 0.0.0.0 --port 3500 --reload
+Endpoints:
+    /health   - Service status and resource readiness
+    /products - Paginated product catalog search
+    /predict  - ML-led purchase recommendation pipeline
+    /user     - Financial profile retrieval
 """
 
 from __future__ import annotations
@@ -59,8 +52,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load resources at startup, release at shutdown."""
-    logger.info("Starting SavVio API v%s...", APIConfig.API_VERSION)
+    """Resource initialization and cleanup."""
+    logger.info("Initializing API v%s", APIConfig.API_VERSION)
     manager = get_model_manager()
     try:
         manager.load()
@@ -102,7 +95,7 @@ setup_metrics(app)
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    """Log every request with timing for Cloud Logging / monitoring."""
+    """HTTP request logging with latency tracking."""
     track_active_request()
     start = time.time()
     try:
@@ -237,11 +230,7 @@ async def predict(
     request: PredictRequest,
     manager: ModelManager = Depends(get_model_manager),
 ):
-    """Full inference pipeline — natural language prompt → recommendation.
-
-    The ML model is the authority for GREEN/YELLOW/RED decisions.
-    The LLM generates a natural-language explanation.
-    """
+    """Orchestrate ML scoring, rule-based logic, and LLM explanation generation."""
     try:
         return run_inference(request, manager)
     except Exception as e:

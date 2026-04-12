@@ -208,7 +208,6 @@ jobs:
           gcloud run deploy savvio-ai \
             --image $IMAGE:${{ github.sha }} \
             --region ${{ env.REGION }} \
-            --port 8080 \
             --quiet
 
       - name: Deploy MLflow
@@ -218,8 +217,6 @@ jobs:
           gcloud run deploy savvio-ai-mlflow \
             --image $IMAGE:${{ github.sha }} \
             --region ${{ env.REGION }} \
-            --port 5000 \
-            --add-cloudsql-instances ${{ secrets.DB_INSTANCE_CONNECTION_NAME }} \
             --quiet
 
       - name: Verify API health

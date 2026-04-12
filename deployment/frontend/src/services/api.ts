@@ -104,29 +104,104 @@ export interface FetchProductsParams {
   offset?: number;
 }
 
-async function parseError(res: Response): Promise<string> {
+/** Human-readable fallback when the response has no JSON body. */
+function statusFallbackMessage(status: number, statusText: string): string {
+  switch (status) {
+    case 502:
+    case 503:
+    case 504:
+      return `Service temporarily unavailable (HTTP ${status}). Try again in a moment.`;
+    case 401:
+      return "Unauthorized — check API credentials if required.";
+    case 403:
+      return "Access denied for this resource.";
+    case 408:
+      return "Request timed out. Try again.";
+    case 429:
+      return "Too many requests. Wait briefly and retry.";
+    default:
+      return statusText?.trim() || `Request failed (HTTP ${status}).`;
+  }
+}
+
+/**
+ * Parse error payload from a non-OK response.
+ * Supports SavVio `ErrorResponse` `{ error, detail }`, FastAPI `detail` string or list, and plain text.
+ */
+async function readHttpErrorMessage(res: Response): Promise<string> {
+  let text = "";
   try {
-    const j = (await res.json()) as { detail?: string | Array<{ msg?: string }> };
-    if (typeof j.detail === "string") return j.detail;
+    text = await res.text();
+  } catch {
+    return statusFallbackMessage(res.status, res.statusText);
+  }
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return statusFallbackMessage(res.status, res.statusText);
+  }
+  try {
+    const j = JSON.parse(trimmed) as Record<string, unknown>;
+    if (typeof j.detail === "string" && j.detail.length > 0) {
+      return j.detail;
+    }
     if (Array.isArray(j.detail)) {
-      return j.detail.map((x) => x.msg ?? JSON.stringify(x)).join("; ");
+      const msgs = j.detail
+        .map((item) => {
+          if (item && typeof item === "object" && "msg" in item) {
+            return String((item as { msg: unknown }).msg);
+          }
+          return null;
+        })
+        .filter((x): x is string => Boolean(x?.trim()));
+      if (msgs.length) return msgs.join("; ");
+    }
+    if (typeof j.message === "string" && j.message.length > 0) {
+      return j.message;
     }
   } catch {
-    /* ignore */
+    return trimmed.length > 400 ? `${trimmed.slice(0, 397)}…` : trimmed;
   }
-  return res.statusText || `HTTP ${res.status}`;
+  return statusFallbackMessage(res.status, res.statusText);
+}
+
+async function assertOk(res: Response): Promise<void> {
+  if (res.ok) return;
+  const detail = await readHttpErrorMessage(res);
+  throw new Error(detail);
+}
+
+/** `fetch` wrapper: turns connection failures into clear user-facing errors. */
+async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (e) {
+    if (e instanceof TypeError) {
+      throw new Error(
+        "Cannot reach the SavVio API (network error or server not running). Check your connection, proxy/Vite `VITE_API_BASE`, and that the backend is up.",
+      );
+    }
+    throw e instanceof Error ? e : new Error("Network request failed.");
+  }
 }
 
 export async function checkHealth(): Promise<HealthResponse> {
-  const res = await fetch(`${API_BASE}/health`);
-  if (!res.ok) throw new Error(await parseError(res));
+  const res = await apiFetch(`${API_BASE}/health`);
+  await assertOk(res);
   return res.json() as Promise<HealthResponse>;
 }
 
 export async function fetchUserProfile(userId: string): Promise<UserProfileResponse> {
-  const id = encodeURIComponent(userId.trim());
-  const res = await fetch(`${API_BASE}/user/${id}/profile`);
-  if (!res.ok) throw new Error(await parseError(res));
+  const trimmed = userId.trim();
+  const id = encodeURIComponent(trimmed);
+  const res = await apiFetch(`${API_BASE}/user/${id}/profile`);
+  if (!res.ok) {
+    if (res.status === 404) {
+      throw new Error(
+        `No profile for “${trimmed}”. This user ID is not in the database—check the ID or use an account that exists in SavVio.`,
+      );
+    }
+    await assertOk(res);
+  }
   return res.json() as Promise<UserProfileResponse>;
 }
 
@@ -139,13 +214,13 @@ export async function fetchProducts(params?: FetchProductsParams): Promise<Produ
   if (params?.offset != null) sp.set("offset", String(params.offset));
   const qs = sp.toString();
   const url = qs ? `${API_BASE}/products?${qs}` : `${API_BASE}/products`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(await parseError(res));
+  const res = await apiFetch(url);
+  await assertOk(res);
   return res.json() as Promise<ProductListResponse>;
 }
 
 export async function sendPredict(body: PredictRequestBody): Promise<PredictResponse> {
-  const res = await fetch(`${API_BASE}/predict`, {
+  const res = await apiFetch(`${API_BASE}/predict`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -154,6 +229,15 @@ export async function sendPredict(body: PredictRequestBody): Promise<PredictResp
       product_id: body.product_id ?? undefined,
     }),
   });
-  if (!res.ok) throw new Error(await parseError(res));
+  if (!res.ok) {
+    const detail = await readHttpErrorMessage(res);
+    if (res.status === 422) {
+      throw new Error(`Invalid request: ${detail}`);
+    }
+    if (res.status >= 500) {
+      throw new Error(`${detail} If this keeps happening, check API logs and database connectivity.`);
+    }
+    throw new Error(detail);
+  }
   return res.json() as Promise<PredictResponse>;
 }

@@ -404,7 +404,13 @@ def _load_review_data(preprocessed_path: str, featured_path: Optional[str] = Non
     logger.info(f"Sampled {len(df)} records (first {REVIEW_SAMPLE_SIZE} rows) for bias analysis")
 
     if featured_path and os.path.exists(featured_path):
-        feat = pd.read_json(featured_path, lines=True)
+        # Stream featured file with same sample cap to avoid OOM on large featured files.
+        feat_chunks = []
+        for chunk in pd.read_json(featured_path, lines=True, chunksize=50_000):
+            feat_chunks.append(chunk)
+            if sum(len(c) for c in feat_chunks) >= REVIEW_SAMPLE_SIZE:
+                break
+        feat = pd.concat(feat_chunks, ignore_index=True).head(REVIEW_SAMPLE_SIZE)
         # Prefer key-based merge to avoid silent misalignment from index join.
         merge_key_candidates = [["user_id", "asin"], ["user_id", "product_id"]]
         merged = False

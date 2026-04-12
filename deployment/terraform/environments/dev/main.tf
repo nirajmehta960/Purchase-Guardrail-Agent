@@ -63,6 +63,13 @@ resource "google_storage_bucket_iam_member" "run_dvc_storage" {
   member = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
+# Grant access to the raw/processed data bucket used by the Airflow pipeline
+resource "google_storage_bucket_iam_member" "run_data_storage" {
+  bucket = "savvio-data-bucket"
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
 # ---- Cloud SQL ----
 module "database" {
   source              = "../../modules/cloud_sql"

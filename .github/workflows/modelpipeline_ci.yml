@@ -221,6 +221,7 @@ jobs:
             model_pipeline/metrics.txt
             model_pipeline/bias_metrics.txt
             model_pipeline/previous_metrics.txt
+          if-no-files-found: error
           retention-days: 7
 
   # ===========================================================================

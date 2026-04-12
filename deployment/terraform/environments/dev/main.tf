@@ -13,6 +13,16 @@ provider "google" {
   region  = var.region
 }
 
+# google_cloud_run_v2_job.training was removed from this config but still exists
+# in GCP state with deletion_protection=true. This block tells Terraform to stop
+# tracking it without destroying it (Terraform 1.7+ removed block).
+removed {
+  from = google_cloud_run_v2_job.training
+  lifecycle {
+    destroy = false
+  }
+}
+
 locals {
   prefix = "savvio-${var.environment}"
   labels = {
@@ -218,7 +228,7 @@ module "frontend" {
   service_name          = "${local.prefix}-frontend"
   region                = var.region
   image                 = var.frontend_image
-  port                  = 8501
+  port                  = 8080
   service_account_email = google_service_account.cloud_run.email
   cloud_sql_connection  = ""
   public_access         = true

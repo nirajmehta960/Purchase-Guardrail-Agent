@@ -230,7 +230,7 @@ jobs:
 
       - name: Get MLflow tracking URI
         run: |
-          MLFLOW_URL=$(gcloud run services describe savvio-${{ env.ENVIRONMENT }}-mlflow \
+          MLFLOW_URL=$(gcloud run services describe savvio-ai-mlflow \
             --region us-east1 --format='value(status.url)')
           echo "MLFLOW_TRACKING_URI=${MLFLOW_URL}" >> $GITHUB_ENV
 

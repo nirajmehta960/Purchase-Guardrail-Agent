@@ -442,6 +442,9 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
@@ -482,7 +485,7 @@ jobs:
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'deployment_ci.yml',
+              workflow_id: 'deployment.yml',
               ref: 'main',
             });
             console.log('deployment_ci.yml triggered successfully');

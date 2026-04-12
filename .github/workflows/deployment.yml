@@ -349,8 +349,9 @@ jobs:
       - name: Get VM zone
         id: vm
         run: |
-          ZONE=$(gcloud compute instances describe savvio-${{ env.ENVIRONMENT }}-pipeline-vm \
-            --format='value(zone)' | sed 's|.*/zones/||')
+          ZONE=$(gcloud compute instances list \
+            --filter="name=savvio-${{ env.ENVIRONMENT }}-pipeline-vm" \
+            --format='value(zone)')
           echo "zone=$ZONE" >> $GITHUB_OUTPUT
 
       - name: Copy monitoring files to VM

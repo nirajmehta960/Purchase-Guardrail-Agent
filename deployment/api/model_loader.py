@@ -1,15 +1,5 @@
 """
-Model Loader — Resource management for the SavVio inference pipeline.
-
-Loads:
-    - ML model (single bundled MLflow pyfunc artifact)
-    - Database engine (SQLAlchemy via savviocore)
-    - LLM provider (Groq / Gemini / mock)
-
-Usage:
-    from deployment.api.model_loader import model_manager
-    model_manager.load()
-    label, confidence = model_manager.predict(raw_features_df)
+Model Loader — Resource management for SavVio ML models, DB, and LLM providers.
 """
 
 from __future__ import annotations

@@ -1,10 +1,6 @@
 """
-Drift Detection for SavVio Deployed Model.
-
-Compares current production data distributions against training baseline
-using Evidently. Raises alerts when drift thresholds are exceeded.
-
-Run on a schedule (daily or weekly) after collecting production predictions.
+Drift Detection — Baseline comparison using Evidently AI.
+Monitors product and financial feature distributions for statistical shifts.
 """
 
 import logging
@@ -22,8 +18,7 @@ import yaml
 from evidently import Report
 from evidently.presets import DataDriftPreset
 
-# Attach a NullHandler so this module is silent when imported without
-# a logging config in place (the caller decides where logs go).
+# Suppress logging on library import
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 logger = logging.getLogger(__name__)
@@ -122,17 +117,7 @@ def run_drift_detection(
     current_data,
     output_dir: str = str(Path(__file__).parent.parent / "reports"),
 ) -> Dict:
-    """
-    Compare current production data against training baseline.
-
-    Args:
-        baseline_path: Path to baseline_data.csv (training distribution).
-        current_data:  DataFrame of current production data, or path to a CSV.
-        output_dir:    Where to save the drift report HTML and JSON.
-
-    Returns:
-        Dict with drift status, severity, and per-column summary.
-    """
+    """Computes Wasserstein distance for monitored columns vs baseline."""
     logger.info("Loading baseline and current data...")
     baseline = pd.read_csv(baseline_path)
     current  = current_data if isinstance(current_data, pd.DataFrame) else pd.read_csv(current_data)

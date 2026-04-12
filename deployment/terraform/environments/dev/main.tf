@@ -182,7 +182,15 @@ resource "google_compute_instance" "pipeline_vm" {
     apt-get update && apt-get install -y docker.io docker-compose-plugin git
     systemctl enable docker
     systemctl start docker
-    usermod -aG docker github-actions 2>/dev/null || true
+    # Provision github-actions user for CI/CD SSH access
+    id github-actions &>/dev/null || useradd -m -s /bin/bash github-actions
+    usermod -aG docker github-actions
+    mkdir -p /home/github-actions/.ssh
+    echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGqm1rC02mc0wK/jeU/e8TUR1Thuw9P2cRO6vutMiRhw github-actions@savvio" \
+      > /home/github-actions/.ssh/authorized_keys
+    chmod 700 /home/github-actions/.ssh
+    chmod 600 /home/github-actions/.ssh/authorized_keys
+    chown -R github-actions:github-actions /home/github-actions/.ssh
   EOF
 
   depends_on = [google_project_service.apis]

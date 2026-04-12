@@ -41,10 +41,13 @@ test_venv/
 .ipynb_checkpoints
 *.ipynb_checkpoints/
 
-# Environment variables
+# Environment variables — never commit real .env files
 .env
 .env.local
 .env.*.local
+data_pipeline/.env
+model_pipeline/.env
+deployment/.env
 
 # DVC
 .dvc/cache

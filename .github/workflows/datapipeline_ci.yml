@@ -13,6 +13,10 @@ on:
       - 'savviocore/**'
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ===========================================================================
   # JOB 1 — Unit Tests + DAG Validation

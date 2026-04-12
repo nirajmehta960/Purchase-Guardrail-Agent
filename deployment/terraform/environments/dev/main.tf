@@ -114,10 +114,11 @@ module "docker_repo" {
 # ---- GCE VM (Airflow + ML Training) ----
 resource "google_compute_instance" "pipeline_vm" {
   name         = "${local.prefix}-pipeline-vm"
-  machine_type = "e2-standard-2"
-  zone         = var.zone
-  labels       = local.labels
-  tags         = ["ssh-access"]
+  machine_type             = "e2-standard-4"  # 4 vCPU / 16GB — required to run all Airflow services + 5G worker limit
+  zone                     = var.zone
+  labels                   = local.labels
+  tags                     = ["ssh-access"]
+  allow_stopping_for_update = true
 
   boot_disk {
     initialize_params {
@@ -160,6 +161,20 @@ resource "google_compute_firewall" "allow_ssh" {
   target_tags   = ["ssh-access"]
 }
 
+# Airflow apiserver binds 0.0.0.0:8080 on the pipeline VM; SSH-only firewall blocks the UI without this.
+resource "google_compute_firewall" "allow_airflow_ui" {
+  name    = "${local.prefix}-allow-airflow-ui"
+  network = "default"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["8080"]
+  }
+
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["ssh-access"]
+}
+
 # ---- Cloud Run: API ----
 module "api" {
   source                = "../../modules/cloud_run"
@@ -178,8 +193,10 @@ module "api" {
 
   env_vars = {
     ENVIRONMENT              = var.environment
+    DB_ENV                   = "prod"
     DB_USER                  = module.database.user_name
     DB_NAME                  = module.database.database_name
+    DB_HOST                  = "/cloudsql/${module.database.connection_name}"
     INSTANCE_CONNECTION_NAME = module.database.connection_name
     MLFLOW_TRACKING_URI      = module.mlflow.service_url
   }
@@ -232,8 +249,10 @@ module "mlflow" {
 
   env_vars = {
     ENVIRONMENT              = var.environment
+    DB_ENV                   = "prod"
     DB_USER                  = module.database.user_name
     DB_NAME                  = module.database.database_name
+    DB_HOST                  = "/cloudsql/${module.database.connection_name}"
     INSTANCE_CONNECTION_NAME = module.database.connection_name
     MLFLOW_ARTIFACT_ROOT     = "gs://${module.mlflow_bucket.bucket_name}/artifacts"
   }

@@ -397,6 +397,9 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
       - name: Download metrics artifacts
         uses: actions/download-artifact@v4
         with:
@@ -405,7 +408,7 @@ jobs:
 
       - name: Push current metrics to GCS as new baseline
         run: |
-          gsutil cp model_pipeline/metrics.txt \
+          gcloud storage cp model_pipeline/metrics.txt \
             gs://savvio-${{ env.ENVIRONMENT }}-mlflow-artifacts/ci/previous_metrics.txt
           echo "Baseline updated in GCS."
 
@@ -417,6 +420,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: rollback-check
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    permissions:
+      actions: write
 
     steps:
       - name: Trigger deployment_ci.yml

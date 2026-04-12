@@ -225,6 +225,7 @@ jobs:
             --image $IMAGE:${{ github.sha }} \
             --region ${{ env.REGION }} \
             --port 5000 \
+            --add-cloudsql-instances ${{ secrets.DB_INSTANCE_CONNECTION_NAME }} \
             --quiet
 
       - name: Verify API health

@@ -233,7 +233,7 @@ resource "google_compute_firewall" "allow_iap_ssh" {
 # ---- Cloud Run: API ----
 module "api" {
   source                = "../../modules/cloud_run"
-  service_name          = "${local.prefix}-api"
+  service_name          = "savvio-backend-api"
   region                = var.region
   image                 = var.api_image
   port                  = 8080
@@ -269,7 +269,7 @@ module "api" {
 # ---- Cloud Run: Frontend ----
 module "frontend" {
   source                = "../../modules/cloud_run"
-  service_name          = "${local.prefix}-frontend"
+  service_name          = "savvio-ai"
   region                = var.region
   image                 = var.frontend_image
   port                  = 8080
@@ -293,7 +293,7 @@ module "frontend" {
 # ---- Cloud Run: MLflow ----
 module "mlflow" {
   source                = "../../modules/cloud_run"
-  service_name          = "${local.prefix}-mlflow"
+  service_name          = "savvio-ai-mlflow"
   region                = var.region
   image                 = var.mlflow_image
   port                  = 5000

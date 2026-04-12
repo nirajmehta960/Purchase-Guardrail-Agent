@@ -202,7 +202,7 @@ jobs:
         env:
           IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-api
         run: |
-          gcloud run deploy savvio-${{ env.ENVIRONMENT }}-api \
+          gcloud run deploy savvio-backend-api \
             --image $IMAGE:${{ github.sha }} \
             --region ${{ env.REGION }} \
             --quiet
@@ -211,7 +211,7 @@ jobs:
         env:
           IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-frontend
         run: |
-          gcloud run deploy savvio-${{ env.ENVIRONMENT }}-frontend \
+          gcloud run deploy savvio-ai \
             --image $IMAGE:${{ github.sha }} \
             --region ${{ env.REGION }} \
             --port 8080 \
@@ -221,7 +221,7 @@ jobs:
         env:
           IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-mlflow
         run: |
-          gcloud run deploy savvio-${{ env.ENVIRONMENT }}-mlflow \
+          gcloud run deploy savvio-ai-mlflow \
             --image $IMAGE:${{ github.sha }} \
             --region ${{ env.REGION }} \
             --port 5000 \
@@ -230,7 +230,7 @@ jobs:
 
       - name: Verify API health
         run: |
-          API_URL=$(gcloud run services describe savvio-${{ env.ENVIRONMENT }}-api \
+          API_URL=$(gcloud run services describe savvio-backend-api \
             --region ${{ env.REGION }} --format='value(status.url)')
           echo "API: $API_URL"
           curl -sf "$API_URL/health" || { echo "ERROR: health check failed"; exit 1; }
@@ -334,7 +334,7 @@ jobs:
       - name: Get API host for Prometheus scrape target
         id: api
         run: |
-          API_URL=$(gcloud run services describe savvio-${{ env.ENVIRONMENT }}-api \
+          API_URL=$(gcloud run services describe savvio-backend-api \
             --region ${{ env.REGION }} --format='value(status.url)')
           echo "host=$(echo $API_URL | sed 's|https://||')" >> $GITHUB_OUTPUT
 

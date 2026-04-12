@@ -50,6 +50,9 @@ jobs:
           pip install -e ../savviocore
           if [ -f data-requirements.txt ]; then pip install -r data-requirements.txt; fi
           pip install pytest pytest-cov
+          # apache-airflow is excluded from data-requirements.txt (provided by the
+          # runtime Airflow VM environment). Install it explicitly here for CI validation.
+          pip install "apache-airflow>=3.0.0" "apache-airflow-providers-standard" "apache-airflow-providers-smtp"
 
       - name: Validate DAG parses correctly
         working-directory: data_pipeline

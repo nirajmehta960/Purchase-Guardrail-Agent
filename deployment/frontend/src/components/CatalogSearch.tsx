@@ -38,6 +38,7 @@ export function CatalogSearch({
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [catalogItems, setCatalogItems] = useState<ProductListItem[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [searchQ, setSearchQ] = useState("");
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -51,9 +52,16 @@ export function CatalogSearch({
     searchDebounceRef.current = setTimeout(
       () => {
         setCatalogLoading(true);
+        setCatalogError(null);
         fetchProducts({ q: searchQ || undefined, limit: 100 })
-          .then((r) => setCatalogItems(r.items))
-          .catch(() => setCatalogItems([]))
+          .then((r) => {
+            setCatalogItems(r.items);
+            setCatalogError(null);
+          })
+          .catch((e: unknown) => {
+            setCatalogItems([]);
+            setCatalogError(e instanceof Error ? e.message : "Could not load products.");
+          })
           .finally(() => setCatalogLoading(false));
       },
       searchQ.trim() ? 320 : 0,
@@ -84,7 +92,10 @@ export function CatalogSearch({
             open={catalogOpen}
             onOpenChange={(o) => {
               setCatalogOpen(o);
-              if (o) setSearchQ("");
+              if (o) {
+                setSearchQ("");
+                setCatalogError(null);
+              }
             }}
           >
             <PopoverTrigger asChild>
@@ -111,7 +122,14 @@ export function CatalogSearch({
                   {catalogLoading && (
                     <div className="py-6 text-center text-sm text-muted-foreground">Loading…</div>
                   )}
-                  {!catalogLoading && catalogItems.length === 0 && <CommandEmpty>No products found.</CommandEmpty>}
+                  {!catalogLoading && catalogError && (
+                    <div className="py-4 px-3 text-center text-sm text-destructive leading-snug" role="alert">
+                      {catalogError}
+                    </div>
+                  )}
+                  {!catalogLoading && !catalogError && catalogItems.length === 0 && (
+                    <CommandEmpty>No products found.</CommandEmpty>
+                  )}
                   {!catalogLoading && catalogItems.length > 0 && (
                     <CommandGroup>
                       {catalogItems.map((p) => (

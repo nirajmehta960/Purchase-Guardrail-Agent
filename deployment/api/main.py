@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -123,6 +124,25 @@ async def http_exception_handler(request: Request, exc: HTTPException):
             error=f"http_{exc.status_code}",
             detail=str(exc.detail),
         ).model_dump(),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Normalize 422 bodies to the same `ErrorResponse` shape as other errors."""
+    parts: list[str] = []
+    for err in exc.errors():
+        loc = " → ".join(str(x) for x in err.get("loc", ()) if x != "body")
+        msg = err.get("msg", "invalid")
+        if loc:
+            parts.append(f"{loc}: {msg}")
+        else:
+            parts.append(str(msg))
+    detail = "; ".join(parts) if parts else "Invalid request body."
+    logger.warning("validation_error | path=%s detail=%s", request.url.path, detail)
+    return JSONResponse(
+        status_code=422,
+        content=ErrorResponse(error="validation_error", detail=detail).model_dump(),
     )
 
 

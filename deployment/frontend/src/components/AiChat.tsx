@@ -9,7 +9,7 @@
  *   - lib/formatters         → shared formatting (DRY)
  */
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Sparkles,
@@ -156,21 +156,59 @@ const quickPrompts = [
   "Is a $2,500 Peloton worth it?",
 ];
 
+const CHAT_STORAGE_KEY = "savvio_chat_history";
+
+const WELCOME_MESSAGE: Message = {
+  id: "welcome",
+  role: "assistant",
+  content:
+    "Welcome to **SavVio**. I'm your AI Financial Fiduciary — I'm here to help you make purchase decisions that align with your real financial health.\n\nEnter your **User ID** in the header. Turn on **Use catalog product** to pick a real SKU from our database (enables review + quality signals), or describe a purchase in your own words (may use **stated price only** if no catalog match).",
+};
+
+function loadChatHistory(uid: string): Message[] {
+  try {
+    const key = uid ? `${CHAT_STORAGE_KEY}_${uid}` : CHAT_STORAGE_KEY;
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Message[];
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch { /* corrupt data — start fresh */ }
+  return [WELCOME_MESSAGE];
+}
+
+function saveChatHistory(uid: string, messages: Message[]) {
+  try {
+    const key = uid ? `${CHAT_STORAGE_KEY}_${uid}` : CHAT_STORAGE_KEY;
+    localStorage.setItem(key, JSON.stringify(messages));
+  } catch { /* storage full or unavailable */ }
+}
+
 export const AiChat = () => {
-  const { userId } = useUser();
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      content:
-        "Welcome to **SavVio**. I'm your AI Financial Fiduciary — I'm here to help you make purchase decisions that align with your real financial health.\n\nEnter your **User ID** in the header. Turn on **Use catalog product** to pick a real SKU from our database (enables review + quality signals), or describe a purchase in your own words (may use **stated price only** if no catalog match).",
-    },
-  ]);
+  const { userId, profileError } = useUser();
+  const [messages, setMessages] = useState<Message[]>(() => loadChatHistory(userId));
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [useCatalog, setUseCatalog] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<ProductListItem | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const prevUserIdRef = useRef(userId);
+
+  useEffect(() => {
+    if (prevUserIdRef.current !== userId) {
+      setMessages(loadChatHistory(userId));
+      prevUserIdRef.current = userId;
+    }
+  }, [userId]);
+
+  const persistMessages = useCallback(
+    (msgs: Message[]) => saveChatHistory(userId, msgs),
+    [userId],
+  );
+
+  useEffect(() => {
+    persistMessages(messages);
+  }, [messages, persistMessages]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -210,6 +248,19 @@ export const AiChat = () => {
       setInput("");
       return;
     }
+    if (profileError) {
+      setMessages((prev) => [
+        ...prev,
+        { id: Date.now().toString(), role: "user", content: msg },
+        {
+          id: (Date.now() + 1).toString(),
+          role: "assistant",
+          content: `**Cannot run advice.** ${profileError}`,
+        },
+      ]);
+      setInput("");
+      return;
+    }
 
     const userMsg: Message = { id: Date.now().toString(), role: "user", content: msg };
     setMessages((prev) => [...prev, userMsg]);
@@ -241,7 +292,7 @@ export const AiChat = () => {
         {
           id: (Date.now() + 2).toString(),
           role: "assistant",
-          content: `**Something went wrong.** ${errText}\n\nMake sure the API is running on port **3500** and your user exists in the database.`,
+          content: `**Something went wrong.** ${errText}`,
         },
       ]);
     } finally {

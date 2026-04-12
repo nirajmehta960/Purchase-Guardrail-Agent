@@ -62,7 +62,9 @@ export function UserProvider({ children }: { children: ReactNode }) {
       setUserProfile(p);
     } catch (e) {
       setUserProfile(null);
-      setProfileError(e instanceof Error ? e.message : "Failed to load profile");
+      setProfileError(
+        e instanceof Error ? e.message : typeof e === "string" ? e : "Failed to load profile",
+      );
     } finally {
       setIsLoadingProfile(false);
     }

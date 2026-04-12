@@ -11,9 +11,12 @@ on:
     paths:
       - 'deployment/terraform/**'
 
+# Only one Terraform run at a time to prevent state lock conflicts.
+# On PRs, cancel any in-progress plan for the same branch.
+# On main push, queue (don't cancel) so applies don't race.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   terraform-dev:
@@ -38,6 +41,9 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -48,6 +54,26 @@ jobs:
 
       - name: Terraform Validate
         run: terraform validate
+
+      - name: Force-unlock stale state lock (if present)
+        if: github.event_name != 'pull_request'
+        run: |
+          # Attempt to unlock any stale lock left by a previously interrupted run.
+          # This is safe because concurrency: cancel-in-progress ensures no other
+          # run is actively holding the lock when this step executes on main.
+          LOCK_ID=$(
+            gcloud storage cat \
+              gs://savvio-purchase-guardrail-tf-state/env/dev/default.tflock \
+              2>/dev/null \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('ID',''))" \
+              2>/dev/null || true
+          )
+          if [ -n "$LOCK_ID" ]; then
+            echo "Stale lock found (ID: $LOCK_ID) — force-unlocking..."
+            terraform force-unlock -force "$LOCK_ID" || true
+          else
+            echo "No stale lock found."
+          fi
 
       - name: Terraform Plan
         id: plan

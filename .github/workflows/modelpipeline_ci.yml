@@ -12,6 +12,19 @@ on:
       - 'model_pipeline/**'
       - 'savviocore/**'
   workflow_dispatch:
+    inputs:
+      skip_rollback_check:
+        description: 'Skip rollback check (use for first run or manual override)'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+      skip_bias_gate:
+        description: 'Skip bias gate (use for debugging only)'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -19,6 +32,7 @@ concurrency:
 
 env:
   ENVIRONMENT: dev
+  CLOUD_SQL_PROXY_URL: https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.1/cloud-sql-proxy.linux.amd64
 
 jobs:
   # ===========================================================================
@@ -72,12 +86,11 @@ jobs:
             -v --tb=short
 
   # ===========================================================================
-  # JOB 2 — DB Connection Check (parallel with unit tests)
+  # JOB 2 — DB Connection Check (runs in parallel with unit tests)
   # ===========================================================================
   db-connection-check:
     name: DB Connection Check
     runs-on: ubuntu-latest
-    needs: unit-tests
 
     steps:
       - name: Checkout code
@@ -88,16 +101,23 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Install Cloud SQL Auth Proxy
+      - name: Cache Cloud SQL Auth Proxy
+        id: cache-proxy
+        uses: actions/cache@v4
+        with:
+          path: cloud-sql-proxy
+          key: cloud-sql-proxy-v2.14.1-linux-amd64
+
+      - name: Download Cloud SQL Auth Proxy
+        if: steps.cache-proxy.outputs.cache-hit != 'true'
         run: |
-          curl -so cloud-sql-proxy \
-            https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.1/cloud-sql-proxy.linux.amd64
+          curl -so cloud-sql-proxy ${{ env.CLOUD_SQL_PROXY_URL }}
           chmod +x cloud-sql-proxy
 
       - name: Start Cloud SQL Auth Proxy
         run: |
-          ./cloud-sql-proxy "${{ secrets.DB_INSTANCE_CONNECTION_NAME }}" \
-            --port 5432 &
+          chmod +x cloud-sql-proxy
+          ./cloud-sql-proxy "${{ secrets.DB_INSTANCE_CONNECTION_NAME }}" --port 5432 &
           sleep 3
 
       - name: Set up Python
@@ -139,6 +159,7 @@ jobs:
 
   # ===========================================================================
   # JOB 3 — Run Model Pipeline
+  # Waits for both unit-tests and db-connection-check to pass.
   # Writes metrics.txt and bias_metrics.txt, uploads as artifacts for gate jobs.
   # Downloads previous_metrics.txt from GCS for rollback baseline.
   # ===========================================================================
@@ -156,16 +177,26 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Install Cloud SQL Auth Proxy
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Cache Cloud SQL Auth Proxy
+        id: cache-proxy
+        uses: actions/cache@v4
+        with:
+          path: cloud-sql-proxy
+          key: cloud-sql-proxy-v2.14.1-linux-amd64
+
+      - name: Download Cloud SQL Auth Proxy
+        if: steps.cache-proxy.outputs.cache-hit != 'true'
         run: |
-          curl -so cloud-sql-proxy \
-            https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.1/cloud-sql-proxy.linux.amd64
+          curl -so cloud-sql-proxy ${{ env.CLOUD_SQL_PROXY_URL }}
           chmod +x cloud-sql-proxy
 
       - name: Start Cloud SQL Auth Proxy
         run: |
-          ./cloud-sql-proxy "${{ secrets.DB_INSTANCE_CONNECTION_NAME }}" \
-            --port 5432 &
+          chmod +x cloud-sql-proxy
+          ./cloud-sql-proxy "${{ secrets.DB_INSTANCE_CONNECTION_NAME }}" --port 5432 &
           sleep 3
 
       - name: Set up Python
@@ -192,8 +223,10 @@ jobs:
 
       - name: Download previous metrics from GCS (rollback baseline)
         run: |
-          gsutil cp gs://savvio-${{ env.ENVIRONMENT }}-mlflow-artifacts/ci/previous_metrics.txt \
-            model_pipeline/previous_metrics.txt || echo "No previous metrics found — first run, skipping rollback baseline."
+          gcloud storage cp \
+            gs://savvio-${{ env.ENVIRONMENT }}-mlflow-artifacts/ci/previous_metrics.txt \
+            model_pipeline/previous_metrics.txt \
+            || echo "No previous metrics found — first run, skipping rollback baseline."
 
       - name: Start MLflow server
         run: |
@@ -229,7 +262,7 @@ jobs:
           retention-days: 7
 
   # ===========================================================================
-  # JOB 4 — Validation Gate
+  # JOB 4 — Validation Gate  (runs in parallel with bias-gate)
   # Blocks if F1 < 0.70 or ROC AUC < 0.75
   # ===========================================================================
   validation-gate:
@@ -284,8 +317,8 @@ jobs:
           EOF
 
   # ===========================================================================
-  # JOB 5 — Bias Detection Gate
-  # Blocks if max F1 disparity >= 0.10
+  # JOB 5 — Bias Detection Gate  (runs in parallel with validation-gate)
+  # Delegates pass/fail to detect_and_mitigate() via bias_gate_passed flag.
   # ===========================================================================
   bias-gate:
     name: Bias Detection Gate
@@ -321,6 +354,11 @@ jobs:
           # bias_gate_passed is set by detect_and_mitigate() in bias_detection.py,
           # which applies category-aware thresholds (financial DPD not checked by design,
           # product DPD threshold=0.30, demographic DPD threshold=0.10).
+          skip = os.environ.get("SKIP_BIAS_GATE", "false").lower() == "true"
+          if skip:
+              print("BIAS GATE SKIPPED (manual override via workflow_dispatch input)")
+              sys.exit(0)
+
           passed = int(metrics.get("bias_gate_passed", "0"))
           if passed:
               print("BIAS GATE PASSED")
@@ -328,10 +366,13 @@ jobs:
               print("BIAS GATE FAILED — see run_pipeline logs for which slices violated thresholds")
               sys.exit(1)
           EOF
+        env:
+          SKIP_BIAS_GATE: ${{ github.event.inputs.skip_bias_gate || 'false' }}
 
   # ===========================================================================
   # JOB 6 — Rollback Check
-  # Blocks if F1 drops more than 0.02 vs previous passing model
+  # Blocks if F1 drops more than 0.02 vs previous passing model.
+  # Skipped automatically on first run (no baseline) or via workflow_dispatch input.
   # ===========================================================================
   rollback-check:
     name: Rollback Check
@@ -348,9 +389,14 @@ jobs:
       - name: Check rollback threshold
         env:
           ROLLBACK_THRESHOLD: "0.02"
+          SKIP_ROLLBACK: ${{ github.event.inputs.skip_rollback_check || 'false' }}
         run: |
           python3 - <<'EOF'
           import os, sys
+
+          if os.environ.get("SKIP_ROLLBACK", "false").lower() == "true":
+              print("ROLLBACK CHECK SKIPPED (manual override via workflow_dispatch input)")
+              sys.exit(0)
 
           current_file  = "model_pipeline/metrics.txt"
           previous_file = "model_pipeline/previous_metrics.txt"
@@ -443,11 +489,12 @@ jobs:
 
   # ===========================================================================
   # JOB 9 — Notify on Failure
+  # Covers all jobs including persist-metrics and trigger-deployment.
   # ===========================================================================
   notify-on-failure:
     name: Notify on Failure
     runs-on: ubuntu-latest
-    needs: [unit-tests, db-connection-check, run-pipeline, validation-gate, bias-gate, rollback-check]
+    needs: [unit-tests, db-connection-check, run-pipeline, validation-gate, bias-gate, rollback-check, persist-metrics-baseline, trigger-deployment]
     if: failure()
 
     steps:
@@ -460,11 +507,12 @@ jobs:
 
   # ===========================================================================
   # JOB 10 — Notify on Success
+  # Covers all jobs including persist-metrics and trigger-deployment.
   # ===========================================================================
   notify-on-success:
     name: Notify on Success
     runs-on: ubuntu-latest
-    needs: [unit-tests, db-connection-check, run-pipeline, validation-gate, bias-gate, rollback-check]
+    needs: [unit-tests, db-connection-check, run-pipeline, validation-gate, bias-gate, rollback-check, persist-metrics-baseline, trigger-deployment]
     if: success()
 
     steps:

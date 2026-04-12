@@ -17,6 +17,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CLOUD_SQL_PROXY_URL: https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.1/cloud-sql-proxy.linux.amd64
+
 jobs:
   # ===========================================================================
   # JOB 1 — Unit Tests + DAG Validation
@@ -78,7 +81,6 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/data_pipeline
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-          GCP_CREDENTIALS_PATH: ${{ env.GOOGLE_APPLICATION_CREDENTIALS }}
         run: |
           python -m pytest \
             tests/bias/ \
@@ -90,12 +92,11 @@ jobs:
             -v --tb=short --cov=dags/src --cov-report=term-missing
 
   # ===========================================================================
-  # JOB 2 — DB Connection Check
+  # JOB 2 — DB Connection Check (runs in parallel with unit tests)
   # ===========================================================================
   db-connection-check:
     name: DB Connection Check
     runs-on: ubuntu-latest
-    needs: unit-tests
 
     permissions:
       contents: read
@@ -110,16 +111,23 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Install Cloud SQL Auth Proxy
+      - name: Cache Cloud SQL Auth Proxy
+        id: cache-proxy
+        uses: actions/cache@v4
+        with:
+          path: cloud-sql-proxy
+          key: cloud-sql-proxy-v2.14.1-linux-amd64
+
+      - name: Download Cloud SQL Auth Proxy
+        if: steps.cache-proxy.outputs.cache-hit != 'true'
         run: |
-          curl -so cloud-sql-proxy \
-            https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.1/cloud-sql-proxy.linux.amd64
+          curl -so cloud-sql-proxy ${{ env.CLOUD_SQL_PROXY_URL }}
           chmod +x cloud-sql-proxy
 
       - name: Start Cloud SQL Auth Proxy
         run: |
-          ./cloud-sql-proxy "${{ secrets.DB_INSTANCE_CONNECTION_NAME }}" \
-            --port 5432 &
+          chmod +x cloud-sql-proxy
+          ./cloud-sql-proxy "${{ secrets.DB_INSTANCE_CONNECTION_NAME }}" --port 5432 &
           sleep 3
 
       - name: Set up Python
@@ -158,17 +166,19 @@ jobs:
           except Exception as e:
               print(f"DB connection FAILED: {e}")
               print("Hint: Check DB_HOST / DB_USER GitHub Secrets are set correctly.")
-              print("Note: If using Supabase, you may need an IPv4 connection pooler.")
               sys.exit(1)
           EOF
 
   # ===========================================================================
-  # JOB 3 — Deploy DAGs to VM (main branch only)
+  # JOB 3 — Deploy DAGs to VM (main branch only, after both checks pass)
+  # Uses sudo docker-compose (VM uses Docker Compose v1 with hyphen).
+  # SSH timeout (i/o timeout on port 22): ensure the VM firewall allows
+  # GitHub Actions IP ranges on port 22, and the VM is running.
   # ===========================================================================
   deploy-dags:
     name: Deploy DAGs to Airflow VM
     runs-on: ubuntu-latest
-    needs: unit-tests
+    needs: [unit-tests, db-connection-check]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
 
     steps:
@@ -181,19 +191,21 @@ jobs:
           host: ${{ secrets.GCE_VM_IP }}
           username: github-actions
           key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
+          timeout: 60s
+          command_timeout: 15m
           script: |
             cd /opt/savvio
-            git pull origin main
-            docker compose exec -T airflow-apiserver airflow dags reserialize
+            sudo git pull origin main
+            sudo docker-compose exec -T airflow-apiserver airflow dags reserialize
             echo "DAGs reserialised successfully"
 
   # ===========================================================================
-  # JOB 4 — Notify on Failure
+  # JOB 4 — Notify on Failure (covers all jobs)
   # ===========================================================================
   notify-on-failure:
     name: Notify on Failure
     runs-on: ubuntu-latest
-    needs: [unit-tests, db-connection-check]
+    needs: [unit-tests, db-connection-check, deploy-dags]
     if: failure()
 
     steps:
@@ -205,12 +217,12 @@ jobs:
           echo "Triggered by: ${{ github.actor }}"
 
   # ===========================================================================
-  # JOB 5 — Notify on Success
+  # JOB 5 — Notify on Success (covers all jobs)
   # ===========================================================================
   notify-on-success:
     name: Notify on Success
     runs-on: ubuntu-latest
-    needs: [unit-tests, db-connection-check]
+    needs: [unit-tests, db-connection-check, deploy-dags]
     if: success()
 
     steps:

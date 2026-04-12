@@ -228,15 +228,11 @@ jobs:
             model_pipeline/previous_metrics.txt \
             || echo "No previous metrics found — first run, skipping rollback baseline."
 
-      - name: Start MLflow server
+      - name: Get MLflow tracking URI
         run: |
-          cd model_pipeline
-          mlflow server \
-            --backend-store-uri sqlite:///mlflow.db \
-            --default-artifact-root ./mlruns \
-            --host 127.0.0.1 \
-            --port 5000 &
-          sleep 5
+          MLFLOW_URL=$(gcloud run services describe savvio-${{ env.ENVIRONMENT }}-mlflow \
+            --region us-east1 --format='value(status.url)')
+          echo "MLFLOW_TRACKING_URI=${MLFLOW_URL}" >> $GITHUB_ENV
 
       - name: Run pipeline
         working-directory: model_pipeline
@@ -246,7 +242,8 @@ jobs:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          MLFLOW_TRACKING_URI: http://127.0.0.1:5000
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GCP_REGION: us-east1
         run: |
           python src/run_pipeline.py
 

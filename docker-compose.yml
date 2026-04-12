@@ -34,7 +34,7 @@ services:
       - "8080:8080"
     environment:
       API_PORT: "8080"
-      DB_ENV: "dev"
+      DB_ENV: ${DB_ENV:-dev}
       DB_HOST: ${DB_HOST}
       DB_PORT: ${DB_PORT}
       DB_USER: ${DB_USER}
@@ -52,7 +52,7 @@ services:
       context: deployment/frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_BASE: "http://localhost:8080"
+        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8080}
     ports:
       - "8501:8080"   # host 8501 → nginx inside container on 8080
     depends_on:

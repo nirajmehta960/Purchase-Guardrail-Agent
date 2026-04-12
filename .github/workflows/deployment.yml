@@ -311,12 +311,78 @@ jobs:
           retention-days: 30
 
   # ---------------------------------------------------------------------------
+  # Deploy Monitoring (Prometheus on GCE VM → remote-write to Grafana Cloud)
+  # ---------------------------------------------------------------------------
+  deploy-monitoring:
+    name: Deploy Monitoring
+    runs-on: ubuntu-latest
+    needs: deploy
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Get API host for Prometheus scrape target
+        id: api
+        run: |
+          API_URL=$(gcloud run services describe savvio-${{ env.ENVIRONMENT }}-api \
+            --region ${{ env.REGION }} --format='value(status.url)')
+          # Strip https:// — Prometheus target uses scheme: https
+          echo "host=$(echo $API_URL | sed 's|https://||')" >> $GITHUB_OUTPUT
+
+      - name: Render Prometheus production config
+        env:
+          API_HOST: ${{ steps.api.outputs.host }}
+          GRAFANA_REMOTE_WRITE_URL: ${{ secrets.GRAFANA_REMOTE_WRITE_URL }}
+          GRAFANA_CLOUD_USERNAME: ${{ secrets.GRAFANA_CLOUD_USERNAME }}
+          GRAFANA_CLOUD_API_KEY: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
+        run: |
+          envsubst < deployment/monitoring/prometheus/prometheus.production.yml \
+            > /tmp/prometheus.rendered.yml
+
+      - name: Get VM zone
+        id: vm
+        run: |
+          ZONE=$(gcloud compute instances describe savvio-${{ env.ENVIRONMENT }}-pipeline-vm \
+            --format='value(zone)' | sed 's|.*/zones/||')
+          echo "zone=$ZONE" >> $GITHUB_OUTPUT
+
+      - name: Copy monitoring files to VM
+        run: |
+          gcloud compute scp /tmp/prometheus.rendered.yml \
+            savvio-${{ env.ENVIRONMENT }}-pipeline-vm:/tmp/prometheus.yml \
+            --zone=${{ steps.vm.outputs.zone }} --tunnel-through-iap --quiet
+
+          gcloud compute scp deployment/monitoring/docker-compose.production.yml \
+            savvio-${{ env.ENVIRONMENT }}-pipeline-vm:/tmp/docker-compose.monitoring.yml \
+            --zone=${{ steps.vm.outputs.zone }} --tunnel-through-iap --quiet
+
+      - name: Deploy Prometheus on VM
+        run: |
+          gcloud compute ssh savvio-${{ env.ENVIRONMENT }}-pipeline-vm \
+            --zone=${{ steps.vm.outputs.zone }} --tunnel-through-iap --quiet \
+            --command="
+              sudo mkdir -p /opt/savvio-monitoring/prometheus &&
+              sudo mv /tmp/prometheus.yml /opt/savvio-monitoring/prometheus/prometheus.yml &&
+              sudo mv /tmp/docker-compose.monitoring.yml /opt/savvio-monitoring/docker-compose.yml &&
+              cd /opt/savvio-monitoring &&
+              sudo docker compose pull &&
+              sudo docker compose up -d --remove-orphans
+            "
+
+  # ---------------------------------------------------------------------------
   # Notifications (covers all jobs)
   # ---------------------------------------------------------------------------
   notify-on-failure:
     name: Notify Failure
     runs-on: ubuntu-latest
-    needs: [test-api, test-frontend, build-push-api, build-push-frontend, build-push-mlflow, deploy, drift-detection]
+    needs: [test-api, test-frontend, build-push-api, build-push-frontend, build-push-mlflow, deploy, drift-detection, deploy-monitoring]
     if: failure()
     steps:
       - run: |
@@ -327,7 +393,7 @@ jobs:
   notify-on-success:
     name: Notify Success
     runs-on: ubuntu-latest
-    needs: [test-api, test-frontend, build-push-api, build-push-frontend, build-push-mlflow, deploy, drift-detection]
+    needs: [test-api, test-frontend, build-push-api, build-push-frontend, build-push-mlflow, deploy, drift-detection, deploy-monitoring]
     if: success()
     steps:
       - run: |

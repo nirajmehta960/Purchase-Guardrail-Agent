@@ -74,16 +74,18 @@ def merge_csv(
     # Set DuckDB configuration
     # Memory limit - must stay well below the worker container's mem_limit (currently 5G in docker-compose.yaml).
     #   The preprocessing stage runs 3 DuckDB tasks in parallel, so: 3 × memory_limit must be < 5G.
-    #   1500MB × 3 = 4.5GB — safe headroom. DuckDB spills the rest to temp_directory.
-    #   If you increase the container's mem_limit, scale this proportionally (new_limit / 3 - 200MB buffer).
-    # Threads - Increase when docker has access to more CPU
+    #   1000MB × 3 = 3.0GB — safe headroom within the 5G worker limit (leaves ~2GB for Python/Celery overhead).
+    #   DuckDB spills anything beyond 1000MB to temp_directory on disk.
+    #   If you increase the container's mem_limit, scale this proportionally (new_limit / 3 - 500MB buffer).
+    # Threads - 2 threads per connection keeps parallel memory pressure low (4 threads doubles working set size).
+    #   Increase only if fewer DuckDB tasks run concurrently or container mem_limit is raised.
     # preserve_insertion_order=false - order of records is not preserved - needs less memory
     # temp_directory='/tmp' - duckdb spills working data to /tmp when memory_limit is reached
     with duckdb.connect() as con:
         con.execute("PRAGMA temp_directory='/tmp';")
-        con.execute("PRAGMA memory_limit='1500MB';")
+        con.execute("PRAGMA memory_limit='1000MB';")
         con.execute("PRAGMA preserve_insertion_order=false;")
-        con.execute("PRAGMA threads=4;")
+        con.execute("PRAGMA threads=2;")
 
         query = f"""
         COPY (
@@ -110,9 +112,10 @@ def merge_csv(
         ) TO '{temp_out}' (FORMAT CSV, HEADER);
         """
         con.execute(query)
-        
-        total_count_res = con.execute(f"SELECT COUNT(*) FROM read_csv_auto('{temp_out}')").fetchone()
-        total_count = total_count_res[0] if total_count_res else 0
+
+    # Count rows after closing DuckDB — avoids re-reading the merged file inside the
+    # same connection (which doubled peak memory usage and caused OOM on large files).
+    total_count = sum(1 for _ in open(temp_out)) - 1  # subtract header row
 
     stats = {
         "total": total_count,
@@ -154,9 +157,9 @@ def merge_jsonl(
 
     with duckdb.connect() as con:
         con.execute("PRAGMA temp_directory='/tmp';")
-        con.execute("PRAGMA memory_limit='1500MB';")
+        con.execute("PRAGMA memory_limit='1000MB';")
         con.execute("PRAGMA preserve_insertion_order=false;")
-        con.execute("PRAGMA threads=4;")
+        con.execute("PRAGMA threads=2;")
 
         query = f"""
         COPY (
@@ -183,9 +186,10 @@ def merge_jsonl(
         ) TO '{temp_out}' (FORMAT JSON);
         """
         con.execute(query)
-        
-        total_count_res = con.execute(f"SELECT COUNT(*) FROM read_json_auto('{temp_out}')").fetchone()
-        total_count = total_count_res[0] if total_count_res else 0
+
+    # Count rows after closing DuckDB — avoids re-reading the merged file inside the
+    # same connection (which doubled peak memory usage and caused OOM on large files).
+    total_count = sum(1 for _ in open(temp_out))
 
     stats = {
         "total": total_count,

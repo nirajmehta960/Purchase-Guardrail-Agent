@@ -4,9 +4,10 @@ import sys
 from pathlib import Path
 from src.ingestion.run_ingestion import ingest_financial_task, ingest_product_task, ingest_review_task
 from src.preprocess.run_preprocessing import preprocess_financial_task, preprocess_product_task, preprocess_review_task
-from src.features.run_features import feature_financial_task, feature_review_task
+from src.features.run_features import feature_financial_task, feature_product_review_task
 from src.database.run_database import setup_database_task, load_financial_task, load_products_task, load_reviews_task, generate_and_load_embedding_task
 from src.validation.run_validation import validate_raw, validate_processed, validate_features, validate_raw_anomalies
+from src.bias.run_bias import bias_financial_task, bias_product_task, bias_review_task
 
 from datetime import datetime, timedelta
 from airflow import DAG
@@ -413,7 +414,7 @@ check_processed_validation = BranchPythonOperator(
     task_id='check_processed_validation',
     python_callable=make_branch_check(
         upstream_ids=['validate_processed_data'],
-        success_ids=['feature_financial_data', 'feature_review_data'],
+        success_ids=['feature_financial_data', 'feature_product_review_data'],
         # failure_ids=['send_email_at_processed_validation_error', 'send_slack_at_processed_validation_error'],
         failure_ids=['send_email_at_processed_validation_error'],
     ),
@@ -436,19 +437,19 @@ feature_financial = PythonOperator(
     dag=dag,
 )
 
-feature_reviews = PythonOperator(
-    task_id='feature_review_data',
-    python_callable=feature_review_task,
+feature_product_reviews = PythonOperator(
+    task_id='feature_product_review_data',
+    python_callable=feature_product_review_task,
     dag=dag,
 )
 
-check_processed_validation >> [feature_financial, feature_reviews]
+check_processed_validation >> [feature_financial, feature_product_reviews]
 
 # --- BRANCH: all feature engineering succeeded? ---
 check_feature_engineering = BranchPythonOperator(
     task_id='check_feature_engineering',
     python_callable=make_branch_check(
-        upstream_ids=['feature_financial_data', 'feature_review_data'],
+        upstream_ids=['feature_financial_data', 'feature_product_review_data'],
         success_ids=['validate_featured_data'],
         # failure_ids=['send_email_at_feature_engineering_error', 'send_slack_at_feature_engineering_error'],
         failure_ids=['send_email_at_feature_engineering_error'],
@@ -457,7 +458,7 @@ check_feature_engineering = BranchPythonOperator(
     dag=dag,
 )
 
-[feature_financial, feature_reviews] >> check_feature_engineering
+[feature_financial, feature_product_reviews] >> check_feature_engineering
 # check_feature_engineering >> [email_error_at_feature_engineering, slack_error_at_feature_engineering]
 check_feature_engineering >> email_error_at_feature_engineering
 
@@ -527,13 +528,13 @@ generate_load_embeddings = PythonOperator(
 )
 
 check_featured_validation >> setup_database
-setup_database >> [load_financial, load_product] >> load_review >> generate_load_embeddings
+setup_database >> [load_financial, load_product] >> load_review
 
 # --- BRANCH: all DB loading succeeded? ---
 check_db_loading = BranchPythonOperator(
     task_id='check_db_loading',
     python_callable=make_branch_check(
-        upstream_ids=['load_financial_profiles', 'load_products', 'load_reviews', 'generate_load_embeddings'],
+        upstream_ids=['load_financial_profiles', 'load_products', 'load_reviews'],
         # success_ids=['send_email_pipeline_success', 'send_slack_pipeline_success'],
         success_ids=['send_email_pipeline_success'],
         # failure_ids=['send_email_at_DB_loading_error', 'send_slack_at_DB_loading_error'],
@@ -543,7 +544,7 @@ check_db_loading = BranchPythonOperator(
     dag=dag,
 )
 
-generate_load_embeddings >> check_db_loading
+load_review >> check_db_loading
 # check_db_loading >> [email_error_at_DB_loading, slack_error_at_DB_loading]
 check_db_loading >> email_error_at_DB_loading
 # check_db_loading >> [email_pipeline_success, slack_pipeline_success]
@@ -592,20 +593,33 @@ email_pipeline_success >> pipeline_sentinel
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Airflow DAG for Bias Analysis (commented out)
+# 8. BIAS ANALYSIS  (runs after DB loading, informational only)
+#
+# These tasks analyze representation bias, missingness bias, and
+# cross-column checks on processed/featured data. Output is logs only —
+# no files written, no DB writes. Failures here do NOT block the
+# success email or mark the pipeline as failed.
 # ═══════════════════════════════════════════════════════════════════
 
-# bias_financial = PythonOperator(
-#     task_id='bias_analysis_financial',
-#     python_callable=bias.analyze_financial_bias,
-#     dag=dag
-# )
+bias_financial = PythonOperator(
+    task_id='bias_analysis_financial',
+    python_callable=bias_financial_task,
+    dag=dag,
+)
 
-# bias_products = PythonOperator(
-#     task_id='bias_analysis_products',
-#     python_callable=bias.analyze_product_bias,
-#     dag=dag
-# )
+bias_products = PythonOperator(
+    task_id='bias_analysis_products',
+    python_callable=bias_product_task,
+    dag=dag,
+)
 
-# # Run in parallel since they analyze independent tracks.
-# [bias_financial, bias_products] >> complete
+bias_reviews = PythonOperator(
+    task_id='bias_analysis_reviews',
+    python_callable=bias_review_task,
+    dag=dag,
+)
+
+# Run in parallel after embeddings are loaded. These are leaf nodes —
+# they don't feed into check_db_loading or pipeline_sentinel so a
+# bias failure never blocks the pipeline success status.
+load_review >> [bias_financial, bias_products, bias_reviews]

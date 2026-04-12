@@ -81,9 +81,9 @@ def feature_financial_task(**context):
     logger.info(">>> Financial Feature Engineering: SUCCESS")
 
 
-def feature_review_task(**context):
-    """Airflow task: run review feature engineering (produces product + review featured files)."""
-    logger.info(">>> Running Review Feature Engineering...")
+def feature_product_review_task(**context):
+    """Airflow task: run product & review feature engineering (produces product + review featured files)."""
+    logger.info(">>> Running Product & Review Feature Engineering...")
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     DATA_DIR = os.path.join(BASE_DIR, "data")
     run_review_features(
@@ -92,7 +92,7 @@ def feature_review_task(**context):
         product_output_path=os.path.join(DATA_DIR, "features/product_featured.jsonl"),
         review_output_path=os.path.join(DATA_DIR, "features/review_featured.jsonl"),
     )
-    logger.info(">>> Review Feature Engineering: SUCCESS")
+    logger.info(">>> Product & Review Feature Engineering: SUCCESS")
 
 
 if __name__ == "__main__":

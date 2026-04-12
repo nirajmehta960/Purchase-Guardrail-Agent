@@ -659,6 +659,27 @@ def validate_llm_layer(best, data):
 # Main
 # ---------------------------------------------------------------------------
 
+def write_ci_metrics_files(final_metrics, best_candidate):
+    """Write metrics.txt and bias_metrics.txt for CI gate jobs."""
+    # metrics.txt — validation thresholds gate reads f1_score and roc_auc
+    with open("metrics.txt", "w") as f:
+        for key in ("f1_score", "roc_auc", "accuracy", "pr_auc"):
+            if key in (final_metrics or {}):
+                f.write(f"{key}={final_metrics[key]}\n")
+    logger.info("Wrote metrics.txt")
+
+    # bias_metrics.txt — bias gate reads DPD and EOD disparity values
+    fairness = (best_candidate or {}).get("fairness_metrics", {})
+    bias_entries = {
+        k: v for k, v in fairness.items()
+        if k.startswith("bias_dpd_") or k.startswith("bias_eod_")
+    }
+    with open("bias_metrics.txt", "w") as f:
+        for k, v in bias_entries.items():
+            f.write(f"{k}={v}\n")
+    logger.info("Wrote bias_metrics.txt (%d entries)", len(bias_entries))
+
+
 def main():
     print("Starting End-to-End ML Pipeline...\n")
     print(f"[0/6] MLflow tracking URI: {Config.MLFLOW_TRACKING_URI}")
@@ -718,6 +739,10 @@ def main():
         print("[6/6] Final evaluation skipped or failed.")
 
     sensitivity_summary = run_sensitivity_analysis(best, tuning_context)
+
+    # Write CI gate metric files (metrics.txt, bias_metrics.txt).
+    best_candidate = next((c for c in candidates if best and c["name"] == best["name"]), None)
+    write_ci_metrics_files(final_metrics, best_candidate)
 
     # 6. Save best model and label encoder locally under artifacts and preprocessing.
     save_best_model_local(best, data["label_encoder"])

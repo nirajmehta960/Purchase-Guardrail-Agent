@@ -72,23 +72,18 @@ def merge_csv(
     temp_out = existing_path + ".duckdb.tmp"
 
     # Set DuckDB configuration
-    # Memory limit - Increase when docker has access to more memory 
+    # Memory limit - must stay well below the worker container's mem_limit (currently 5G in docker-compose.yaml).
+    #   The preprocessing stage runs 3 DuckDB tasks in parallel, so: 3 × memory_limit must be < 5G.
+    #   1500MB × 3 = 4.5GB — safe headroom. DuckDB spills the rest to temp_directory.
+    #   If you increase the container's mem_limit, scale this proportionally (new_limit / 3 - 200MB buffer).
     # Threads - Increase when docker has access to more CPU
     # preserve_insertion_order=false - order of records is not preserved - needs less memory
-    # temp_directory='/tmp' - duckdb instead of using memory, saves partial work to /tmp and reads back from /tmp
+    # temp_directory='/tmp' - duckdb spills working data to /tmp when memory_limit is reached
     with duckdb.connect() as con:
         con.execute("PRAGMA temp_directory='/tmp';")
-        con.execute("PRAGMA memory_limit='2GB';")
+        con.execute("PRAGMA memory_limit='1500MB';")
         con.execute("PRAGMA preserve_insertion_order=false;")
-        con.execute("PRAGMA threads=2;")
-
-        new_count_res = con.execute(f"SELECT COUNT(*) FROM read_csv_auto('{new_path}')").fetchone()
-        new_count = new_count_res[0] if new_count_res else 0
-        
-        existing_count_res = con.execute(f"SELECT COUNT(*) FROM read_csv_auto('{existing_path}')").fetchone()
-        existing_count = existing_count_res[0] if existing_count_res else 0
-        
-        logger.info("New CSV records: %d | Existing CSV records: %d", new_count, existing_count)
+        con.execute("PRAGMA threads=4;")
 
         query = f"""
         COPY (
@@ -119,14 +114,7 @@ def merge_csv(
         total_count_res = con.execute(f"SELECT COUNT(*) FROM read_csv_auto('{temp_out}')").fetchone()
         total_count = total_count_res[0] if total_count_res else 0
 
-    appended = total_count - existing_count
-    updated = new_count - appended
-    unchanged = existing_count - updated
-
     stats = {
-        "updated": updated,
-        "appended": appended,
-        "unchanged": unchanged,
         "total": total_count,
     }
 
@@ -166,17 +154,9 @@ def merge_jsonl(
 
     with duckdb.connect() as con:
         con.execute("PRAGMA temp_directory='/tmp';")
-        con.execute("PRAGMA memory_limit='2GB';")
+        con.execute("PRAGMA memory_limit='1500MB';")
         con.execute("PRAGMA preserve_insertion_order=false;")
-        con.execute("PRAGMA threads=2;")
-
-        new_count_res = con.execute(f"SELECT COUNT(*) FROM read_json_auto('{new_path}')").fetchone()
-        new_count = new_count_res[0] if new_count_res else 0
-        
-        existing_count_res = con.execute(f"SELECT COUNT(*) FROM read_json_auto('{existing_path}')").fetchone()
-        existing_count = existing_count_res[0] if existing_count_res else 0
-        
-        logger.info("New JSONL records: %d | Existing JSONL records: %d", new_count, existing_count)
+        con.execute("PRAGMA threads=4;")
 
         query = f"""
         COPY (
@@ -207,14 +187,7 @@ def merge_jsonl(
         total_count_res = con.execute(f"SELECT COUNT(*) FROM read_json_auto('{temp_out}')").fetchone()
         total_count = total_count_res[0] if total_count_res else 0
 
-    appended = total_count - existing_count
-    updated = new_count - appended
-    unchanged = existing_count - updated
-
     stats = {
-        "updated": updated,
-        "appended": appended,
-        "unchanged": unchanged,
         "total": total_count,
     }
 

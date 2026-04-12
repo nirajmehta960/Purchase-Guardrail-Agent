@@ -51,9 +51,9 @@ REVIEW_BLOB = os.getenv("REVIEW_BLOB", "raw/review_data.jsonl")
 # ============================================================================
 
 
-# Define Project Root (data_pipeline directory)
-# config.py is in data_pipeline/ingestion-scripts/
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Define Project Root (dags/ directory — shared volume mount accessible to all workers)
+# config.py is in dags/src/ingestion/config.py → .parent.parent.parent = dags/
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 REPO_ROOT = PROJECT_ROOT.parent
 
 # Base directory for data storage

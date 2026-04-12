@@ -129,48 +129,37 @@ def _upsert_df(
     """
     Upsert a DataFrame into a PostgreSQL table.
 
-    Uses INSERT ... ON CONFLICT (conflict_cols) DO UPDATE SET ...
-    to insert new rows and update existing ones. No data is deleted.
-
-    Args:
-        engine:        SQLAlchemy engine.
-        df:            DataFrame to upsert.
-        table_name:    Target table name.
-        conflict_cols: Column(s) forming the unique constraint.
-        update_cols:   Column(s) to update on conflict.
-        chunksize:     Number of rows per batch.
-
-    Returns:
-        Number of rows processed.
+    Uses psycopg2 execute_values for true bulk upsert — sends all rows in a
+    single SQL statement per chunk, orders of magnitude faster than executemany.
     """
+    from psycopg2.extras import execute_values
+
     if df.empty:
         logger.info("Empty DataFrame — nothing to upsert into %s", table_name)
         return 0
 
-    # Build the column lists for the INSERT.
     all_cols = list(df.columns)
     col_list = ", ".join(all_cols)
-    val_placeholders = ", ".join(f":{c}" for c in all_cols)
     conflict_list = ", ".join(conflict_cols)
-    update_set = ", ".join(
-        f"{c} = EXCLUDED.{c}" for c in update_cols
-    )
-    # Also update the updated_at timestamp on conflict.
+    update_set = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
     update_set += ", updated_at = CURRENT_TIMESTAMP"
 
-    sql = text(
-        f"INSERT INTO {table_name} ({col_list}) "
-        f"VALUES ({val_placeholders}) "
+    sql = (
+        f"INSERT INTO {table_name} ({col_list}) VALUES %s "
         f"ON CONFLICT ({conflict_list}) DO UPDATE SET {update_set}"
     )
 
     rows_processed = 0
     with engine.begin() as conn:
+        raw = conn.connection  # unwrap to raw psycopg2 connection
+        cursor = raw.cursor()
         for start in range(0, len(df), chunksize):
             chunk = df.iloc[start : start + chunksize]
-            records = chunk.to_dict(orient="records")
-            conn.execute(sql, records)
-            rows_processed += len(records)
+            # Convert to list of tuples preserving column order
+            tuples = [tuple(row) for row in chunk.itertuples(index=False, name=None)]
+            execute_values(cursor, sql, tuples, page_size=chunksize)
+            rows_processed += len(tuples)
+            logger.info("Upserted %d/%d rows into %s", rows_processed, len(df), table_name)
 
     logger.info("Upserted %d rows into %s", rows_processed, table_name)
     return rows_processed

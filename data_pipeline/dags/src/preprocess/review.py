@@ -142,17 +142,13 @@ def _process_batch(
     df["helpful_vote"] = pd.to_numeric(df["helpful_vote"], errors="coerce").fillna(0).astype(int)
     df["verified_purchase"] = df["verified_purchase"].apply(_to_bool).astype(bool)
 
-    # Global duplicate key: (asin + user_id)
-    keys = list(zip(df["asin"], df["user_id"]))
-    keep_mask = []
-    for key in keys:
-        if key in seen_review_keys:
-            keep_mask.append(False)
-        else:
-            seen_review_keys.add(key)
-            keep_mask.append(True)
+    # Global duplicate key: (asin + user_id) — vectorised path
+    key_series = df["asin"] + "\x00" + df["user_id"]
+    new_keys = set(key_series.tolist()) - seen_review_keys
+    keep_mask = key_series.isin(new_keys)
+    seen_review_keys.update(new_keys)
 
-    duplicate_count = len(keep_mask) - int(sum(keep_mask))
+    duplicate_count = int((~keep_mask).sum())
     if duplicate_count:
         stats.duplicates_removed += duplicate_count
         df = df.loc[keep_mask].copy()

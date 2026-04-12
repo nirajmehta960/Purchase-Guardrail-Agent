@@ -19,9 +19,8 @@ from dotenv import load_dotenv
 import pandas as pd
 import requests
 import yaml
-from evidently.report import Report
-from evidently.metric_preset import DataDriftPreset
-from evidently.metrics import DatasetDriftMetric
+from evidently import Report
+from evidently.presets import DataDriftPreset
 
 # Attach a NullHandler so this module is silent when imported without
 # a logging config in place (the caller decides where logs go).
@@ -120,23 +119,23 @@ def send_slack_alert(summary: Dict) -> None:
 
 def run_drift_detection(
     baseline_path: str,
-    current_data_path: str,
+    current_data,
     output_dir: str = str(Path(__file__).parent.parent / "reports"),
 ) -> Dict:
     """
     Compare current production data against training baseline.
 
     Args:
-        baseline_path:     Path to baseline_data.csv (training distribution).
-        current_data_path: Path to current production data CSV.
-        output_dir:        Where to save the drift report HTML and JSON.
+        baseline_path: Path to baseline_data.csv (training distribution).
+        current_data:  DataFrame of current production data, or path to a CSV.
+        output_dir:    Where to save the drift report HTML and JSON.
 
     Returns:
         Dict with drift status, severity, and per-column summary.
     """
     logger.info("Loading baseline and current data...")
     baseline = pd.read_csv(baseline_path)
-    current  = pd.read_csv(current_data_path)
+    current  = current_data if isinstance(current_data, pd.DataFrame) else pd.read_csv(current_data)
 
     # Only monitor columns present in both datasets; warn about any missing ones.
     cols = [c for c in MONITOR_COLS if c in baseline.columns and c in current.columns]
@@ -153,29 +152,36 @@ def run_drift_detection(
 
     logger.info("Running Evidently drift report on %d columns...", len(cols))
 
-    # In Evidently 0.4.x, per_column_stattest takes {col: "stattest_name"}
-    # and per_column_stattest_threshold takes {col: float} — separate dicts.
-    per_column_stattest = {col: "wasserstein" for col in cols}
     per_column_threshold = {
         col: COLUMN_THRESHOLDS.get(col, DEFAULT_STATTEST_THRESHOLD)
         for col in cols
     }
 
-    report = Report(metrics=[
-        DataDriftPreset(
-            per_column_stattest=per_column_stattest,
-            per_column_stattest_threshold=per_column_threshold,
-        ),
-        DatasetDriftMetric(),
-    ])
-    report.run(reference_data=baseline, current_data=current)
+    report   = Report(metrics=[DataDriftPreset(
+        num_method="wasserstein",
+        per_column_threshold=per_column_threshold,
+    )])
+    snapshot = report.run(reference_data=baseline, current_data=current)
 
-    result        = report.as_dict()
-    dataset_drift = result["metrics"][1]["result"]
+    # Extract summary counts from metric_results (Evidently 0.7.x API).
+    share_drifted = 0.0
+    n_drifted     = 0
+    drifted_cols  = {}
+    for val in snapshot.metric_results.values():
+        vtype = type(val).__name__
+        if vtype == "CountValue":                   # DriftedColumnsCount
+            n_drifted     = int(val.count.value)
+            share_drifted = float(val.share.value)
+        elif vtype == "SingleValue" and "Value drift for" in val.display_name:
+            col_name = val.display_name.replace("Value drift for ", "")
+            params   = val.metric_value_location.metric.params
+            drifted_cols[col_name] = {
+                "drift_score":    round(float(val.value), 4),
+                "drift_detected": float(val.value) >= params.get("threshold", DEFAULT_STATTEST_THRESHOLD),
+                "method":         params.get("method", "wasserstein"),
+            }
 
-    share_drifted = dataset_drift.get("share_of_drifted_columns", 0.0)
-    n_drifted     = dataset_drift.get("number_of_drifted_columns", 0)
-    n_total       = dataset_drift.get("number_of_columns", len(cols))
+    n_total = len(cols)
 
     # Determine severity.
     if share_drifted < DRIFT_THRESHOLDS["green"]:
@@ -195,7 +201,7 @@ def run_drift_detection(
         "share_drifted":   round(share_drifted, 4),
         "n_drifted_cols":  n_drifted,
         "n_total_cols":    n_total,
-        "drifted_columns": dataset_drift.get("drift_by_columns", {}),
+        "drifted_columns": drifted_cols,
     }
 
     # Persist outputs.
@@ -204,7 +210,7 @@ def run_drift_detection(
     report_path  = os.path.join(output_dir, f"drift_report_{timestamp}.html")
     summary_path = os.path.join(output_dir, f"drift_summary_{timestamp}.json")
 
-    report.save_html(report_path)
+    snapshot.save_html(report_path)
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
 
@@ -273,16 +279,48 @@ def check_output_drift(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import subprocess as _sp
+    import sys as _sys
+    import tempfile as _tempfile
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    _monitoring_dir = Path(__file__).parent.parent
-    summary = run_drift_detection(
-        baseline_path=str(_monitoring_dir / "data" / "baseline_data.csv"),
-        current_data_path=str(_monitoring_dir / "data" / "current_production_data.csv"),
+    _sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "savviocore" / "src"))
+
+    _GCS_BASELINE = "gs://savvio-dev-mlflow-artifacts/monitoring/baseline_data.csv"
+
+    # Download baseline from GCS into a temp file.
+    logger.info("Downloading baseline from GCS: %s", _GCS_BASELINE)
+    _tmp_baseline = _tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+    _tmp_baseline.close()
+    _dl = _sp.run(
+        ["gcloud", "storage", "cp", _GCS_BASELINE, _tmp_baseline.name],
+        capture_output=True, text=True,
     )
+    if _dl.returncode != 0:
+        print(f"Baseline not found in GCS — skipping drift detection.")
+        print(f"(Run generate_baseline.py after model training to upload the baseline.)")
+        print(f"Details: {_dl.stderr.strip()}")
+        raise SystemExit(0)
+
+    # Always pull current data live from the DB.
+    logger.info("Collecting current production data from DB...")
+    try:
+        from collect_production_data import collect_df
+        current_df = collect_df()
+    except Exception as _e:
+        print(f"Could not collect production data from DB: {_e}")
+        print("Skipping drift detection — DB unavailable or no data yet.")
+        raise SystemExit(0)
+
+    summary = run_drift_detection(
+        baseline_path=_tmp_baseline.name,
+        current_data=current_df,
+    )
+    Path(_tmp_baseline.name).unlink(missing_ok=True)
 
     print(f"\nDrift Detection Complete")
     print(f"Severity:        {summary['severity']}")

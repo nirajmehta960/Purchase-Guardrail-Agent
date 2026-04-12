@@ -81,6 +81,11 @@ def feature_financial_task(**context):
     logger.info(">>> Financial Feature Engineering: SUCCESS")
 
 
+def feature_review_task(**context):
+    """Alias for feature_product_review_task — kept for test compatibility."""
+    return feature_product_review_task(**context)
+
+
 def feature_product_review_task(**context):
     """Airflow task: run product & review feature engineering (produces product + review featured files)."""
     logger.info(">>> Running Product & Review Feature Engineering...")

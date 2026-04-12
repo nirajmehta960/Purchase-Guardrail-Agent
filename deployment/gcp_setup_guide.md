@@ -705,6 +705,42 @@ gcloud compute ssh savvio-dev-pipeline-vm --zone=us-east1-b --project=savvio-pur
 
 ---
 
+### Deploy a local code fix to the VM (without pushing to Git)
+
+Use this when you've fixed a DAG source file locally and need it live immediately, without waiting for a Git push + CI/CD cycle.
+
+```bash
+# Replace <local_file> with the path from repo root (e.g. data_pipeline/dags/src/database/upload_to_db.py)
+# Replace <remote_file> with the same path under /opt/savvio/ on the VM
+
+LOCAL_FILE="data_pipeline/dags/src/database/upload_to_db.py"
+REMOTE_FILE="/opt/savvio/data_pipeline/dags/src/database/upload_to_db.py"
+
+# Step 1 — copy to /tmp (no sudo needed for scp)
+gcloud compute scp /Users/nirajmehta/Documents/SavVio/$LOCAL_FILE \
+  savvio-dev-pipeline-vm:/tmp/$(basename $LOCAL_FILE) \
+  --zone=us-east1-b --project=savvio-purchase-guardrail
+
+# Step 2 — move into place with sudo
+gcloud compute ssh savvio-dev-pipeline-vm --zone=us-east1-b --project=savvio-purchase-guardrail \
+  --command="sudo cp /tmp/$(basename $LOCAL_FILE) $REMOTE_FILE && echo 'deployed'"
+```
+
+> [!NOTE]
+> DAG files under `dags/` are volume-mounted — changes take effect on the next task execution with no restart needed.
+> Changes to non-DAG files (e.g. `savviocore/`) require a container restart: `sudo docker-compose restart airflow-worker`.
+
+**Then trigger a new run:**
+```bash
+gcloud compute ssh savvio-dev-pipeline-vm --zone=us-east1-b --project=savvio-purchase-guardrail \
+  --command="cd /opt/savvio/data_pipeline && sudo docker-compose exec -T airflow-apiserver airflow dags trigger Data_pipeline_airflow"
+```
+
+> [!IMPORTANT]
+> Remember to also commit and push the fix to Git so the VM stays in sync with the repo. Next `git pull` or CI/CD run will overwrite anything deployed this way.
+
+---
+
 ### Clear a stuck / queued DAG run
 
 If tasks are stuck in `queued` state (e.g. after a worker crash):

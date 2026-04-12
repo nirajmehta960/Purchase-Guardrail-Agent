@@ -551,9 +551,9 @@ def _print_disparity_table(slice_df: pd.DataFrame) -> None:
     for _, row in slice_df[slice_df["slice"] != "AGGREGATE"].iterrows():
         flag = ""
         if abs(row["f1_disparity"]) > F1_DISPARITY_THRESHOLD:
-            flag += " ⚠ DISPARITY"
+            flag += " [!] DISPARITY"
         if row["f1"] < MIN_GROUP_F1:
-            flag += " ⚠ LOW F1"
+            flag += " [!] LOW F1"
         logger.info("%-28s %-22s %6d %6.3f %6.3f %8.4f%s",
                     row["slice"], row["group"], row["n"],
                     row["accuracy"], row["f1"], row["f1_disparity"], flag)

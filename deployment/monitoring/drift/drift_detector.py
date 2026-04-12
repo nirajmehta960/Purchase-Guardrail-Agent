@@ -74,8 +74,8 @@ def send_slack_alert(summary: Dict) -> None:
         logger.warning("Slack webhook URL not set — skipping Slack alert.")
         return
 
-    # Build emoji and color based on severity
-    emoji = {"GREEN": "✅", "YELLOW": "⚠️", "RED": "🚨"}.get(severity, "ℹ️")
+    # Build severity indicator and color based on severity
+    emoji = {"GREEN": "[OK]", "YELLOW": "[WARNING]", "RED": "[CRITICAL]"}.get(severity, "[INFO]")
 
     drifted = summary.get("drifted_columns", {})
     drifted_list = (
@@ -312,10 +312,5 @@ if __name__ == "__main__":
     print(f"Action:          {summary['action']}")
     print(f"Columns drifted: {summary['n_drifted_cols']}/{summary['n_total_cols']}")
 
-    # Example: wire in output drift once production labels are available.
-    # baseline_dist = {"GREEN": 0.55, "YELLOW": 0.25, "RED": 0.20}
-    # current_dist  = {"GREEN": 0.70, "YELLOW": 0.15, "RED": 0.15}
-    # output_results = check_output_drift(baseline_dist, current_dist)
-    # print("\nOutput Distribution Drift:")
     # for label, info in output_results.items():
     #     print(f"  {label}: shift={info['shift']:.3f}, drifted={info['drifted']}")

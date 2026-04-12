@@ -90,7 +90,7 @@ def _slice_category(slice_name: str) -> str:
 
 
 def _flag_emoji(passed: bool) -> str:
-    return "✅ PASSED" if passed else "❌ FAILED"
+    return "[PASSED]" if passed else "[FAILED]"
 
 
 def _parse_group_metrics(
@@ -149,8 +149,8 @@ def _summary_section(
 ) -> str:
     flags_str = "\n".join(f"  - `{f}`" for f in all_flags) if all_flags else "  - None"
     mit_str = (
-        f"Applied — {'Successful ✅' if mitigation_successful else 'Unsuccessful ❌'}"
-        if mitigation_applied else "Not needed — model passed gate on first check ✅"
+        f"Applied — {'Successful [PASSED]' if mitigation_successful else 'Unsuccessful [FAILED]'}"
+        if mitigation_applied else "Not needed — model passed gate on first check [PASSED]"
     )
 
     return f"""## Summary
@@ -247,7 +247,7 @@ def _posttraining_section(
             val = fairness_metrics[key]
             monitor = slice_name in MONITOR_ONLY_SLICES and metric_type == "EOD"
             flagged = any(slice_name in f for f in all_flags)
-            status = "⚠ FLAGGED" if flagged else ("👁 MONITOR" if monitor else "✅ OK")
+            status = "[FLAGGED]" if flagged else ("[MONITOR]" if monitor else "[OK]")
             dpd_eod_rows.append(
                 f"| {slice_name} | {cat} | {metric_type} | {val:.4f} | {status} |"
             )
@@ -264,9 +264,9 @@ def _posttraining_section(
             disp = metrics.get("f1_disparity", "N/A")
             flag = ""
             if isinstance(disp, float) and abs(disp) > 0.10:
-                flag = "⚠ DISPARITY"
+                flag = "[DISPARITY]"
             if isinstance(f1, float) and f1 < 0.50:
-                flag = "⚠ LOW F1"
+                flag = "[LOW F1]"
             group_rows.append(
                 f"| {slice_name} | {cat} | {group_name} | {f1} | {acc} | {disp} | {flag} |"
             )
@@ -330,8 +330,8 @@ ThresholdOptimizer was not needed — the champion model passed the bias gate on
 
 ---
 """
-    status = "Successful — bias gate passed after mitigation ✅" if mitigation_successful \
-        else "Unsuccessful — bias still present after mitigation, flagged for human review ❌"
+    status = "Successful — bias gate passed after mitigation [PASSED]" if mitigation_successful \
+        else "Unsuccessful — bias still present after mitigation, flagged for human review [FAILED]"
 
     return f"""## Part 3 — Post-Training Mitigation
 
@@ -364,12 +364,12 @@ def _deployment_section(
     agg_f1 = fairness_metrics.get("aggregate_f1", "N/A")
 
     if bias_passed:
-        readiness = "✅ READY — bias gate passed with zero gate-blocking flags."
+        readiness = "[READY] READY — bias gate passed with zero gate-blocking flags."
     else:
-        readiness = "❌ NOT READY — bias gate failed. Review flags before deploying."
+        readiness = "[NOT READY] NOT READY — bias gate failed. Review flags before deploying."
 
-    nzs_status = "✅" if isinstance(nzs_f1, float) and nzs_f1 > 0.95 else "⚠ Check"
-    agg_status = "✅" if isinstance(agg_f1, float) and agg_f1 > 0.95 else "⚠ Check"
+    nzs_status = "[PASSED]" if isinstance(nzs_f1, float) and nzs_f1 > 0.95 else "[CHECK]"
+    agg_status = "[PASSED]" if isinstance(agg_f1, float) and agg_f1 > 0.95 else "[CHECK]"
 
     return f"""## Deployment Readiness
 
@@ -379,9 +379,9 @@ def _deployment_section(
 
 | Check | Value | Status |
 |---|---|---|
-| Bias gate passed | {bias_passed} | {'✅' if bias_passed else '❌'} |
-| Gate-blocking flags | {len(all_flags)} | {'✅' if len(all_flags) == 0 else '❌'} |
-| EOD_savings_band (monitor) | {savings_eod} | 👁 Monitor — by design, not bias |
+| Bias gate passed | {bias_passed} | {'[PASSED]' if bias_passed else '[FAILED]'} |
+| Gate-blocking flags | {len(all_flags)} | {'[PASSED]' if len(all_flags) == 0 else '[FAILED]'} |
+| EOD_savings_band (monitor) | {savings_eod} | [MONITOR] Monitor — by design, not bias |
 | near_zero_savings F1 | {nzs_f1} | {nzs_status} |
 | Aggregate F1 | {agg_f1} | {agg_status} |
 

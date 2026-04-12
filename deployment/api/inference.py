@@ -326,7 +326,7 @@ def _apply_layer2_downgrade(ml_label: str, product_data: dict):
 
 def _generate_explanation(product: ProductResolution, ml: MLScore, user_profile: dict, manager, downgrade_result=None, review_snippets: list = None) -> str:
     """Invokes LLM for natural language reasoning and validates output against decision color."""
-    final_color =(downgrade_result.final_label if downgrade_result else None) or ml.predicted_label or "YELLOW"
+    final_color = (downgrade_result.final_label if downgrade_result else None) or ml.predicted_label or "YELLOW"
     original_color = (downgrade_result.original_label if downgrade_result else None) or final_color
     was_downgraded = downgrade_result.was_downgraded if downgrade_result else False
     triggered_rules = (

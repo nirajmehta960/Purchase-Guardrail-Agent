@@ -4,274 +4,104 @@ An AI-driven financial advocacy tool designed to bridge the gap between e-commer
 
 ## Project Overview
 
-The SavVio is an MLOps project that will integrate real-time product data with sensitive financial streams to provide responsible, conversational shopping guidance. Unlike traditional shopping assistants that focus on maximizing conversion, SavVio will evaluate purchases based on:
+SavVio is a comprehensive MLOps project that integrates real-time product data with sensitive financial streams to provide responsible, conversational shopping guidance. Unlike traditional shopping assistants that focus on maximizing conversion, SavVio evaluates purchases based on:
 
-- **Financial Health**: User's income, expenses, savings, and debt obligations
-- **Product Utility**: Analysis of product specifications and real-world usefulness
-- **Affordability Metrics**: Calculated discretionary budget and residual utility
+- **Financial Health**: User's income, expenses, savings, and debt obligations.
+- **Product Utility**: Analysis of product specifications and real-world usefulness.
+- **Affordability Metrics**: Calculated discretionary budget and residual utility scores.
 
-The system will provide **Green/Yellow/Red** light recommendations before users complete their purchase.
+The system provides Green/Yellow/Red light recommendations before users complete their purchase.
 
 ## Live Deployment (Production)
 
-| Component | Service | URL |
-|-----------|---------|-----|
-| **Frontend** | React / Vite Web App | [https://savvio-ai-ebw2ryzjkq-ue.a.run.app](https://savvio-ai-ebw2ryzjkq-ue.a.run.app) |
-| **Backend API** | FastAPI Inference API | [https://savvio-backend-api-ebw2ryzjkq-ue.a.run.app](https://savvio-backend-api-ebw2ryzjkq-ue.a.run.app) |
-| **MLflow** | Experiment Tracking | [https://savvio-ai-mlflow-ebw2ryzjkq-ue.a.run.app](https://savvio-ai-mlflow-ebw2ryzjkq-ue.a.run.app) |
-| **Airflow** | Data Pipeline Orchestration | http://35.237.143.189:8080 (login: airflow / airflow) |
-| **Monitoring** | Grafana Cloud Dashboard | [https://nirajmehta2410.grafana.net/d/savvio-monitoring-v1/savvio-e28094-api-and-inference-monitoring](https://nirajmehta2410.grafana.net/d/savvio-monitoring-v1/savvio-e28094-api-and-inference-monitoring) |
-
-> [!NOTE]
-> Cloud Run services (Frontend, Backend API, MLflow) are deployed on **Google Cloud Run** and managed via **Terraform**. Airflow runs on a **GCE VM** (`savvio-dev-pipeline-vm`, `us-east1-b`) — the IP is ephemeral and may change if the VM restarts. The Grafana dashboard requires a Grafana Cloud account with access to the `nirajmehta2410` organization.
+| Component | Status | Service | URL |
+|-----------|--------|---------|-----|
+| Frontend UI | Live | React / Vite / Tailwind | [https://savvio-ai-ebw2ryzjkq-ue.a.run.app](https://savvio-ai-ebw2ryzjkq-ue.a.run.app) |
+| Inference API | Live | FastAPI / uvicorn | [https://savvio-backend-api-ebw2ryzjkq-ue.a.run.app](https://savvio-backend-api-ebw2ryzjkq-ue.a.run.app) |
+| Model Registry | Live | MLflow / GCS | [https://savvio-ai-mlflow-ebw2ryzjkq-ue.a.run.app](https://savvio-ai-mlflow-ebw2ryzjkq-ue.a.run.app) |
+| Data Pipelines | Active | Airflow / Postgres | [http://35.237.143.189:8080](http://35.237.143.189:8080) |
+| Observability | Healthy | Grafana Cloud | [SavVio Monitoring Dashboard](https://nirajmehta2410.grafana.net/d/savvio-monitoring-v1/savvio-e28094-api-and-inference-monitoring) |
 
 ---
 
-## Team Members
+## Technical Implementation
 
-- Murtaza Nipplewala
-- Niraj Mehta
-- Pranathi Bombay
-- Rishabh Joshi
-- Sanjana Patnam
-- Wen-Hsin Su
+### 1. Data Pipeline Orchestration
+The data pipeline is managed by Apache Airflow running on GCE. It handles:
+- Automated ingestion of financial and product datasets.
+- Data cleaning and normalization using Spark and Pandas.
+- Feature engineering for financial ratios and sentiment analysis of reviews.
+- Data versioning with DVC and storage in Google Cloud SQL and GCS.
+
+### 2. Model Development & Training
+The platform uses a sophisticated ML pipeline:
+- **XGBoost Classifier**: Trained on historic financial outcomes to predict purchase viability.
+- **Optuna Optimization**: Automated hyperparameter tuning to ensure peak model performance.
+- **Bias Detection**: Integrated metrics to detect and mitigate bias across demographic slices.
+- **Experiment Tracking**: Full lineage and performance logging via MLflow.
+
+### 3. Inference & Decision Logic
+The system employs a three-layer decision engine to ensure fiduciary responsibility:
+- **Deterministic Layer**: Authoritative financial rules that enforce strict budget and emergency fund guardrails.
+- **ML Layer**: Probabilistic scoring that identifies risk patterns in consumer behavior.
+- **Generative Layer**: Google Gemini-powered conversational explanations, validated by NVIDIA NeMo Guardrails.
+
+### 4. Monitoring & Observability
+Continuous monitoring ensures the system remains reliable and accurate:
+- **System Metrics**: Real-time tracking of API latency and throughput via Prometheus and Grafana.
+- **Model Drift**: Drift detection using Evidently AI to identify performance decay.
+- **Data Quality**: Schema and anomaly monitoring via Great Expectations.
 
 ## Project Structure
 
 ```
 SavVio/
-│
-├── data_pipeline/              # Data ingestion and preprocessing pipeline
-│   ├── dags/                   # Airflow DAG definitions
-│   ├── data/                   # Data storage (versioned with DVC)
-│   │   ├── raw/                # Raw data from sources
-│   │   ├── processed/          # Processed/cleaned data
-│   │   └── validated/          # Validated data ready for model training
-│   ├── scripts/                # Data processing scripts
-│   ├── tests/                  # Unit tests for data pipeline
-│   ├── logs/                   # Pipeline execution logs
-│   └── config/                 # Pipeline configuration files
-│
-├── model_pipeline/          # ML model development and training
-│   ├── src/                    # Source code for model training
-│   ├── notebooks/              # Jupyter notebooks for experimentation
-│   ├── models/                 # Trained model artifacts
-│   ├── experiments/            # Experiment tracking outputs (MLflow)
-│   ├── config/                 # Model configuration files
-│   └── tests/                  # Model testing scripts
-│
-├── deployment/                 # Model deployment, API, and web UI
-│   ├── api/                    # FastAPI inference service
-│   ├── frontend/               # Vite + React web app
-│   ├── scripts/                # Deployment automation scripts
-│   ├── config/                 # Deployment configuration
-│   ├── monitoring/             # Monitoring and alerting scripts
-│   └── docker/                 # Dockerfiles for containerization
-│
-├── infrastructure/             # Infrastructure as Code
-│   ├── terraform/              # Terraform configurations
-│   ├── kubernetes/             # Kubernetes manifests
-│   └── cloud-build/            # Cloud Build configurations
-│
-├── docs/                       # Documentation
-│   ├── api/                    # API documentation
-│   ├── architecture/           # System architecture diagrams
-│   └── user-guide/             # User guides
-│
-├── .github/                    # GitHub configurations
-│   └── workflows/              # CI/CD pipeline definitions
-│
-├── .gitignore                  # Git ignore rules
-└── README.md                   # This file
+├── data_pipeline/              # Data ingestion and preprocessing
+├── model_pipeline/             # ML model training and evaluation
+├── deployment/                 # Inference API, Frontend, and Monitoring
+│   ├── api/                    # FastAPI service
+│   ├── frontend/               # React web application
+│   ├── monitoring/             # Prometheus and Grafana configuration
+├── infrastructure/             # Terraform and GCP configuration
+└── .github/workflows/          # CI/CD pipeline definitions
 ```
-
-## Getting Started
-
-### Tools and Services
-
-- Python 3.12+
-- GitHub Actions
-- Docker
-- Apache Airflow (for data pipeline orchestration)
-- MLflow
-- LLM Models - GPT 4.1, Claude 4.5, Gemini 3
-- DVC (Data Version Control) for data versioning
-- PostgreSQL with pgvector extension or Vertex AI Vector Search
-- Google Cloud Platform (GCP):
-      Cloud Run, Cloud Storage, BigQuery, Vertex AI, Cloud Build, Cloud Monitoring, Cloud Logging, GCP Billing & Quotas
-- Great Expectations for Data Quality Monitoring
-- Evidently AI for Model Drift Monitoring
-- Prometheus/Grafana for Latency & Throughput Monitoring
-
-### Installation Instructions
-
-Installation instructions and setup guides will be added as the project development progresses. The project will include:
-
-- Python dependencies (requirements.txt)
-- Environment configuration files
-- Docker Image and compose files
-- GCP deployment configurations
-- Data pipeline setup with Airflow
-- Model development environment setup
-
-## Dataset Information
-
-### Dataset Overview
-
-SavVio relies on two primary categories of data:
-
-   1. For the scope of this project, data will be sourced as follows: 
-Financial Data: User financial data is sourced from the Personal Finance ML Dataset (Kaggle), which contains synthetic records of income, expenses, savings, and financial behavior. This dataset is used to simulate different financial situations and affordability scenarios.
-
-   2. Product Data: Product data is sourced from the Amazon Products Dataset (Kaggle), which includes product names, categories, prices, and basic descriptions. This dataset is used to represent realistic product choices during purchase evaluation.
-
-
-### Data Sources
-
-- **Financial Data**: https://www.kaggle.com/datasets/miadul/personal-finance-ml-dataset
-- **Product Data**: https://www.kaggle.com/datasets/lokeshparab/amazon-products-dataset
-
-**Note**: All datasets are publicly available, read-only, and used strictly for academic experimentation and evaluation
-
-
-### Data Privacy
-
-- No real personally identifiable information (PII) is used
-- All financial data is synthetic or anonymized
-- User identifiers are masked or hashed before storage
-- Financial snapshots are encrypted
-- System operates in read-only mode
-
-## Planned Usage
-
-### Data Pipeline
-
-The data pipeline will be orchestrated using Apache Airflow:
-- Airflow webserver will run on port 8080
-- DAGs will handle data ingestion, preprocessing, validation, and versioning
-- Data will be versioned using DVC with GCP Cloud Storage backend
-
-### Model Development
-
-Model training and development will include:
-- Loading versioned data from the data pipeline
-- Training baseline models (Logistic Regression, XGBoost)
-- Experiment tracking with MLflow
-- Bias detection and mitigation
-- Model validation and selection
-
-### Running the Application
-
-Once implemented:
-- **Backend API**: Will run on port 3500 (FastAPI)
-- **Frontend**: Will run on port 3000 (Streamlit)
-
-### Deployment
-
-The SavVio platform is fully deployed on **Google Cloud Platform (GCP)** using a hybrid serverless/compute architecture:
-
-- **Cloud Run**: Hosts the stateless components (FastAPI Backend, React Frontend, MLflow UI) for high scalability and cost-efficiency.
-- **Compute Engine (GCE)**: Runs the Airflow data pipeline and on-demand model training tasks.
-- **Cloud SQL**: Managed PostgreSQL 15 database with `pgvector` for product embeddings.
-- **Terraform**: Entire infrastructure defined as code in `deployment/terraform/`.
-- **CI/CD**: Automated testing, building, and deployment via GitHub Actions (see `.github/workflows/`).
-
-For detailed technical setup and architecture diagrams, see [GCP Deployment Strategy](file:///Users/nirajmehta/Documents/SavVio/deployment/GCP_DEPLOYMENT.md).
-
-## Planned Testing
-
-Testing will be implemented for each component:
-- Unit tests for data pipeline components
-- Model development tests
-- Integration tests
-- End-to-end testing
-
-## Planned Monitoring
-
-The system will include monitoring for:
-
-- **Data Quality**: Schema validation, anomaly detection, data drift
-- **Model Performance**: Accuracy, precision, recall, F1-score
-- **Bias Detection**: Performance across different data slices
-- **System Health**: API latency, error rates, resource usage
-
-Monitoring will use:
-- MLflow for experiment tracking
-- GCP Cloud Monitoring for production monitoring
-- Prometheus/Grafana for latency and throughput monitoring
-
-## Configuration
-
-Configuration files will be added as the project develops:
-
-- `data_pipeline/config/pipeline_config.yaml` - Data pipeline settings (to be added)
-- `model_pipeline/config/training_config.yaml` - Model training parameters (to be added)
-- `deployment/config/deployment_config.yaml` - Deployment settings (to be added)
-- Environment variables and secrets management (to be added)
 
 ## Technology Stack
 
 | Category | Tools Used |
 |----------|-----------|
-| Cloud Platform | Google Cloud Platform (GCP) - Cloud Run, Cloud Storage, BigQuery, Vertex AI, Cloud Build, Cloud Monitoring, Cloud Logging, GCP Billing & Quotas |
-| Backend Framework | FastAPI (Python) |
-| Frontend Interface | Streamlit (Web Application) |
-| Data Orchestration | Apache Airflow |
-| Data Versioning | DVC (Data Version Control) with GCP Cloud Storage backend |
-| Decision Engine | Python (Deterministic rule-based financial logic) |
-| Machine Learning Models | Scikit-learn (Logistic Regression), XGBoost |
-| LLM Models | GPT 4.1, Claude 4.5, Gemini 3 |
-| Safety & Guardrails | Vertex AI Safety Filters, NVIDIA NeMo Guardrails |
-| Database (Relational) | PostgreSQL |
-| Database (Vector) | pgvector (extension for PostgreSQL) or Vertex AI Vector Search |
-| Model Tracking | MLflow |
-| Model Registry | GCP Artifact Registry, Vertex AI Model Registry |
-| Data Quality Monitoring | Great Expectations (triggered via Airflow) |
-| Model Drift Monitoring | Evidently AI (Open Source), Vertex AI Model Monitoring |
-| Latency & Throughput Monitoring | Prometheus, Grafana, GCP Cloud Monitoring |
-| Logging & Containerization | Cloud Logging, Docker |
-| CI/CD | GitHub Actions |
-| Deployment | Cloud Run (Serverless Containers) |
+| Cloud Platform | Google Cloud Platform (GCP) |
+| Infrastructure | Terraform, Docker |
+| Backend | FastAPI (Python) |
+| Frontend | React, Vite, Tailwind CSS |
+| Orchestration | Apache Airflow |
+| ML Frameworks | XGBoost, Scikit-learn, Optuna |
+| Observability | Prometheus, Grafana, Evidently AI |
+| Database | PostgreSQL (Cloud SQL) |
+| Versioning | Git, DVC |
 
-## Planned Features
+## Local Setup
 
-- **Data Pipeline**: Automated data ingestion, preprocessing, validation, and versioning using Airflow
-- **Bias Detection**: Data slicing and bias mitigation across demographic groups
-- **Model Registry**: Version-controlled model storage and management on GCP Artifact Registry/Vertex AI
-- **CI/CD Automation**: Automated training, validation, and deployment pipelines using GitHub Actions and GCP Cloud Build
-- **Monitoring & Alerts**: Real-time monitoring of model performance and data drift using GCP Cloud Monitoring
-- **Automated Retraining**: Trigger retraining when model decay or data drift is detected
+### 1. Clone the Repository
+```bash
+git clone https://github.com/nirajmehta960/SavVio.git
+cd SavVio
+```
 
-## Metrics and Objectives
+### 2. Run Backend API
+```bash
+cd deployment
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+./run.sh api
+```
 
-### Metrics
-
-- **Residual Utility Score (RUS)**: Impact of purchase on emergency fund/savings
-- **Friction Success Rate**: Percentage of "Red Light" recommendations that prevented impulse purchases
-- **Categorization Accuracy**: Ability to correctly identify recurring bills and essential spending
-
-### Objectives
-
-- Calculate "break-even point" for high-utility items
-- Promote long-term user financial health
-- Provide transparent, responsible purchase recommendations
-
-## Security & Privacy
-
-The following security measures are planned:
-- All financial data will be encrypted at rest
-- User identifiers will be masked/hashed
-- Read-only data access
-- No transactional capabilities
-- Compliance with data privacy principles
-
-## Documentation
-
-Documentation will be added as the project progresses:
-- API Documentation (to be added)
-- Architecture Diagrams (to be added)
-- User Guide (to be added)
+### 3. Run Frontend
+```bash
+cd deployment/frontend
+npm install
+npm run dev
+```
 
 ---
-
-**Note**: This is an academic project. All data is synthetic or publicly available. No real user financial information is processed. This README reflects the initial project setup and will be updated as development progresses.
+**Note**: This is an academic project. This README reflects the technical work completed and will be updated with architectural diagrams in the future.

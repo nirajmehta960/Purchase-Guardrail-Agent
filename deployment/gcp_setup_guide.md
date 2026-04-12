@@ -133,9 +133,9 @@ terraform plan \
 
 Review the plan carefully. Key things to confirm:
 - Cloud SQL instance: `savvio-dev-db-instance` (PostgreSQL 15, `db-f1-micro`)
-- GCE VM: `savvio-dev-pipeline-vm` (`e2-standard-2`, Debian 12)
+- GCE VM: `savvio-dev-pipeline-vm` (`e2-standard-4`, Debian 12)
 - GCS buckets: `savvio-dev-dvc-data`, `savvio-dev-mlflow-artifacts`
-- Cloud Run: `savvio-dev-api`, `savvio-dev-frontend`, `savvio-dev-mlflow` (placeholder images — will be replaced by CI/CD)
+- Cloud Run: `savvio-backend-api`, `savvio-ai`, `savvio-ai-mlflow` (placeholder images — will be replaced by CI/CD)
 
 ### Step 1.3 — Apply
 
@@ -201,7 +201,10 @@ Add each secret one by one:
 | 9 | `GCE_VM_IP` | *(from Step 1.4 — `pipeline_vm_ip`)* | Terraform output |
 | 10 | `GCE_SSH_PRIVATE_KEY` | *(generated in Phase 3, Step 3.1)* | **Come back to this after Phase 3** |
 | 11 | `API_URL_DEV` | *(from Step 1.4 — `api_url`)* | Terraform output |
-| 12 | `SLACK_WEBHOOK_URL` | *(optional)* | Slack incoming webhook URL |
+| 12 | `GRAFANA_REMOTE_WRITE_URL` | Grafana Cloud Prometheus remote-write URL | Grafana Cloud → Connections → Prometheus |
+| 13 | `GRAFANA_CLOUD_USERNAME` | Grafana Cloud instance numeric ID | Same page — "Username / Instance ID" |
+| 14 | `GRAFANA_CLOUD_API_KEY` | Grafana Cloud API key | Grafana Cloud → API Keys |
+| 15 | `SLACK_WEBHOOK_URL` | *(optional)* | Slack incoming webhook URL |
 
 > [!NOTE]
 > **`DB_HOST=127.0.0.1`** — This is correct. In CI, the Cloud SQL Auth Proxy runs as a background process and listens on `127.0.0.1:5432`. The workflows we've configured handle the proxy setup automatically.
@@ -211,7 +214,7 @@ Add each secret one by one:
 
 ### ✅ Phase 2 Checkpoint
 
-- [ ] All 11 secrets added (except `GCE_SSH_PRIVATE_KEY` — done after Phase 3)
+- [ ] All 14 secrets added (except `GCE_SSH_PRIVATE_KEY` — done after Phase 3)
 - [ ] `GCP_SA_KEY` contains the full JSON (not just the key ID)
 
 ---
@@ -261,7 +264,13 @@ sudo systemctl status docker
 # If not active: sudo systemctl start docker && sudo systemctl enable docker
 
 # If Docker isn't installed (rare — startup script may not have finished):
-sudo apt-get update && sudo apt-get install -y docker.io docker-compose-plugin git
+sudo apt-get update && sudo apt-get install -y ca-certificates curl gnupg git
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list
+sudo apt-get update && sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 sudo systemctl enable docker && sudo systemctl start docker
 
 # Create the github-actions user
@@ -303,11 +312,11 @@ EOF
 ### Step 3.6 — Start Airflow
 
 > [!NOTE]
-> The VM uses Docker Compose v1 (`docker-compose` with a hyphen), not v2 (`docker compose`). Always use the hyphen form on the VM.
+> The VM has Docker Compose v2 installed via `docker-compose-plugin` (the official Docker apt repo). Both `docker compose` (v2 subcommand) and `docker-compose` (compatibility wrapper) work. The CI/CD deploy jobs use `docker-compose` (hyphen form).
 
 ```bash
 cd /opt/savvio/data_pipeline
-sudo docker-compose up -d
+sudo AIRFLOW_UID=$(id -u) docker compose up --build -d
 ```
 
 Wait ~60 seconds for initialization, then verify:
@@ -505,7 +514,7 @@ drift-detection     → Runs Evidently AI drift report
 
 ```bash
 # Get the live API URL
-API_URL=$(gcloud run services describe savvio-dev-api \
+API_URL=$(gcloud run services describe savvio-backend-api \
   --region=us-east1 --format='value(status.url)')
 echo "API URL: $API_URL"
 
@@ -524,7 +533,7 @@ curl -s "$API_URL/health" | python3 -m json.tool
 
 ```bash
 # Get the frontend URL
-FRONTEND_URL=$(gcloud run services describe savvio-dev-frontend \
+FRONTEND_URL=$(gcloud run services describe savvio-ai \
   --region=us-east1 --format='value(status.url)')
 echo "Frontend URL: $FRONTEND_URL"
 
@@ -619,7 +628,7 @@ After a push to `data_pipeline/**` on `main`:
 Use these commands whenever you want to start, stop, or trigger the pipeline manually. All commands run from your **local machine** using `gcloud`.
 
 > [!NOTE]
-> The VM uses Docker Compose **v1** — always use `docker-compose` (with hyphen), not `docker compose`.
+> The VM has Docker Compose v2 (`docker-compose-plugin`). Both `docker compose` and `docker-compose` work — the CI/CD jobs use the hyphen form.
 
 ---
 
@@ -831,7 +840,10 @@ After starting, the containers do **not** auto-restart — run `docker-compose u
 | 9 | `GCE_VM_IP` | From `terraform output pipeline_vm_ip` | datapipeline |
 | 10 | `GCE_SSH_PRIVATE_KEY` | Contents of `savvio-vm-key` | datapipeline |
 | 11 | `API_URL_DEV` | From `terraform output api_url` | deployment |
-| 12 | `SLACK_WEBHOOK_URL` | *(optional)* Slack webhook | deployment |
+| 12 | `GRAFANA_REMOTE_WRITE_URL` | Grafana Cloud Prometheus remote-write URL | deployment |
+| 13 | `GRAFANA_CLOUD_USERNAME` | Grafana Cloud instance numeric ID | deployment |
+| 14 | `GRAFANA_CLOUD_API_KEY` | Grafana Cloud API key | deployment |
+| 15 | `SLACK_WEBHOOK_URL` | *(optional)* Slack webhook | deployment |
 
 ---
 

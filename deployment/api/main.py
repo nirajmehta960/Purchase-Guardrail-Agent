@@ -217,6 +217,7 @@ async def browse_products(
     )
 
 
+@app.get("/", response_model=HealthResponse, tags=["Health"])
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
 async def health_check(
     manager: ModelManager = Depends(get_model_manager),

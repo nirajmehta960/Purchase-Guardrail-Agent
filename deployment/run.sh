@@ -6,13 +6,13 @@
 #   ./deployment/run.sh            # start both (default)
 #   ./deployment/run.sh api        # backend only
 #   ./deployment/run.sh frontend   # frontend only
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# ── Helpers ──────────────────────────────────────────────────
+# -- Helpers --------------------------------------------------
 
 red()   { printf '\033[0;31m%s\033[0m\n' "$*"; }
 green() { printf '\033[0;32m%s\033[0m\n' "$*"; }

@@ -4,7 +4,7 @@ data/
 *.jsonl
 data/
 data_pipeline/dags/data/
-data_pipeline/succes_media/
+data_pipeline/success_media/
 
 # Mlflow informarion
 model_pipeline/experiments/

@@ -340,7 +340,7 @@ jobs:
           username: github-actions
           key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
           source: "monitoring/prometheus.yml"
-          target: "/tmp/"
+          target: "/home/github-actions/savvio-monitoring/prometheus/"
           strip_components: 1
 
       - name: Copy docker-compose to VM
@@ -350,7 +350,7 @@ jobs:
           username: github-actions
           key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
           source: "deployment/monitoring/docker-compose.production.yml"
-          target: "/tmp/"
+          target: "/home/github-actions/savvio-monitoring/"
           strip_components: 2
 
       - name: Deploy Prometheus on VM
@@ -362,12 +362,9 @@ jobs:
           timeout: 60s
           command_timeout: 10m
           script: |
-            sudo mkdir -p /opt/savvio-monitoring/prometheus
-            sudo mv /tmp/prometheus.yml /opt/savvio-monitoring/prometheus/prometheus.yml
-            sudo mv /tmp/docker-compose.production.yml /opt/savvio-monitoring/docker-compose.yml
-            cd /opt/savvio-monitoring
-            sudo docker compose pull
-            sudo docker compose up -d --remove-orphans
+            cd /home/github-actions/savvio-monitoring
+            docker compose pull
+            docker compose up -d --remove-orphans
 
   # ---------------------------------------------------------------------------
   # Notifications (covers all jobs)

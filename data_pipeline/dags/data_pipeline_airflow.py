@@ -265,11 +265,11 @@ email_pipeline_success = EmailOperator(
     task_id="send_email_pipeline_success",
     to=ALERT_EMAIL,
     cc="nirajmehta960@gmail.com",
-    subject="✅ SavVio Data Pipeline — Run Completed Successfully",
+    subject="SavVio Data Pipeline — Run Completed Successfully",
     html_content="""
 <html>
 <body style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; padding: 24px;">
-  <h2 style="color: #2e7d32;">✅ SavVio Data Pipeline Completed Successfully</h2>
+  <h2 style="color: #2e7d32;">SavVio Data Pipeline Completed Successfully</h2>
   <p>The daily data pipeline has finished all stages without errors.</p>
 
   <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
@@ -280,14 +280,14 @@ email_pipeline_success = EmailOperator(
       </tr>
     </thead>
     <tbody>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">📥 Data Ingestion</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">✅ Success</td></tr>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">🔍 Raw Data Validation</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">✅ Success</td></tr>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">⚙️ Data Preprocessing</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">✅ Success</td></tr>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">✔️ Processed Data Validation</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">✅ Success</td></tr>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">🧪 Feature Engineering</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">✅ Success</td></tr>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">✔️ Featured Data Validation</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">✅ Success</td></tr>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">🗄️ Database Loading</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">✅ Success</td></tr>
-      <tr><td style="padding: 8px 12px;">📊 Bias Analysis</td><td style="padding: 8px 12px; color: #2e7d32;">✅ Success</td></tr>
+      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Data Ingestion</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Raw Data Validation</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Data Preprocessing</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Processed Data Validation</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Feature Engineering</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Featured Data Validation</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Database Loading</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+      <tr><td style="padding: 8px 12px;">Bias Analysis</td><td style="padding: 8px 12px; color: #2e7d32;">[SUCCESS] Success</td></tr>
     </tbody>
   </table>
 

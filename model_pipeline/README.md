@@ -11,7 +11,7 @@ SavVio/
 └── model_pipeline/
     ├── Dockerfile
     ├── docker-compose.yml
-    ├── model-requirements.txt
+    ├── requirements.txt
     ├── models/                         # Local dev model storage (gitignored)
     │   ├── checkpoints/
     │   ├── artifacts/
@@ -19,7 +19,7 @@ SavVio/
     ├── src/
     │   ├── run_pipeline.py             # End-to-end ML pipeline entrypoint
     │   ├── config.py                   # Centralized configuration
-    │   ├── push-to-registry.py         # GCP Artifact Registry push script
+    │   ├── push_to_registry.py         # GCP Artifact Registry push script
     │   ├── data/
     │   │   ├── db_loader.py            # Reads from PostgreSQL
     │   │   └── validate_data.py        # Schema validation

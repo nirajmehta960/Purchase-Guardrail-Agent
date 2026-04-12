@@ -87,7 +87,7 @@ python3.11 -m venv .venv
 source .venv/bin/activate
 
 # 3) Install pipeline dependencies (MLflow, XGBoost, LightGBM, Optuna, etc.).
-pip install -r model-requirements.txt
+pip install -r requirements.txt
 
 # 4) Start MLflow tracking server in this folder (Terminal A).
 #    - backend-store-uri: run metadata DB

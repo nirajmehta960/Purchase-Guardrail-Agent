@@ -246,17 +246,8 @@ def preprocess_review_data(input_path: str, output_path: str) -> pd.DataFrame:
 
     _print_snapshot(final_sample, title=f"Final Review Sample (rows saved: {stats.final_rows})", rows=5)
 
-    # --- Incremental merge: merge new output with existing preprocessed file ---
-    if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-        from src.incremental import merge_jsonl
-        merge_stats = merge_jsonl(
-            new_output_path, output_path, key_cols=["user_id", "product_id"]
-        )
-        os.remove(new_output_path)
-        LOGGER.info("Incremental merge stats: %s", merge_stats)
-    else:
-        # First run — just move temp to output.
-        os.replace(new_output_path, output_path)
+    # Each run is independent — overwrite the output directly.
+    os.replace(new_output_path, output_path)
 
     LOGGER.info(
         "Dropped fields timestamp/images: not useful for text embeddings or sentiment analytics and add noise."

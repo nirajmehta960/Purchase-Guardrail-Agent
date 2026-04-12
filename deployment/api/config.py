@@ -1,5 +1,4 @@
 """
-# phase-7 ci trigger test
 API Configuration for SavVio Deployment.
 
 Centralized settings for the FastAPI backend — model paths, DB environment,

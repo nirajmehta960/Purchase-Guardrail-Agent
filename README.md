@@ -16,12 +16,14 @@ The system will provide **Green/Yellow/Red** light recommendations before users 
 
 | Component | Service | URL |
 |-----------|---------|-----|
-| **Frontend** | React / Vite Web App | [https://savvio-dev-frontend-ebw2ryzjkq-ue.a.run.app](https://savvio-dev-frontend-ebw2ryzjkq-ue.a.run.app) |
-| **Backend** | FastAPI Inference API | [https://savvio-dev-api-ebw2ryzjkq-ue.a.run.app](https://savvio-dev-api-ebw2ryzjkq-ue.a.run.app) |
-| **MLflow** | Experiment Tracking | [https://savvio-dev-mlflow-ebw2ryzjkq-ue.a.run.app](https://savvio-dev-mlflow-ebw2ryzjkq-ue.a.run.app) |
+| **Frontend** | React / Vite Web App | [https://savvio-ai-ebw2ryzjkq-ue.a.run.app](https://savvio-ai-ebw2ryzjkq-ue.a.run.app) |
+| **Backend API** | FastAPI Inference API | [https://savvio-backend-api-ebw2ryzjkq-ue.a.run.app](https://savvio-backend-api-ebw2ryzjkq-ue.a.run.app) |
+| **MLflow** | Experiment Tracking | [https://savvio-ai-mlflow-ebw2ryzjkq-ue.a.run.app](https://savvio-ai-mlflow-ebw2ryzjkq-ue.a.run.app) |
+| **Airflow** | Data Pipeline Orchestration | http://35.237.143.189:8080 (login: airflow / airflow) |
+| **Monitoring** | Grafana Cloud Dashboard | [https://nirajmehta2410.grafana.net/d/savvio-monitoring-v1/savvio-e28094-api-and-inference-monitoring](https://nirajmehta2410.grafana.net/d/savvio-monitoring-v1/savvio-e28094-api-and-inference-monitoring) |
 
 > [!NOTE]
-> The backend services are deployed on **Google Cloud Run** and the infrastructure is managed via **Terraform**.
+> Cloud Run services (Frontend, Backend API, MLflow) are deployed on **Google Cloud Run** and managed via **Terraform**. Airflow runs on a **GCE VM** (`savvio-dev-pipeline-vm`, `us-east1-b`) — the IP is ephemeral and may change if the VM restarts. The Grafana dashboard requires a Grafana Cloud account with access to the `nirajmehta2410` organization.
 
 ---
 

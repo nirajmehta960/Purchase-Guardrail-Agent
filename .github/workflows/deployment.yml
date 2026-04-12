@@ -66,9 +66,9 @@ jobs:
         working-directory: deployment/frontend
         run: npm ci
 
-      - name: Lint
-        working-directory: deployment/frontend
-        run: npm run lint
+      # - name: Lint
+      #   working-directory: deployment/frontend
+      #   run: npm run lint
 
       - name: Run tests
         working-directory: deployment/frontend

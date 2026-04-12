@@ -557,15 +557,36 @@ Open this URL in your browser. You should see the MLflow tracking UI.
 ### Step 7.1 — End-to-End Smoke Test
 
 ```bash
-# Test the inference endpoint with sample data
-curl -X POST "$API_URL/predict" \
+# Get the live API URL (if not already set)
+API_URL=$(gcloud run services describe savvio-dev-api \
+  --region=us-east1 --format='value(status.url)')
+
+# Test natural language mode (user_id format in DB is U00001, U00002, ...)
+curl -s -X POST "$API_URL/predict" \
   -H "Content-Type: application/json" \
   -d '{
-    "user_id": "test-user-1",
-    "product_id": "test-product-1",
-    "amount": 150.00
-  }'
+    "user_id": "U00001",
+    "user_query": "Can I afford to buy a refrigerator water filter for $54?"
+  }' | python3 -m json.tool
+
+# Test direct product_id mode (skips LLM intent parsing)
+curl -s -X POST "$API_URL/predict" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "U00001",
+    "user_query": "Evaluate this product for me",
+    "product_id": "B00UXG4WR8"
+  }' | python3 -m json.tool
 ```
+
+**Expected response fields:**
+- `recommendation`: `GREEN`, `YELLOW`, or `RED` (from ML model)
+- `confidence`: float 0–1 (null if model unavailable)
+- `evaluation_mode`: `catalog` (product matched in DB) or `hypothetical`
+- `affordability_score`, `emergency_fund_months`, `debt_to_income_ratio`: financial context
+
+> [!NOTE]
+> The `/predict` endpoint requires `user_query` (natural language) and `user_id`. `product_id` is optional — if provided, it skips LLM intent parsing and goes directly to product evaluation. User IDs in the database follow the format `U00001`, `U00002`, etc.
 
 ### Step 7.2 — Verify CI/CD Triggers Are Working
 
@@ -587,9 +608,9 @@ After a push to `data_pipeline/**` on `main`:
 
 ### ✅ Phase 7 Checkpoint
 
-- [ ] Inference endpoint returns predictions
-- [ ] CI/CD auto-triggers on code push
-- [ ] DAG deployment to VM works
+- [x] Inference endpoint returns predictions (GREEN/YELLOW/RED with ML confidence score)
+- [x] CI/CD auto-triggers on code push to `main` (all three pipelines fire)
+- [x] DAG deployment to VM works (`deploy-dags` job SSHes in and reserializes)
 
 ---
 

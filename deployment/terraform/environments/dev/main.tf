@@ -41,6 +41,7 @@ resource "google_project_service" "apis" {
     "artifactregistry.googleapis.com",
     "run.googleapis.com",
     "iam.googleapis.com",
+    "iap.googleapis.com",
   ])
   service            = each.key
   disable_on_destroy = false
@@ -56,6 +57,18 @@ resource "google_service_account" "cloud_run" {
 resource "google_project_iam_member" "run_sql_client" {
   project = var.project_id
   role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+resource "google_project_iam_member" "run_sa_oslogin" {
+  project = var.project_id
+  role    = "roles/compute.osLogin"
+  member  = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+resource "google_project_iam_member" "run_sa_iap_tunnel" {
+  project = var.project_id
+  role    = "roles/iap.tunnelResourceAccessor"
   member  = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
@@ -96,6 +109,14 @@ module "db_password_secret" {
   source                         = "../../modules/secrets"
   secret_id                      = "${local.prefix}-db-password"
   secret_data                    = module.database.password
+  accessor_service_account_email = google_service_account.cloud_run.email
+  depends_on                     = [google_project_service.apis]
+}
+
+module "grafana_api_key_secret" {
+  source                         = "../../modules/secrets"
+  secret_id                      = "${local.prefix}-grafana-api-key"
+  secret_data                    = var.grafana_api_key != "" ? var.grafana_api_key : "not-configured"
   accessor_service_account_email = google_service_account.cloud_run.email
   depends_on                     = [google_project_service.apis]
 }
@@ -152,6 +173,10 @@ resource "google_compute_instance" "pipeline_vm" {
     scopes = ["cloud-platform"]
   }
 
+  metadata = {
+    enable-oslogin = "TRUE"
+  }
+
   metadata_startup_script = <<-EOF
     #!/bin/bash
     apt-get update && apt-get install -y docker.io docker-compose-plugin git
@@ -190,6 +215,21 @@ resource "google_compute_firewall" "allow_airflow_ui" {
   target_tags   = ["ssh-access"]
 }
 
+# Allow IAP TCP forwarding for SSH tunneling from GitHub Actions
+resource "google_compute_firewall" "allow_iap_ssh" {
+  name    = "${local.prefix}-allow-iap-ssh"
+  network = "default"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22"]
+  }
+
+  # IAP's published IP range for TCP forwarding
+  source_ranges = ["35.235.240.0/20"]
+  target_tags   = ["ssh-access"]
+}
+
 # ---- Cloud Run: API ----
 module "api" {
   source                = "../../modules/cloud_run"
@@ -207,19 +247,23 @@ module "api" {
   labels                = local.labels
 
   env_vars = {
-    ENVIRONMENT              = var.environment
-    DB_ENV                   = "prod"
-    DB_USER                  = module.database.user_name
-    DB_NAME                  = module.database.database_name
-    DB_HOST                  = "/cloudsql/${module.database.connection_name}"
-    INSTANCE_CONNECTION_NAME = module.database.connection_name
-    MLFLOW_TRACKING_URI      = module.mlflow.service_url
+    ENVIRONMENT                    = var.environment
+    DB_ENV                         = "prod"
+    DB_USER                        = module.database.user_name
+    DB_NAME                        = module.database.database_name
+    DB_HOST                        = "/cloudsql/${module.database.connection_name}"
+    INSTANCE_CONNECTION_NAME       = module.database.connection_name
+    MLFLOW_TRACKING_URI            = module.mlflow.service_url
+    METRICS_ENABLED                = "true"
+    GRAFANA_CLOUD_REMOTE_WRITE_URL = var.grafana_remote_write_url
+    GRAFANA_CLOUD_USERNAME         = var.grafana_cloud_username
   }
   secret_env_vars = {
-    DB_PASS = { secret_id = module.db_password_secret.secret_id, version = "latest" }
+    DB_PASS               = { secret_id = module.db_password_secret.secret_id, version = "latest" }
+    GRAFANA_CLOUD_API_KEY = { secret_id = module.grafana_api_key_secret.secret_id, version = "latest" }
   }
 
-  depends_on = [google_project_service.apis, module.db_password_secret, module.mlflow]
+  depends_on = [google_project_service.apis, module.db_password_secret, module.grafana_api_key_secret, module.mlflow]
 }
 
 # ---- Cloud Run: Frontend ----

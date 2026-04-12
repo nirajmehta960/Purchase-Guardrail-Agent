@@ -160,6 +160,20 @@ resource "google_compute_firewall" "allow_ssh" {
   target_tags   = ["ssh-access"]
 }
 
+# Airflow apiserver on pipeline VM (port 8080).
+resource "google_compute_firewall" "allow_airflow_ui" {
+  name    = "${local.prefix}-allow-airflow-ui"
+  network = "default"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["8080"]
+  }
+
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["ssh-access"]
+}
+
 # ---- Cloud Run: API ----
 module "api" {
   source                = "../../modules/cloud_run"

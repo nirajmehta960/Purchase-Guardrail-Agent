@@ -312,6 +312,9 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Deploy Monitoring (Prometheus on GCE VM → remote-write to Grafana Cloud)
+  # Uses direct SSH (appleboy) with GCE_SSH_PRIVATE_KEY — same pattern as deploy-dags.
+  # IAP tunneling avoided: SA lacks roles/iap.tunnelResourceAccessor and is unnecessary
+  # since the VM has a public IP and the SSH key is already provisioned.
   # ---------------------------------------------------------------------------
   deploy-monitoring:
     name: Deploy Monitoring
@@ -333,7 +336,6 @@ jobs:
         run: |
           API_URL=$(gcloud run services describe savvio-${{ env.ENVIRONMENT }}-api \
             --region ${{ env.REGION }} --format='value(status.url)')
-          # Strip https:// — Prometheus target uses scheme: https
           echo "host=$(echo $API_URL | sed 's|https://||')" >> $GITHUB_OUTPUT
 
       - name: Render Prometheus production config
@@ -343,39 +345,45 @@ jobs:
           GRAFANA_CLOUD_USERNAME: ${{ secrets.GRAFANA_CLOUD_USERNAME }}
           GRAFANA_CLOUD_API_KEY: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
         run: |
+          mkdir -p monitoring
           envsubst < deployment/monitoring/prometheus/prometheus.production.yml \
-            > /tmp/prometheus.rendered.yml
+            > monitoring/prometheus.yml
 
-      - name: Get VM zone
-        id: vm
-        run: |
-          ZONE=$(gcloud compute instances list \
-            --filter="name=savvio-${{ env.ENVIRONMENT }}-pipeline-vm" \
-            --format='value(zone)')
-          echo "zone=$ZONE" >> $GITHUB_OUTPUT
+      - name: Copy Prometheus config to VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.GCE_VM_IP }}
+          username: github-actions
+          key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
+          source: "monitoring/prometheus.yml"
+          target: "/tmp/"
+          strip_components: 1
 
-      - name: Copy monitoring files to VM
-        run: |
-          gcloud compute scp /tmp/prometheus.rendered.yml \
-            savvio-${{ env.ENVIRONMENT }}-pipeline-vm:/tmp/prometheus.yml \
-            --zone=${{ steps.vm.outputs.zone }} --tunnel-through-iap --quiet
-
-          gcloud compute scp deployment/monitoring/docker-compose.production.yml \
-            savvio-${{ env.ENVIRONMENT }}-pipeline-vm:/tmp/docker-compose.monitoring.yml \
-            --zone=${{ steps.vm.outputs.zone }} --tunnel-through-iap --quiet
+      - name: Copy docker-compose to VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.GCE_VM_IP }}
+          username: github-actions
+          key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
+          source: "deployment/monitoring/docker-compose.production.yml"
+          target: "/tmp/"
+          strip_components: 2
 
       - name: Deploy Prometheus on VM
-        run: |
-          gcloud compute ssh savvio-${{ env.ENVIRONMENT }}-pipeline-vm \
-            --zone=${{ steps.vm.outputs.zone }} --tunnel-through-iap --quiet \
-            --command="
-              sudo mkdir -p /opt/savvio-monitoring/prometheus &&
-              sudo mv /tmp/prometheus.yml /opt/savvio-monitoring/prometheus/prometheus.yml &&
-              sudo mv /tmp/docker-compose.monitoring.yml /opt/savvio-monitoring/docker-compose.yml &&
-              cd /opt/savvio-monitoring &&
-              sudo docker compose pull &&
-              sudo docker compose up -d --remove-orphans
-            "
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.GCE_VM_IP }}
+          username: github-actions
+          key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
+          timeout: 60s
+          command_timeout: 10m
+          script: |
+            sudo mkdir -p /opt/savvio-monitoring/prometheus
+            sudo mv /tmp/prometheus.yml /opt/savvio-monitoring/prometheus/prometheus.yml
+            sudo mv /tmp/docker-compose.production.yml /opt/savvio-monitoring/docker-compose.yml
+            cd /opt/savvio-monitoring
+            sudo docker compose pull
+            sudo docker compose up -d --remove-orphans
 
   # ---------------------------------------------------------------------------
   # Notifications (covers all jobs)

@@ -20,28 +20,28 @@ export function UserIdInput() {
 
   return (
     <div className="flex flex-col items-end gap-1 max-w-[min(100%,28rem)]">
-      <div className="flex items-center gap-2 w-full min-w-0">
-        <User className="w-4 h-4 text-muted-foreground shrink-0 hidden sm:block" />
+      <div className="flex items-center gap-3 w-full min-w-0">
+        <User className="w-5 h-5 text-muted-foreground shrink-0 hidden sm:block" />
         <Input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && apply()}
           placeholder="User ID (e.g. U00047)"
-          className={`h-9 text-sm bg-secondary/40 min-w-0 ${
+          className={`h-11 text-base bg-secondary/40 min-w-0 ${
             hasError ? "border-destructive focus-visible:ring-destructive/40" : "border-border/60"
           }`}
           aria-label="User ID"
           aria-invalid={hasError}
           aria-describedby={hasError ? "user-id-profile-error" : undefined}
         />
-        <Button type="button" size="sm" variant="secondary" className="shrink-0" onClick={apply}>
+        <Button type="button" variant="secondary" className="shrink-0 h-11 px-5 text-base" onClick={apply}>
           Set
         </Button>
         {isLoadingProfile && userId && (
-          <span className="text-[10px] text-muted-foreground shrink-0">Loading…</span>
+          <span className="text-xs text-muted-foreground shrink-0">Loading…</span>
         )}
         {userId && !profileError && !isLoadingProfile && (
-          <span className="text-[10px] text-primary font-medium shrink-0 hidden sm:inline" title={userId}>
+          <span className="text-xs text-primary font-semibold shrink-0 hidden sm:inline" title={userId}>
             {userId}
           </span>
         )}

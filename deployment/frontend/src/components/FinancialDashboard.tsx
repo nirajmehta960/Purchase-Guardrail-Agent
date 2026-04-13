@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { motion } from "framer-motion";
 import {
   TrendingUp,
@@ -8,8 +9,13 @@ import {
   ShieldCheck,
   DollarSign,
   AlertTriangle,
+  Activity,
+  PieChart as PieChartIcon
 } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import { 
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
+  AreaChart, Area, PieChart, Pie, Legend
+} from "recharts";
 import { useUser } from "../context/UserContext";
 import { fmtMoney, fmtPct, ratioHealth } from "../lib/formatters";
 
@@ -25,6 +31,7 @@ const CustomTooltipStyle = {
 
 export const FinancialDashboard = () => {
   const { userId, userProfile, profileError, isLoadingProfile } = useUser();
+  const [simulatedPurchasePrice, setSimulatedPurchasePrice] = useState(1500);
 
   if (!userId.trim()) {
     return (
@@ -139,8 +146,41 @@ export const FinancialDashboard = () => {
     },
   ];
 
+  // Chart 1: Income Breakdown (Where does the money go?)
+  const allocationData = [
+    { name: "Essentials", value: expenses, fill: "hsl(215, 20%, 55%)" },
+    { name: "Debt (EMI)", value: emi, fill: "hsl(0, 70%, 50%)" },
+    { name: "Surplus / Discretionary", value: monthlyFlowSurplus, fill: "hsl(160, 72%, 40%)" }
+  ].filter(d => d.value > 0);
+
+  // Chart 2: 12-Month Trajectory Projection
+  const projectionData = [];
+  let currSavings = liquidSavings;
+  let currDebt = p.loan_amount || 0;
+  for(let m = 0; m <= 12; m++) {
+    projectionData.push({
+      month: m === 0 ? "Now" : `+${m}m`,
+      Savings: Math.round(currSavings),
+      Debt: Math.round(currDebt)
+    });
+    // Add monthly surplus to savings
+    currSavings += Math.max(0, monthlyFlowSurplus);
+    // Subtract EMI strictly from Debt
+    if(currDebt > 0) currDebt = Math.max(0, currDebt - emi);
+  }
+
+  // Chart 3: Simulated Purchase Impact
+  // Compare current Emergency Fund Months vs Simulated EF if they spend from Liquid Savings
+  const currentEfMonths = emer ?? 0;
+  const newLiquid = liquidSavings - simulatedPurchasePrice;
+  const newEfMonths = expenses > 0 ? newLiquid / expenses : 0;
+  const impactData = [
+    { name: "Current Status", "Emergency Fund (Months)": Number(currentEfMonths.toFixed(1)), fill: "hsl(160, 72%, 40%)" },
+    { name: `After $${simulatedPurchasePrice} Purchase`, "Emergency Fund (Months)": Math.max(0, Number(newEfMonths.toFixed(1))), fill: newEfMonths < 3 ? "hsl(0, 70%, 50%)" : "hsl(40, 90%, 50%)" },
+  ];
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 h-full overflow-y-auto pb-10 pr-2 scrollbar-thin">
       <div>
         <h1 className="font-heading text-xl font-semibold mb-1">Financial Health Dashboard</h1>
         <p className="text-sm text-muted-foreground">
@@ -236,26 +276,141 @@ export const FinancialDashboard = () => {
         </div>
       </motion.div>
 
-      {/* Income vs expenses — single period */}
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }} className="glass-card p-5">
-        <h2 className="font-heading text-sm font-semibold mb-1">Income vs. expenses (monthly)</h2>
-        <p className="text-xs text-muted-foreground mb-4">From your profile</p>
-        <div className="h-52">
-          <ResponsiveContainer>
-            <BarChart data={barCompare} barGap={8}>
-              <CartesianGrid strokeDasharray="3 3" stroke="hsl(222,30%,18%)" />
-              <XAxis dataKey="name" stroke="hsl(215,20%,55%)" fontSize={12} />
-              <YAxis stroke="hsl(215,20%,55%)" fontSize={12} tickFormatter={(v) => `$${v / 1000}k`} />
-              <Tooltip contentStyle={CustomTooltipStyle} formatter={(value: number) => [`$${value.toLocaleString()}`, ""]} />
-              <Bar dataKey="value" radius={[4, 4, 0, 0]} barSize={40} name="Amount">
-                {barCompare.map((entry, i) => (
-                  <Cell key={i} fill={entry.fill} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </motion.div>
+      {/* Dashboard Custom AI Charts */}
+      <div className="grid lg:grid-cols-2 gap-6">
+        
+        {/* Chart 1: Income Allocation Donut */}
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }} className="glass-card p-5">
+          <div className="flex items-center gap-2 mb-1">
+            <PieChartIcon className="w-4 h-4 text-primary" />
+            <h2 className="font-heading text-sm font-semibold">Monthly Income Allocation</h2>
+          </div>
+          <p className="text-xs text-muted-foreground mb-4">Where your income is distributed</p>
+          <div className="h-64">
+            <ResponsiveContainer>
+              <PieChart>
+                <Tooltip contentStyle={CustomTooltipStyle} formatter={(v: number) => `$${v.toLocaleString()}`} />
+                <Legend 
+                  verticalAlign="bottom" 
+                  height={36} 
+                  iconSize={14}
+                  wrapperStyle={{ 
+                    fontSize: '13px', 
+                    display: 'flex', 
+                    justifyContent: 'center',
+                    paddingTop: '10px'
+                  }}
+                  formatter={(value) => <span style={{ marginLeft: '4px', marginRight: '28px', color: 'hsl(215, 20%, 65%)' }}>{value}</span>}
+                />
+                <Pie 
+                  data={allocationData} 
+                  dataKey="value" 
+                  nameKey="name" 
+                  cx="50%" 
+                  cy="45%" 
+                  innerRadius={50} 
+                  outerRadius={75} 
+                  paddingAngle={5} 
+                  stroke="none"
+                  label={({ x, y, value, cx }) => (
+                    <text x={x} y={y} fill="hsl(215, 20%, 65%)" textAnchor={x > cx ? 'start' : 'end'} dominantBaseline="central" fontSize={12} fontWeight={500}>
+                      ${Math.round(value).toLocaleString()}
+                    </text>
+                  )}
+                  labelLine={{ stroke: 'hsl(215, 20%, 40%)', strokeWidth: 1 }}
+                >
+                  {allocationData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.fill} />
+                  ))}
+                </Pie>
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </motion.div>
+
+        {/* Chart 2: 12-Month Projection */}
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }} className="glass-card p-5">
+          <div className="flex items-center gap-2 mb-1">
+            <Activity className="w-4 h-4 text-primary" />
+            <h2 className="font-heading text-sm font-semibold">12-Month Wealth Trajectory</h2>
+          </div>
+          <p className="text-xs text-muted-foreground mb-4">Savings growth vs Debt paydown (assuming flat cash flow)</p>
+          <div className="h-64">
+            <ResponsiveContainer>
+              <AreaChart data={projectionData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="colorSavings" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="hsl(160,72%,40%)" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="hsl(160,72%,40%)" stopOpacity={0}/>
+                  </linearGradient>
+                  <linearGradient id="colorDebt" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="hsl(0,70%,50%)" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="hsl(0,70%,50%)" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="month" stroke="hsl(215,20%,55%)" fontSize={11} tickLine={false} axisLine={false} />
+                <YAxis stroke="hsl(215,20%,55%)" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v / 1000}k`} />
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(222,30%,18%)" />
+                <Tooltip contentStyle={CustomTooltipStyle} formatter={(v: number) => `$${v.toLocaleString()}`} />
+                <Area type="monotone" dataKey="Savings" stroke="hsl(160,72%,40%)" fillOpacity={1} fill="url(#colorSavings)" strokeWidth={2} />
+                <Area type="monotone" dataKey="Debt" stroke="hsl(0,70%,50%)" fillOpacity={1} fill="url(#colorDebt)" strokeWidth={2} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </motion.div>
+
+        {/* Chart 3: Interactive Purchase Impact Simulator */}
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }} className="glass-card p-5 lg:col-span-2">
+          <div className="flex items-center gap-2 mb-1">
+            <AlertTriangle className="w-4 h-4 text-primary" />
+            <h2 className="font-heading text-sm font-semibold">Interactive Purchase Impact Simulator</h2>
+          </div>
+          <p className="text-xs text-muted-foreground mb-4">See how a major hypothetical purchase impacts your core Emergency Fund ratio</p>
+          
+          <div className="flex flex-col md:flex-row gap-6 items-center">
+            <div className="w-full md:w-1/3 bg-secondary/30 p-4 rounded-xl space-y-4">
+              <div>
+                <label className="text-xs text-muted-foreground block mb-1">Hypothetical Purchase Amount</label>
+                <div className="flex items-center gap-2">
+                  <span className="text-lg font-bold text-primary">$</span>
+                  <input 
+                    type="range" 
+                    min="100" 
+                    max="10000" 
+                    step="100" 
+                    value={simulatedPurchasePrice} 
+                    onChange={(e) => setSimulatedPurchasePrice(Number(e.target.value))}
+                    className="flex-1 accent-primary"
+                  />
+                </div>
+                <p className="text-xl font-heading font-semibold text-center mt-2">${simulatedPurchasePrice.toLocaleString()}</p>
+              </div>
+              <div className="pt-2 border-t border-border/50">
+                <p className="text-xs text-muted-foreground mb-1">Remaining Liquid Savings</p>
+                <p className={`font-semibold ${newLiquid < 0 ? 'text-destructive' : 'text-foreground'}`}>
+                  ${newLiquid.toLocaleString()}
+                </p>
+              </div>
+            </div>
+
+            <div className="h-52 w-full md:w-2/3">
+              <ResponsiveContainer>
+                <BarChart data={impactData} layout="vertical" margin={{ top: 0, right: 30, left: 30, bottom: 0 }} barSize={35}>
+                  <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="hsl(222,30%,18%)" />
+                  <XAxis type="number" stroke="hsl(215,20%,55%)" fontSize={11} domain={[0, 'dataMax + 2']} hide/>
+                  <YAxis type="category" dataKey="name" stroke="hsl(215,20%,55%)" fontSize={11} width={120} tickLine={false} axisLine={false} />
+                  <Tooltip contentStyle={CustomTooltipStyle} cursor={{fill: 'transparent'}} />
+                  <Bar dataKey="Emergency Fund (Months)" radius={[0, 4, 4, 0]}>
+                    {impactData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.fill} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </motion.div>
+      </div>
 
       {/* Loan summary */}
       {p.has_loan ? (

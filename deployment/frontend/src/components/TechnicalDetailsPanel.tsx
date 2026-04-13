@@ -93,7 +93,8 @@ export function truncateProductNameAtPipe(
   const trimmed = (raw ?? "").trim();
   if (!trimmed) return emptyFallback;
   const beforeBar = trimmed.split(/[|｜]/)[0]?.trim() ?? "";
-  return beforeBar || emptyFallback;
+  const finalStr = beforeBar || emptyFallback;
+  return finalStr.length > 45 ? finalStr.slice(0, 42) + "..." : finalStr;
 }
 
 function resolveFinancialFeatures(res: PredictResponse): FinancialFeaturesView {

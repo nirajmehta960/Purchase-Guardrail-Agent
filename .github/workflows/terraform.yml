@@ -77,6 +77,11 @@ jobs:
 
       - name: Terraform Plan
         id: plan
+        env:
+          TF_VAR_open_router_api_key: ${{ secrets.TF_VAR_OPEN_ROUTER_API_KEY }}
+          TF_VAR_grafana_api_key: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
+          TF_VAR_grafana_cloud_username: ${{ secrets.GRAFANA_CLOUD_USERNAME }}
+          TF_VAR_grafana_remote_write_url: ${{ secrets.GRAFANA_REMOTE_WRITE_URL }}
         run: |
           terraform plan \
             -var="project_id=${{ secrets.GCP_PROJECT_ID }}" \
@@ -102,6 +107,11 @@ jobs:
 
       - name: Terraform Apply
         if: github.event_name != 'pull_request'
+        env:
+          TF_VAR_open_router_api_key: ${{ secrets.TF_VAR_OPEN_ROUTER_API_KEY }}
+          TF_VAR_grafana_api_key: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
+          TF_VAR_grafana_cloud_username: ${{ secrets.GRAFANA_CLOUD_USERNAME }}
+          TF_VAR_grafana_remote_write_url: ${{ secrets.GRAFANA_REMOTE_WRITE_URL }}
         run: |
           terraform apply \
             -var="project_id=${{ secrets.GCP_PROJECT_ID }}" \

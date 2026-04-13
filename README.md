@@ -44,7 +44,7 @@ The platform uses a sophisticated ML pipeline:
 The system employs a three-layer decision engine to ensure fiduciary responsibility:
 - **Deterministic Layer**: Authoritative financial rules that enforce strict budget and emergency fund guardrails.
 - **ML Layer**: Probabilistic scoring that identifies risk patterns in consumer behavior.
-- **Generative Layer**: Google Gemini-powered conversational explanations, validated by NVIDIA NeMo Guardrails.
+- **Generative Layer**: OpenRouter LLM (default: Gemini 2.0 Flash) for conversational explanations, validated by code-level guardrails.
 
 ### 4. Monitoring & Observability
 Continuous monitoring ensures the system remains reliable and accurate:
@@ -88,20 +88,33 @@ git clone https://github.com/nirajmehta960/SavVio.git
 cd SavVio
 ```
 
-### 2. Run Backend API
+### 2. Full Stack via Docker Compose (Recommended)
+Starts Postgres + API + Frontend together:
 ```bash
-cd deployment
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-./run.sh api
+cp .env.example .env        # fill in DB_USER, DB_PASSWORD, DB_NAME, OPEN_ROUTER_API_KEY
+docker compose up --build
+# Frontend: http://localhost:8501
+# API:      http://localhost:8080
+# API docs: http://localhost:8080/docs
 ```
 
-### 3. Run Frontend
+### 3. Run API Only (without Docker)
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e savviocore
+pip install -r deployment/requirements.txt
+cp .env.example .env        # fill in DB_* and OPEN_ROUTER_API_KEY
+export $(grep -v '^#' .env | xargs)
+./deployment/api/run_api.sh
+```
+
+### 4. Run Frontend Only (without Docker)
 ```bash
 cd deployment/frontend
-npm install
-npm run dev
+bun install     # or: npm install
+bun run dev     # or: npm run dev
+# Proxies /api → http://localhost:3500 (see vite.config.ts)
 ```
 
 ---
-**Note**: This is an academic project. This README reflects the technical work completed and will be updated with architectural diagrams in the future.
+**Note**: This is an academic project. This README reflects the technical work completed.

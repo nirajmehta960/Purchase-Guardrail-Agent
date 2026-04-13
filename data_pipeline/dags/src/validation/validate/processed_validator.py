@@ -8,6 +8,7 @@ import logging
 import sys
 import os
 import pandas as pd
+import great_expectations as gx
 from pathlib import Path
 
 from src.utils import setup_logging
@@ -15,6 +16,11 @@ from typing import Optional, List
 from savviocore.validation.validation_config import (
     CheckResult, Severity, ValidationReport, load_thresholds,
 )
+
+try:
+    from great_expectations.dataset import PandasDataset
+except ImportError:
+    from great_expectations.dataset.pandas_dataset import PandasDataset
 
 # Resolve local imports from the validation package.
 current_file_path = Path(__file__).resolve()
@@ -41,9 +47,8 @@ logger = logging.getLogger(__name__)
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _load(path: str):
+def _load(path: str) -> PandasDataset:
     """Load CSV or JSONL depending on extension."""
-    import great_expectations as gx
     if path.endswith(".jsonl"):
         # return gx.from_pandas(pd.read_json(path, lines=True))
         file_size_mb = os.path.getsize(path) / (1024 * 1024)

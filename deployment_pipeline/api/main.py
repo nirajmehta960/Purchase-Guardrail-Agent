@@ -20,13 +20,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from deployment_pipelin.api.config import APIConfig
-from deployment_pipelin.api.dependencies import get_model_manager, require_db
-from deployment_pipelin.api.inference import run_inference, _load_user_financial_profile
-from deployment_pipelin.api.metrics import setup_metrics, track_active_request, release_active_request
-from deployment_pipelin.api.model_loader import ModelManager
-from deployment_pipelin.api.products_catalog import list_products as fetch_products
-from deployment_pipelin.api.schemas import (
+from deployment_pipeline.api.config import APIConfig
+from deployment_pipeline.api.dependencies import get_model_manager, require_db
+from deployment_pipeline.api.inference import run_inference, _load_user_financial_profile
+from deployment_pipeline.api.metrics import setup_metrics, track_active_request, release_active_request
+from deployment_pipeline.api.model_loader import ModelManager
+from deployment_pipeline.api.products_catalog import list_products as fetch_products
+from deployment_pipeline.api.schemas import (
     ErrorResponse,
     HealthResponse,
     PredictRequest,

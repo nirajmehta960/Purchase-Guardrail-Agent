@@ -8,7 +8,7 @@ import logging
 import os
 import sys
 
-from deployment_pipelin.api.config import APIConfig
+from deployment_pipeline.api.config import APIConfig
 
 logger = logging.getLogger(__name__)
 

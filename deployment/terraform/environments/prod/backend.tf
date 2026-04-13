@@ -1,6 +1,6 @@
 terraform {
   backend "gcs" {
-    bucket = "savvio-ai-tf-state"
+    bucket = "savvio-purchase-guardrail-tf-state"
     prefix = "env/prod"
   }
 }

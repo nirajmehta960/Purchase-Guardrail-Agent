@@ -10,7 +10,7 @@ scipy
 # Vector Embeddings
 sentence-transformers
 psycopg2-binary
-sqlalchemy
+sqlalchemy>=2.0
 # -----------------------------------------------------------------------------
 # Google Cloud Platform
 # -----------------------------------------------------------------------------

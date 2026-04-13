@@ -8,9 +8,10 @@ version = "0.1.0"
 description = "Shared DB and Validation logic for SavVio"
 dependencies = [
     "SQLAlchemy>=2.0",
-    "pydantic",
-    "pandas",
-    "great_expectations"
+    "pandas>=2.1.4",
+    "numpy>=1.26.2",
+    "python-dotenv>=1.0.0",
+    "great-expectations>=0.18.8,<1.0.0"
 ]
 requires-python = ">=3.9"
 

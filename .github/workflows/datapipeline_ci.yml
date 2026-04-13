@@ -46,7 +46,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-datapipeline-${{ hashFiles('data_pipeline/data-requirements.txt') }}
+          key: ${{ runner.os }}-pip-datapipeline-${{ hashFiles('data_pipeline/requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-datapipeline-
 
@@ -55,11 +55,10 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -e ../savviocore
-          if [ -f data-requirements.txt ]; then pip install -r data-requirements.txt; fi
-          pip install pytest pytest-cov
-          # apache-airflow is excluded from data-requirements.txt (provided by the
-          # runtime Airflow VM environment). Install it explicitly here for CI validation.
+          # Install Airflow first so providers in requirements.txt resolve against it
           pip install "apache-airflow>=3.0.0" "apache-airflow-providers-standard" "apache-airflow-providers-smtp"
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
 
       - name: Validate DAG parses correctly
         working-directory: data_pipeline

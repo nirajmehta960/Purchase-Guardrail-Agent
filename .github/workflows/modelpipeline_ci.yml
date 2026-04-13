@@ -55,7 +55,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-modelpipeline-${{ hashFiles('model_pipeline/model-requirements.txt') }}
+          key: ${{ runner.os }}-pip-modelpipeline-${{ hashFiles('model_pipeline/requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-modelpipeline-
 
@@ -65,8 +65,7 @@ jobs:
           pip install --upgrade pip
           pip install -e ../savviocore
           pip install -e .
-          if [ -f model-requirements.txt ]; then pip install -r model-requirements.txt; fi
-          pip install --force-reinstall "sqlalchemy>=2.0"
+          pip install -r requirements.txt
 
       - name: Run unit tests
         working-directory: model_pipeline
@@ -208,7 +207,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-modelpipeline-${{ hashFiles('model_pipeline/model-requirements.txt') }}
+          key: ${{ runner.os }}-pip-modelpipeline-${{ hashFiles('model_pipeline/requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-modelpipeline-
 
@@ -218,8 +217,7 @@ jobs:
           pip install --upgrade pip
           pip install -e ../savviocore
           pip install -e .
-          if [ -f model-requirements.txt ]; then pip install -r model-requirements.txt; fi
-          pip install --force-reinstall "sqlalchemy>=2.0"
+          pip install -r requirements.txt
 
       - name: Download previous metrics from GCS (rollback baseline)
         run: |

@@ -27,7 +27,7 @@ pandas>=2.1.4
 numpy>=1.26.2
 
 # MLflow (for loading models from registry)
-mlflow>=2.19.0
+mlflow>=2.21.3
 
 # LLM Providers — uncomment as needed
 # openai            # For OpenAI GPT provider

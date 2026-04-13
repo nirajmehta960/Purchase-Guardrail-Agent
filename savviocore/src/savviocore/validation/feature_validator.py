@@ -16,13 +16,7 @@ import sys
 import os
 import numpy as np
 import pandas as pd
-import great_expectations as gx
 from pathlib import Path
-
-try:
-    from great_expectations.dataset import PandasDataset
-except ImportError:
-    from great_expectations.dataset.pandas_dataset import PandasDataset
 
 from typing import Optional, List
 from savviocore.validation.validation_config import (
@@ -36,7 +30,8 @@ logger = logging.getLogger(__name__)
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _load(path: str) -> PandasDataset:
+def _load(path: str):
+    import great_expectations as gx
     if path.endswith(".jsonl"):
         # return gx.from_pandas(pd.read_json(path, lines=True))
         file_size_mb = os.path.getsize(path) / (1024 * 1024)

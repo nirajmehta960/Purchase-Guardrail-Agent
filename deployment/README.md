@@ -467,33 +467,47 @@ Track live system performance after deployment — capturing latency, request vo
 Detect data drift (shifts in input feature distributions) and model drift (shifts in output prediction distributions) to identify when the deployed model may no longer reflect real-world conditions.
 
 ### Tasks
-- Implement drift detection in `deployment/monitoring/drift_detector.py` using Evidently
+- Implement drift detection in `deployment/monitoring/drift/drift_detector.py` using Evidently
 - Monitor input feature distributions against training baseline for:
-  - Financial signals: `discretionary_income`, `debt_to_income_ratio`, `monthly_expense_burden_ratio`, `emergency_fund_months`, `savings_to_income_ratio`
-  - Product signals: `price`, `average_rating`, `rating_number`, `rating_variance`
+  - Financial signals: `discretionary_income`, `debt_to_income_ratio`, `monthly_expense_burden_ratio`, `emergency_fund_months`, `saving_to_income_ratio`
+  - Product signals: `average_rating`, `rating_number`, `rating_variance`
 - Track output distribution shifts: changes in Green/Yellow/Red recommendation ratio over time
-- Run drift detection on a rolling window (daily or weekly batch)
-- Configure drift severity thresholds in `deployment/monitoring/alert_config.yaml`:
-  - Green: distributions stable → no action
-  - Yellow: minor shift detected → alert, monitor closely
-  - Red: significant drift detected → alert and log
+- Run drift detection on a rolling window (weekly — every Monday 8am UTC via GitHub Actions)
+- Configure drift severity thresholds in `deployment/monitoring/drift/alert_config.yaml`:
+  - Green: <10% columns drifted → no action
+  - Yellow: 10–50% columns drifted → alert, monitor closely
+  - Red: ≥50% columns drifted → alert, consider retraining
 - Alert and log when any drift threshold is breached
-- Verify drift detection triggers correctly by simulating distribution shifts
+- Verified drift detection working — YELLOW alert fired on 2026-04-08 for `average_rating` (score: 0.0694, threshold: 0.05)
 
 ### Drift Severity Levels
 
 | Level | Condition | Action |
 |---|---|---|
-| Green | Distributions stable | No action |
-| Yellow | Minor shift detected | Alert, monitor closely |
-| Red | Significant drift detected | Alert and log |
+| Green | <10% columns drifted | No action needed |
+| Yellow | 10–50% columns drifted | Slack alert, monitor closely |
+| Red | ≥50% columns drifted | Slack + email alert, consider retraining |
+
+### Statistical Method
+Wasserstein distance (earth mover's distance) via Evidently AI.
+- Default threshold: 0.10 for financial features
+- Tighter threshold: 0.05 for product rating features (directly affect recommendations)
 
 ### Tools
 
 | Tool | Purpose |
 |---|---|
-| Evidently | Data and model drift detection |
-| GCP Cloud Monitoring | Infrastructure-level drift alerts |
+| Evidently AI (v0.7.x) | Data and model drift detection — Wasserstein distance |
+| GitHub Actions | Automated weekly drift runs (Monday 8am UTC) |
+| GCP Cloud Logging | Drift logs and audit trail |
+| Slack Webhook | Real-time alerts to #group-34 channel |
+
+### Output
+- HTML report: `deployment/monitoring/reports/drift_report_<timestamp>.html`
+- JSON summary: `deployment/monitoring/reports/drift_summary_<timestamp>.json`
+
+### Detailed Documentation
+See [`deployment/monitoring/drift/README.md`](monitoring/drift/README.md)
 
 ---
 

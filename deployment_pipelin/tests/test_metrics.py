@@ -43,9 +43,9 @@ def metrics_client():
     manager.check_db_connection.return_value = True
     manager.get_llm_provider_name.return_value = "mock"
 
-    from deployment_pipeline.api.main import app
-    from deployment_pipeline.api.metrics import setup_metrics
-    from deployment_pipeline.api.dependencies import get_model_manager
+    from deployment_pipelin.api.main import app
+    from deployment_pipelin.api.metrics import setup_metrics
+    from deployment_pipelin.api.dependencies import get_model_manager
     from fastapi.testclient import TestClient
 
     app.dependency_overrides[get_model_manager] = lambda: manager
@@ -91,7 +91,7 @@ class TestMetricsRecording:
 
     def test_record_inference_increments_counter(self):
         """record_inference should increment the inference total counter."""
-        from deployment_pipeline.api.metrics import INFERENCE_TOTAL, record_inference
+        from deployment_pipelin.api.metrics import INFERENCE_TOTAL, record_inference
 
         # Get the current value
         before = INFERENCE_TOTAL.labels(
@@ -108,7 +108,7 @@ class TestMetricsRecording:
 
     def test_record_inference_observes_histogram(self):
         """record_inference should observe the duration histogram."""
-        from deployment_pipeline.api.metrics import INFERENCE_DURATION, record_inference
+        from deployment_pipelin.api.metrics import INFERENCE_DURATION, record_inference
 
         before_count = INFERENCE_DURATION.labels(
             recommendation="YELLOW", evaluation_mode="hypothetical"
@@ -124,7 +124,7 @@ class TestMetricsRecording:
 
     def test_record_guardrail_failure(self):
         """record_guardrail_failure should increment the failure counter."""
-        from deployment_pipeline.api.metrics import GUARDRAIL_FAILURES, record_guardrail_failure
+        from deployment_pipelin.api.metrics import GUARDRAIL_FAILURES, record_guardrail_failure
 
         before = GUARDRAIL_FAILURES._value.get()
         record_guardrail_failure()
@@ -134,7 +134,7 @@ class TestMetricsRecording:
 
     def test_record_layer2_downgrade(self):
         """record_layer2_downgrade should increment with correct labels."""
-        from deployment_pipeline.api.metrics import LAYER2_DOWNGRADES, record_layer2_downgrade
+        from deployment_pipelin.api.metrics import LAYER2_DOWNGRADES, record_layer2_downgrade
 
         before = LAYER2_DOWNGRADES.labels(
             from_color="GREEN", to_color="YELLOW"
@@ -150,7 +150,7 @@ class TestMetricsRecording:
 
     def test_observe_ml_confidence(self):
         """observe_ml_confidence should record to the histogram."""
-        from deployment_pipeline.api.metrics import ML_CONFIDENCE, observe_ml_confidence
+        from deployment_pipelin.api.metrics import ML_CONFIDENCE, observe_ml_confidence
 
         before_count = ML_CONFIDENCE._sum.get()
         observe_ml_confidence(0.87)
@@ -160,7 +160,7 @@ class TestMetricsRecording:
 
     def test_record_inference_all_colors(self):
         """All three recommendation colors should be recordable."""
-        from deployment_pipeline.api.metrics import INFERENCE_TOTAL, record_inference
+        from deployment_pipelin.api.metrics import INFERENCE_TOTAL, record_inference
 
         for color in ["GREEN", "YELLOW", "RED"]:
             record_inference(color=color, evaluation_mode="catalog", latency=0.1)
@@ -175,12 +175,12 @@ class TestMetricsDisabled:
 
     def test_record_inference_noop_when_disabled(self):
         """When METRICS_ENABLED=false, recording helpers should be no-ops."""
-        from deployment_pipeline.api.metrics import INFERENCE_TOTAL
+        from deployment_pipelin.api.metrics import INFERENCE_TOTAL
 
         with patch("deployment_pipeline.api.metrics.APIConfig") as mock_config:
             mock_config.METRICS_ENABLED = False
 
-            from deployment_pipeline.api.metrics import record_inference
+            from deployment_pipelin.api.metrics import record_inference
 
             before = INFERENCE_TOTAL.labels(
                 recommendation="RED", evaluation_mode="catalog"

@@ -18,8 +18,8 @@ from typing import Any
 import pandas as pd
 from sqlalchemy import text
 
-from deployment_pipeline.api.config import APIConfig
-from deployment_pipeline.api.model_loader import _ensure_import_paths
+from deployment_pipelin.api.config import APIConfig
+from deployment_pipelin.api.model_loader import _ensure_import_paths
 
 _ensure_import_paths()
 
@@ -40,14 +40,14 @@ from features.product_features import (
 from features.review_features import ReviewFeatures, compute_review_features
 from deterministic_engine.downgrade_engine import DowngradeEngine
 
-from deployment_pipeline.api.metrics import (
+from deployment_pipelin.api.metrics import (
     record_inference,
     record_guardrail_failure,
     record_layer2_downgrade,
     observe_ml_confidence,
     observe_llm_latency,
 )
-from deployment_pipeline.api.schemas import (
+from deployment_pipelin.api.schemas import (
     FinancialFeaturesView,
     PredictRequest,
     PredictResponse,

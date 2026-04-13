@@ -19,7 +19,7 @@ The system provides Green/Yellow/Red light recommendations before users complete
 | Frontend UI | Live | React / Vite / Tailwind | [https://savvio-ai-ebw2ryzjkq-ue.a.run.app](https://savvio-ai-ebw2ryzjkq-ue.a.run.app) |
 | Inference API | Live | FastAPI / uvicorn | [https://savvio-backend-api-ebw2ryzjkq-ue.a.run.app](https://savvio-backend-api-ebw2ryzjkq-ue.a.run.app) |
 | Model Registry | Live | MLflow / GCS | [https://savvio-ai-mlflow-ebw2ryzjkq-ue.a.run.app](https://savvio-ai-mlflow-ebw2ryzjkq-ue.a.run.app) |
-| Data Pipelines | Active | Airflow / Postgres | [http://35.237.143.189:8080](http://35.237.143.189:8080) |
+| Data Pipelines | Active | Airflow / Postgres | [http://34.26.252.164:8080](http://34.26.252.164:8080/) |
 | Observability | Healthy | Grafana Cloud | [SavVio Monitoring Dashboard](https://nirajmehta2410.grafana.net/d/savvio-monitoring-v1/savvio-e28094-api-and-inference-monitoring) |
 
 ---

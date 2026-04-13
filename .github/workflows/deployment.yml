@@ -363,8 +363,8 @@ jobs:
           command_timeout: 10m
           script: |
             cd /home/github-actions/savvio-monitoring
-            docker compose pull
-            docker compose up -d --remove-orphans
+            docker compose -f docker-compose.production.yml pull
+            docker compose -f docker-compose.production.yml up -d --remove-orphans
 
   # ---------------------------------------------------------------------------
   # Notifications (covers all jobs)

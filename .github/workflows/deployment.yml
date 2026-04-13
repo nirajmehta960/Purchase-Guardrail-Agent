@@ -4,12 +4,12 @@ on:
   push:
     branches: [main]
     paths:
-      - "deployment/api/**"
-      - "deployment/frontend/src/**"
-      - "deployment/frontend/package.json"
-      - "deployment/mlflow/**"
-      - "deployment/requirements.txt"
-      - "deployment/__init__.py"
+      - "deployment_pipeline/api/**"
+      - "deployment_pipeline/frontend/src/**"
+      - "deployment_pipeline/frontend/package.json"
+      - "deployment_pipeline/mlflow/**"
+      - "deployment_pipeline/requirements.txt"
+      - "deployment_pipeline/__init__.py"
       - "savviocore/**"
       - "model_pipeline/src/**"
       - "model_pipeline/models/model/**"
@@ -43,20 +43,20 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-deployment-${{ hashFiles('deployment/requirements.txt') }}
+          key: ${{ runner.os }}-pip-deployment-${{ hashFiles('deployment_pipeline/requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-deployment-
 
       - name: Install dependencies
         run: |
           pip install -e savviocore
-          pip install -r deployment/requirements.txt
+          pip install -r deployment_pipeline/requirements.txt
           pip install pytest httpx
 
       - name: Run tests
         env:
           PYTHONPATH: "${{ github.workspace }}/model_pipeline/src:${{ github.workspace }}/savviocore/src:${{ github.workspace }}"
-        run: python -m pytest deployment/tests/ -v --tb=short
+        run: python -m pytest deployment_pipeline/tests/ -v --tb=short
 
   test-frontend:
     name: Frontend Tests
@@ -71,15 +71,15 @@ jobs:
           bun-version: latest
 
       - name: Install dependencies
-        working-directory: deployment/frontend
+        working-directory: deployment_pipeline/frontend
         run: bun install --frozen-lockfile
 
       - name: Lint
-        working-directory: deployment/frontend
+        working-directory: deployment_pipeline/frontend
         run: bun run lint
 
       - name: Run tests
-        working-directory: deployment/frontend
+        working-directory: deployment_pipeline/frontend
         run: bun run test
 
   # Artifact Build & Registry Push
@@ -109,7 +109,7 @@ jobs:
         run: |
           docker buildx build \
             --platform linux/amd64 \
-            -f deployment/api/Dockerfile \
+            -f deployment_pipeline/api/Dockerfile \
             -t $IMAGE:${{ github.sha }} \
             -t $IMAGE:latest \
             --push .
@@ -139,10 +139,10 @@ jobs:
         run: |
           docker buildx build \
             --platform linux/amd64 \
-            -f deployment/mlflow/Dockerfile \
+            -f deployment_pipeline/mlflow/Dockerfile \
             -t $IMAGE:${{ github.sha }} \
             -t $IMAGE:latest \
-            --push deployment/mlflow/
+            --push deployment_pipeline/mlflow/
 
   build-push-frontend:
     name: Build & Push Frontend
@@ -170,11 +170,11 @@ jobs:
         run: |
           docker buildx build \
             --platform linux/amd64 \
-            -f deployment/frontend/Dockerfile \
+            -f deployment_pipeline/frontend/Dockerfile \
             --build-arg VITE_API_BASE=${{ secrets.API_URL_DEV }} \
             -t $IMAGE:${{ github.sha }} \
             -t $IMAGE:latest \
-            --push deployment/frontend/
+            --push deployment_pipeline/frontend/
 
   # Production Deployment
   deploy:
@@ -287,16 +287,16 @@ jobs:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          PYTHONPATH: "${{ github.workspace }}/deployment/monitoring/drift:${{ github.workspace }}/savviocore/src:${{ github.workspace }}"
+          PYTHONPATH: "${{ github.workspace }}/deployment_pipeline/monitoring/drift:${{ github.workspace }}/savviocore/src:${{ github.workspace }}"
         run: |
-          python deployment/monitoring/drift/drift_detector.py
+          python deployment_pipeline/monitoring/drift/drift_detector.py
 
       - name: Upload drift report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: drift-report-${{ github.run_id }}
-          path: deployment/monitoring/reports/
+          path: deployment_pipeline/monitoring/reports/
           retention-days: 30
 
   # Observability Pipeline (Prometheus GCE SSH hook)
@@ -330,7 +330,7 @@ jobs:
           GRAFANA_CLOUD_API_KEY: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
         run: |
           mkdir -p monitoring
-          envsubst < deployment/monitoring/prometheus/prometheus.production.yml \
+          envsubst < deployment_pipeline/monitoring/prometheus/prometheus.production.yml \
             > monitoring/prometheus.yml
 
       - name: Copy Prometheus config to VM
@@ -349,7 +349,7 @@ jobs:
           host: ${{ secrets.GCE_VM_IP }}
           username: github-actions
           key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
-          source: "deployment/monitoring/docker-compose.production.yml"
+          source: "deployment_pipeline/monitoring/docker-compose.production.yml"
           target: "/home/github-actions/savvio-monitoring/"
           strip_components: 2
 

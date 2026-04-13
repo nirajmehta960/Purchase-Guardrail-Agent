@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import Depends, HTTPException
 
-from deployment.api.model_loader import ModelManager, model_manager
+from deployment_pipeline.api.model_loader import ModelManager, model_manager
 
 
 def get_model_manager() -> ModelManager:

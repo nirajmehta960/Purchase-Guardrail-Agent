@@ -55,7 +55,7 @@ If no LLM key is set, the API starts with a **mock provider** (template-based re
 The `run.sh` script can start both services in one terminal:
 
 ```bash
-./deployment/run.sh
+./deployment_pipeline/run.sh
 ```
 
 This starts the backend (port 3500) and frontend (port 3000) as background processes. `Ctrl+C` stops both.
@@ -73,7 +73,7 @@ cd model_pipeline
 python -m venv .venv
 source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r model-requirements.txt
-pip install -r ../deployment/requirements.txt
+pip install -r ../deployment_pipeline/requirements.txt
 cd ..
 ```
 
@@ -85,11 +85,11 @@ The API loads the trained model from `model_pipeline/models/artifacts/`. If you 
 
 ```bash
 # Option A: Using the run script
-./deployment/run.sh api
+./deployment_pipeline/run.sh api
 
 # Option B: Manual
 export PYTHONPATH="model_pipeline/src:savviocore/src:."
-uvicorn deployment.api.main:app --host 0.0.0.0 --port 3500 --reload
+uvicorn deployment_pipeline.api.main:app --host 0.0.0.0 --port 3500 --reload
 ```
 
 Expected startup output:
@@ -124,7 +124,7 @@ curl -s -X POST http://localhost:3500/predict \
 ## Manual Frontend Setup
 
 ```bash
-cd deployment/frontend
+cd deployment_pipeline/frontend
 npm install
 ```
 
@@ -132,10 +132,10 @@ npm install
 
 ```bash
 # Option A: Using the run script (from project root)
-./deployment/run.sh frontend
+./deployment_pipeline/run.sh frontend
 
 # Option B: Manual
-cd deployment/frontend
+cd deployment_pipeline/frontend
 npm run dev
 ```
 
@@ -150,13 +150,13 @@ The app will be available at **http://localhost:3000**. API requests to `/api/*`
 ```bash
 source model_pipeline/.venv/bin/activate
 export PYTHONPATH="model_pipeline/src:savviocore/src:."
-python -m pytest deployment/tests/ -v --tb=short
+python -m pytest deployment_pipeline/tests/ -v --tb=short
 ```
 
 ### Frontend tests
 
 ```bash
-cd deployment/frontend
+cd deployment_pipeline/frontend
 
 # Unit tests (Vitest)
 npm run test

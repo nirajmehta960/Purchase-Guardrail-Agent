@@ -17,7 +17,7 @@ If you don't already have the dependencies installed:
 # From project root
 source model_pipeline/.venv/bin/activate
 pip install -r model_pipeline/model-requirements.txt
-pip install -r deployment/requirements.txt
+pip install -r deployment_pipeline/requirements.txt
 ```
 
 ---
@@ -110,27 +110,27 @@ app.dependency_overrides[get_model_manager] = lambda: mock_manager
 
 ### Catalog browse, reviews, and hypothetical mode
 
-- **`GET /products`** — Lists rows from `products` for catalog selection in the UI. Supports `q` (substring on `product_name`), `price_min`, `price_max`, `limit` (default from `PRODUCT_BROWSE_DEFAULT_LIMIT`), and `offset`. If `price_min` / `price_max` are omitted, the API uses **`PRODUCT_BROWSE_PRICE_MIN`** and **`PRODUCT_BROWSE_PRICE_MAX`** from the environment (see `deployment/api/config.py`).
+- **`GET /products`** — Lists rows from `products` for catalog selection in the UI. Supports `q` (substring on `product_name`), `price_min`, `price_max`, `limit` (default from `PRODUCT_BROWSE_DEFAULT_LIMIT`), and `offset`. If `price_min` / `price_max` are omitted, the API uses **`PRODUCT_BROWSE_PRICE_MIN`** and **`PRODUCT_BROWSE_PRICE_MAX`** from the environment (see `deployment_pipeline/api/config.py`).
 - **Product reviews and Layer 2 (downgrade engine)** load only when inference has a resolved **`product_id`** that exists in `products` (e.g. `POST /predict` with `product_id`, or a successful catalog match from natural language). If there is **no** catalog match and the engine uses **stated price only** (`evaluation_mode: hypothetical`), review-derived features are not applied for that request.
 
 ---
 
 ## 3. Running the API Locally
 
-Run Uvicorn from the **SavVio repository root** (the folder that contains `deployment/`, `model_pipeline/`, and `savviocore/`). The inference layer imports packages from `model_pipeline/src` and `savviocore/src`, so you must set `PYTHONPATH`:
+Run Uvicorn from the **SavVio repository root** (the folder that contains `deployment_pipeline/`, `model_pipeline/`, and `savviocore/`). The inference layer imports packages from `model_pipeline/src` and `savviocore/src`, so you must set `PYTHONPATH`:
 
 ```bash
 cd /path/to/SavVio
 
 # Option A: run script (handles PYTHONPATH automatically)
-./deployment/run.sh api
+./deployment_pipeline/run.sh api
 
 # Option B: manual
 export PYTHONPATH="model_pipeline/src:savviocore/src:."
-uvicorn deployment.api.main:app --host 0.0.0.0 --port 3500 --reload
+uvicorn deployment_pipeline.api.main:app --host 0.0.0.0 --port 3500 --reload
 ```
 
-If you run from another directory (for example only `model_pipeline/src`) without this `PYTHONPATH`, you will get `ModuleNotFoundError: No module named 'deployment'` or import errors for `llm` / `savviocore`.
+If you run from another directory (for example only `model_pipeline/src`) without this `PYTHONPATH`, you will get `ModuleNotFoundError: No module named 'deployment_pipeline'` or import errors for `llm` / `savviocore`.
 
 **Note:** `model_pipeline/src/data/db_loader.py` is used only by the **training pipeline** (`run_pipeline.py`), not by this API. Changing or reverting it does not start or stop the backend.
 
@@ -221,7 +221,7 @@ app.dependency_overrides[get_model_manager] = lambda: mock_manager
 
 ```bash
 # Run tests from the project root
-python -m pytest deployment/tests/ -v --tb=short
+python -m pytest deployment_pipeline/tests/ -v --tb=short
 ```
 
 ---

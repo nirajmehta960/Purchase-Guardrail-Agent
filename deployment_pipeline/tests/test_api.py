@@ -78,8 +78,8 @@ class TestPredictEndpoint:
         self, test_client, green_user_profile, sample_product,
     ):
         """Valid request -> response has all required fields."""
-        with patch("deployment.api.main.run_inference") as mock_run:
-            from deployment.api.schemas import PredictResponse
+        with patch("deployment_pipeline.api.main.run_inference") as mock_run:
+            from deployment_pipeline.api.schemas import PredictResponse
             mock_run.return_value = PredictResponse(
                 recommendation="GREEN",
                 confidence=0.92,
@@ -101,8 +101,8 @@ class TestPredictEndpoint:
 
     def test_predict_recommendation_is_valid_color(self, test_client):
         """Recommendation must be GREEN, YELLOW, or RED."""
-        with patch("deployment.api.main.run_inference") as mock_run:
-            from deployment.api.schemas import PredictResponse
+        with patch("deployment_pipeline.api.main.run_inference") as mock_run:
+            from deployment_pipeline.api.schemas import PredictResponse
             for color in ["GREEN", "YELLOW", "RED"]:
                 mock_run.return_value = PredictResponse(
                     recommendation=color,
@@ -118,8 +118,8 @@ class TestPredictEndpoint:
 
     def test_predict_confidence_in_range(self, test_client):
         """Confidence score must be between 0 and 1."""
-        with patch("deployment.api.main.run_inference") as mock_run:
-            from deployment.api.schemas import PredictResponse
+        with patch("deployment_pipeline.api.main.run_inference") as mock_run:
+            from deployment_pipeline.api.schemas import PredictResponse
             mock_run.return_value = PredictResponse(
                 recommendation="GREEN",
                 confidence=0.87,
@@ -143,8 +143,8 @@ class TestEvaluateEndpoint:
 
     def test_evaluate_returns_valid_response(self, test_client):
         """Valid request with product_id -> 200."""
-        with patch("deployment.api.main.run_inference") as mock_run:
-            from deployment.api.schemas import PredictResponse
+        with patch("deployment_pipeline.api.main.run_inference") as mock_run:
+            from deployment_pipeline.api.schemas import PredictResponse
             mock_run.return_value = PredictResponse(
                 recommendation="GREEN",
                 confidence=0.90,

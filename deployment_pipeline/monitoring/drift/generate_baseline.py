@@ -5,7 +5,7 @@ Reads the training dataset, extracts monitored feature columns, and uploads
 the baseline to GCS. Run once after initial setup or whenever the model is
 retrained on new data:
 
-    python deployment/monitoring/drift/generate_baseline.py
+    python deployment_pipeline/monitoring/drift/generate_baseline.py
 
 GCS destination: gs://savvio-dev-mlflow-artifacts/monitoring/baseline_data.csv
 """

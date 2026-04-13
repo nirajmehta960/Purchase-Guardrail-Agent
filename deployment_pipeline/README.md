@@ -123,7 +123,7 @@ GCP Cloud Run  (live endpoint)
 ## 3. Repository Structure
 
 ```
-├── deployment/
+├── deployment_pipeline/
 │   ├── README.md                          # This file
 │   ├── requirements.txt                   # Python dependencies for inference
 │   ├── infrastructure/
@@ -207,7 +207,7 @@ GCP Cloud Run  (live endpoint)
 Define and initialize all deployment infrastructure using Infrastructure as Code, ensuring reproducible and consistent environment provisioning.
 
 ### Tasks
-- Write Terraform configuration (`deployment/infrastructure/terraform/main.tf`) for:
+- Write Terraform configuration (`deployment_pipeline/infrastructure/terraform/main.tf`) for:
   - **Cloud Run** — serverless container hosting for the inference API
   - **Artifact Registry** — container image storage
   - **IAM roles** — least-privilege service account for Cloud Run to pull images and write logs
@@ -215,7 +215,7 @@ Define and initialize all deployment infrastructure using Infrastructure as Code
 - Write `outputs.tf` to expose Artifact Registry URL and Cloud Run endpoint URL
 - Initialize Terraform:
   ```bash
-  cd deployment/infrastructure/terraform
+  cd deployment_pipeline/infrastructure/terraform
   terraform init
   ```
 - Validate configuration:
@@ -257,7 +257,7 @@ Provision all required cloud resources by applying the Terraform configuration.
   ```bash
   terraform output
   ```
-- Record both URLs in `deployment/config/deployment_config.yaml` for use in later phases
+- Record both URLs in `deployment_pipeline/config/deployment_config.yaml` for use in later phases
 
 ### Tools
 
@@ -275,19 +275,19 @@ Provision all required cloud resources by applying the Terraform configuration.
 Expose the SavVio model pipeline through a production-grade FastAPI REST API. The API acts as an orchestration layer that receives user context and natural language prompts, looks up data from PostgreSQL, and correctly chains the deterministic rules engine, ML model, and LLM generative pipeline to produce an authoritative recommendation.
 
 ### Tasks
-- Build FastAPI application in `deployment/api/main.py`
-- Define Pydantic models in `deployment/api/schemas.py`:
+- Build FastAPI application in `deployment_pipeline/api/main.py`
+- Define Pydantic models in `deployment_pipeline/api/schemas.py`:
   - **Request:** Natural language user prompt and `user_id`, or direct `product_id` for evaluation
   - **Response:** Authoritative recommendation color (Green/Yellow/Red), confidence score, triggered rules, and natural language explanation
-- Implement `deployment/api/model_loader.py` to create a `ModelManager` singleton that persistently loads the XGBoost artifact, PostgreSQL DB engine, Label Encoder, and initialized LLM provider for fast iterative inferencing.
-- Implement inference orchestrator in `deployment/api/inference.py` with the following strict sequence:
+- Implement `deployment_pipeline/api/model_loader.py` to create a `ModelManager` singleton that persistently loads the XGBoost artifact, PostgreSQL DB engine, Label Encoder, and initialized LLM provider for fast iterative inferencing.
+- Implement inference orchestrator in `deployment_pipeline/api/inference.py` with the following strict sequence:
   1. Load the user's financial profile from the `financial_profiles` database table using `user_id`.
   2. Parse intent and resolve the product from the user's natural language using `sentence-transformers` via pgvector similarity search in the `products` table.
   3. Compute user affordability, product risk, and review risk features.
   4. Pass features through the **Deterministic Engine (Layer 1 & Layer 2)** to compute an authoritative Green/Yellow/Red color output and note any downgrades.
   5. Pass features to the **XGBoost ML Model** to get a confidence score (cannot override engine color).
   6. Pass color, score, and context to the **LLM Pipeline** for natural language explanation generation and final verification via guardrails.
-- Add robust exceptions, unit tests in `deployment/tests/` using Pytest, and CORS configuration.
+- Add robust exceptions, unit tests in `deployment_pipeline/tests/` using Pytest, and CORS configuration.
 - Implement `/health` endpoint for liveness checks and tracking loaded resources.
 
 ### Tools
@@ -306,18 +306,18 @@ Expose the SavVio model pipeline through a production-grade FastAPI REST API. Th
 Package the full inference stack — FastAPI app, Deterministic Engine, ML model artifact, and LLM wrapper — into a single deployable Docker container.
 
 ### Tasks
-- Write `deployment/docker/Dockerfile`:
+- Write `deployment_pipeline/docker/Dockerfile`:
   ```dockerfile
   FROM python:3.11-slim
   WORKDIR /app
   COPY requirements.txt .
   RUN pip install -r requirements.txt
-  COPY deployment/ ./deployment/
-  CMD ["uvicorn", "deployment.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+  COPY deployment_pipeline/ ./deployment_pipeline/
+  CMD ["uvicorn", "deployment_pipeline.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
   ```
 - Build container locally:
   ```bash
-  docker build -t savvio-deploy -f deployment/docker/Dockerfile .
+  docker build -t savvio-deploy -f deployment_pipeline/docker/Dockerfile .
   ```
 - Run container locally and verify:
   ```bash
@@ -361,7 +361,7 @@ Push the verified container image to Artifact Registry and deploy it to Cloud Ru
   - Confirm API is live: `curl https://<CLOUD_RUN_URL>/health`
   - Confirm `/predict` returns correct Green/Yellow/Red response with a test prompt
   - Confirm response latency is within acceptable SLA
-- Record the live endpoint URL in `deployment/config/deployment_config.yaml`
+- Record the live endpoint URL in `deployment_pipeline/config/deployment_config.yaml`
 
 ---
 
@@ -373,10 +373,10 @@ Automate the full build → test → deploy pipeline on every code push, with ga
 ### Pipeline Architecture
 
 ```
-GitHub Push / PR on deployment/
+GitHub Push / PR on deployment_pipeline/
         ↓
 GitHub Actions (.github/workflows/deploy.yml) [Dockerized]
-        ├── 1. Unit tests (pytest deployment/tests/)
+        ├── 1. Unit tests (pytest deployment_pipeline/tests/)
         │       └── fail? → BLOCK + alert
         ├── 2. Docker build
         │       └── fail? → BLOCK + alert
@@ -424,7 +424,7 @@ Track live system performance after deployment — capturing latency, request vo
   - Green/Yellow/Red prediction distribution over time
   - LLM hallucination flag rate
   - NeMo safety rail trigger volume
-- Set alert thresholds in `deployment/monitoring/alert_config.yaml`:
+- Set alert thresholds in `deployment_pipeline/monitoring/alert_config.yaml`:
   - Latency breach: response time > 2 seconds (SLA threshold) → alert
   - Prediction distribution shift: Green/Yellow/Red ratio changes significantly → alert
   - Hallucination spike: flag rate exceeds threshold → alert
@@ -445,13 +445,13 @@ Track live system performance after deployment — capturing latency, request vo
 Detect data drift (shifts in input feature distributions) and model drift (shifts in output prediction distributions) to identify when the deployed model may no longer reflect real-world conditions.
 
 ### Tasks
-- Implement drift detection in `deployment/monitoring/drift_detector.py` using Evidently
+- Implement drift detection in `deployment_pipeline/monitoring/drift_detector.py` using Evidently
 - Monitor input feature distributions against training baseline for:
   - Financial signals: `discretionary_income`, `debt_to_income_ratio`, `monthly_expense_burden_ratio`, `emergency_fund_months`, `savings_to_income_ratio`
   - Product signals: `price`, `average_rating`, `rating_number`, `rating_variance`
 - Track output distribution shifts: changes in Green/Yellow/Red recommendation ratio over time
 - Run drift detection on a rolling window (daily or weekly batch)
-- Configure drift severity thresholds in `deployment/monitoring/alert_config.yaml`:
+- Configure drift severity thresholds in `deployment_pipeline/monitoring/alert_config.yaml`:
   - Green: distributions stable → no action
   - Yellow: minor shift detected → alert, monitor closely
   - Red: significant drift detected → alert and log
@@ -504,7 +504,7 @@ Validate the deployed system for correctness, latency, and reliability.
 - Confirm p95 latency is within SLA on live endpoint
 - Run full test suite:
   ```bash
-  pytest deployment/tests/ -v
+  pytest deployment_pipeline/tests/ -v
   ```
 
 ---
@@ -515,7 +515,7 @@ Validate the deployed system for correctness, latency, and reliability.
 Build a live monitoring dashboard to visualize system performance, prediction distribution, and health metrics post-deployment.
 
 ### Tasks
-- Build monitoring dashboard in `deployment/monitoring/dashboard.py`
+- Build monitoring dashboard in `deployment_pipeline/monitoring/dashboard.py`
 - Connect dashboard to Cloud Logging to pull live request and prediction data
 - Display the following metrics on the dashboard:
   - Latency per request (p50, p95, p99) over time
@@ -541,7 +541,7 @@ Build a live monitoring dashboard to visualize system performance, prediction di
 Build a high-performance, premium user interface that surfaces the AI Advocate's recommendations and financial health visualizations.
 
 ### Tasks
-- Build React application in `deployment/frontend` using **Vite**.
+- Build React application in `deployment_pipeline/frontend` using **Vite**.
 - Implement **AI Advocate Hub**:
   - Conversational chat interface for natural language purchase queries.
   - Dynamic theme coloring based on Green/Yellow/Red recommendation status.

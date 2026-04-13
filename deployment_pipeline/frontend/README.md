@@ -57,7 +57,7 @@ A data-rich view showing:
 
 ### Installation
 ```bash
-cd deployment/frontend
+cd deployment_pipeline/frontend
 npm install
 ```
 
@@ -74,7 +74,7 @@ The app will be available at [http://localhost:3000](http://localhost:3000). API
 ---
 
 ## Production Deployment
-The application is containerized using the [Docker/Cloud Run] setup in the `deployment/docker` directory.
+The application is containerized using the [Docker/Cloud Run] setup in the `deployment_pipeline/docker` directory.
 ```bash
 npm run build
 ```

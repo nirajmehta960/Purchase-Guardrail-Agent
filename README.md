@@ -58,7 +58,7 @@ Continuous monitoring ensures the system remains reliable and accurate:
 SavVio/
 ├── data_pipeline/              # Data ingestion and preprocessing
 ├── model_pipeline/             # ML model training and evaluation
-├── deployment/                 # Inference API, Frontend, and Monitoring
+├── deployment_pipeline/                 # Inference API, Frontend, and Monitoring
 │   ├── api/                    # FastAPI service
 │   ├── frontend/               # React web application
 │   ├── monitoring/             # Prometheus and Grafana configuration
@@ -90,7 +90,7 @@ cd SavVio
 
 ### 2. Run Backend API
 ```bash
-cd deployment
+cd deployment_pipeline
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ./run.sh api
@@ -98,7 +98,7 @@ pip install -r requirements.txt
 
 ### 3. Run Frontend
 ```bash
-cd deployment/frontend
+cd deployment_pipeline/frontend
 npm install
 npm run dev
 ```

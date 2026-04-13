@@ -10,7 +10,7 @@ Usage:
     df = collect_df()
 
     # As a script (saves CSV for inspection):
-    python deployment/monitoring/drift/collect_production_data.py
+    python deployment_pipeline/monitoring/drift/collect_production_data.py
 """
 
 import sys
@@ -22,7 +22,7 @@ import yaml
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-_MONITORING  = Path(__file__).parent.parent     # deployment/monitoring/
+_MONITORING  = Path(__file__).parent.parent     # deployment_pipeline/monitoring/
 _CONFIG_PATH = Path(__file__).parent / "alert_config.yaml"
 
 # Add savviocore to path so get_engine is importable

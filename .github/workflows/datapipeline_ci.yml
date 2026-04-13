@@ -2,7 +2,7 @@ name: Data Pipeline CI/CD
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
     paths:
       - 'data_pipeline/**'
       - 'savviocore/**'

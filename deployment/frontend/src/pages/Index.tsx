@@ -16,33 +16,37 @@ const Index = () => {
   const [activeTab, setActiveTab] = useState<TabId>("chat");
 
   return (
-    <div className="min-h-screen bg-background gradient-glow">
+    <div className="h-screen flex flex-col bg-background gradient-glow overflow-hidden">
       {/* Header */}
-      <header className="border-b border-border/50 backdrop-blur-md bg-background/80 sticky top-0 z-50">
-        <div className="container flex items-center min-h-16 py-2 px-4 md:px-6 gap-4">
-          <div className="flex items-center shrink-0">
-            <img src="/savvio-wordmark.svg" alt="SavVio" className="h-8 w-auto" />
-          </div>
+      <header className="shrink-0 border-b border-border/50 backdrop-blur-md bg-background/80 z-50">
+        <div className="container flex items-center min-h-20 py-3 px-4 md:px-6 gap-4">
+          <button 
+            onClick={() => setActiveTab("chat")}
+            className="flex items-center shrink-0 hover:opacity-90 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-lg"
+            aria-label="Return to AI Advisor"
+          >
+            <img src="/savvio-logo.png" alt="SavVio" className="h-[4.5rem] md:h-[5.5rem] w-auto drop-shadow-md" />
+          </button>
 
           <div className="flex items-center gap-4 flex-1 justify-center min-w-0">
             <UserIdInput />
           </div>
 
-          <nav className="flex items-center gap-1 bg-secondary/50 rounded-lg p-1 shrink-0">
+          <nav className="flex items-center gap-2 bg-secondary/50 rounded-xl p-1.5 shrink-0">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`relative flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                className={`relative flex items-center gap-2 px-5 py-2.5 text-base font-semibold rounded-lg transition-colors ${
                   activeTab === tab.id
                     ? "text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:bg-secondary/40"
                 }`}
               >
                 {activeTab === tab.id && (
                   <motion.div
                     layoutId="activeTab"
-                    className="absolute inset-0 bg-primary rounded-md"
+                    className="absolute inset-0 bg-primary rounded-lg"
                     transition={{ type: "spring", duration: 0.4, bounce: 0.15 }}
                   />
                 )}
@@ -57,10 +61,11 @@ const Index = () => {
       </header>
 
       {/* Content */}
-      <main className="container px-4 md:px-6 py-6">
+      <main className="container flex-1 min-h-0 px-4 md:px-6 py-6 pb-0">
         <AnimatePresence mode="wait">
           <motion.div
             key={activeTab}
+            className="h-full"
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -12 }}

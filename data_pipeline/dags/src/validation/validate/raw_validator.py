@@ -8,14 +8,7 @@ import logging
 import sys
 import os
 import pandas as pd
-import great_expectations
-import great_expectations as gx
 from pathlib import Path
-
-try:
-    from great_expectations.dataset import PandasDataset
-except ImportError:
-    from great_expectations.dataset.pandas_dataset import PandasDataset
 
 # Resolve local imports from the validation package.
 current_file_path = Path(__file__).resolve()
@@ -45,12 +38,14 @@ logger = logging.getLogger(__name__)
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _load_csv(path: str) -> PandasDataset:
+def _load_csv(path: str):
+    import great_expectations as gx
     df = pd.read_csv(path)
     return gx.from_pandas(df)
 
 
-def _load_jsonl(path: str) -> PandasDataset:
+def _load_jsonl(path: str):
+    import great_expectations as gx
     # df = pd.read_json(path, lines=True)
     file_size_mb = os.path.getsize(path) / (1024 * 1024)
     if file_size_mb > 300:

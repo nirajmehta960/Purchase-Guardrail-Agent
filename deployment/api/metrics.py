@@ -202,3 +202,24 @@ def track_active_request():
 def release_active_request():
     """Decrement the active request gauge."""
     ACTIVE_REQUESTS.dec()
+
+
+# ---------------------------------------------------------------------------
+# Pre-initialize labeled metrics so time series exist from the first scrape.
+# Without this, labeled counters/histograms only appear in Prometheus after
+# the first request with those label values — causing "No data" in Grafana
+# after every container restart (deployment).
+# ---------------------------------------------------------------------------
+
+_COLORS = ["GREEN", "YELLOW", "RED"]
+_EVAL_MODES = ["catalog", "hypothetical", "none"]
+
+for _color in _COLORS:
+    for _mode in _EVAL_MODES:
+        INFERENCE_TOTAL.labels(recommendation=_color, evaluation_mode=_mode)
+        INFERENCE_DURATION.labels(recommendation=_color, evaluation_mode=_mode)
+
+for _from_color in _COLORS:
+    for _to_color in _COLORS:
+        if _from_color != _to_color:
+            LAYER2_DOWNGRADES.labels(from_color=_from_color, to_color=_to_color)

@@ -97,7 +97,9 @@ setup_metrics(app)
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     """HTTP request logging with latency tracking."""
-    track_active_request()
+    is_metrics_scrape = request.url.path == "/metrics"
+    if not is_metrics_scrape:
+        track_active_request()
     start = time.time()
     try:
         response = await call_next(request)
@@ -109,7 +111,8 @@ async def log_requests(request: Request, call_next):
         )
         return response
     finally:
-        release_active_request()
+        if not is_metrics_scrape:
+            release_active_request()
 
 
 # ---------------------------------------------------------------------------

@@ -206,7 +206,7 @@
       "type": "stat",
       "targets": [
         {
-          "expr": "rate(savvio_guardrail_failures_total[5m]) / (rate(savvio_inference_total[5m]) > 0)",
+          "expr": "rate(savvio_guardrail_failures_total[5m]) / (sum(rate(savvio_inference_total[5m])) > 0)",
           "legendFormat": "Guardrail Failure %",
           "refId": "A"
         }
@@ -353,10 +353,9 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "rate(savvio_inference_duration_seconds_bucket[5m])",
-          "legendFormat": "{{le}}s",
-          "refId": "A",
-          "format": "heatmap"
+          "expr": "sum(rate(savvio_inference_duration_seconds_bucket[5m])) by (le)",
+          "legendFormat": "≤{{le}}s",
+          "refId": "A"
         }
       ]
     },
@@ -425,7 +424,7 @@
             "fillOpacity": 60,
             "lineWidth": 0
           },
-          "unit": "percentunit"
+          "unit": "short"
         }
       },
       "gridPos": {
@@ -439,10 +438,9 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "rate(savvio_ml_confidence_bucket[5m])",
+          "expr": "sum(rate(savvio_ml_confidence_bucket[5m])) by (le)",
           "legendFormat": "≤{{le}}",
-          "refId": "A",
-          "format": "heatmap"
+          "refId": "A"
         }
       ]
     },

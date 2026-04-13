@@ -85,6 +85,22 @@ module "db_password_secret" {
   depends_on                     = [google_project_service.apis]
 }
 
+module "open_router_secret" {
+  source                         = "../../modules/secrets"
+  secret_id                      = "${local.prefix}-open-router-api-key"
+  secret_data                    = var.open_router_api_key
+  accessor_service_account_email = google_service_account.cloud_run.email
+  depends_on                     = [google_project_service.apis]
+}
+
+module "grafana_api_key_secret" {
+  source                         = "../../modules/secrets"
+  secret_id                      = "${local.prefix}-grafana-api-key"
+  secret_data                    = var.grafana_api_key != "" ? var.grafana_api_key : "not-configured"
+  accessor_service_account_email = google_service_account.cloud_run.email
+  depends_on                     = [google_project_service.apis]
+}
+
 # ---- Storage ----
 module "dvc_bucket" {
   source        = "../../modules/storage"
@@ -191,17 +207,25 @@ module "api" {
   labels                = local.labels
 
   env_vars = {
-    ENVIRONMENT              = var.environment
-    DB_USER                  = module.database.user_name
-    DB_NAME                  = module.database.database_name
-    INSTANCE_CONNECTION_NAME = module.database.connection_name
-    MLFLOW_TRACKING_URI      = module.mlflow.service_url
+    ENVIRONMENT                    = var.environment
+    DB_ENV                         = "prod"
+    DB_USER                        = module.database.user_name
+    DB_NAME                        = module.database.database_name
+    DB_HOST                        = "/cloudsql/${module.database.connection_name}"
+    INSTANCE_CONNECTION_NAME       = module.database.connection_name
+    MLFLOW_TRACKING_URI            = module.mlflow.service_url
+    LLM_PROVIDER                   = "openrouter"
+    METRICS_ENABLED                = "true"
+    GRAFANA_CLOUD_REMOTE_WRITE_URL = var.grafana_remote_write_url
+    GRAFANA_CLOUD_USERNAME         = var.grafana_cloud_username
   }
   secret_env_vars = {
-    DB_PASS = { secret_id = module.db_password_secret.secret_id, version = "latest" }
+    DB_PASS               = { secret_id = module.db_password_secret.secret_id, version = "latest" }
+    OPEN_ROUTER_API_KEY   = { secret_id = module.open_router_secret.secret_id, version = "latest" }
+    GRAFANA_CLOUD_API_KEY = { secret_id = module.grafana_api_key_secret.secret_id, version = "latest" }
   }
 
-  depends_on = [google_project_service.apis, module.db_password_secret, module.mlflow]
+  depends_on = [google_project_service.apis, module.db_password_secret, module.open_router_secret, module.grafana_api_key_secret, module.mlflow]
 }
 
 # ---- Cloud Run: Frontend ----

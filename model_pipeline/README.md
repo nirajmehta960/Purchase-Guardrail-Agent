@@ -50,7 +50,7 @@ SavVio/
     │       ├── product_resolver.py     # pgvector similarity search for product resolution
     │       ├── response_generator.py   # Role 2: conversational recommendation generation
     │       ├── guardrails.py           # Output safety verification (6 code-level checks)
-    │       ├── prompt_engin.py         # Legacy interface (backward compatible facade)
+    │       ├── prompt_engine.py         # Legacy interface (backward compatible facade)
     │       └── prompts/
     │           ├── system_prompt.py     # SavVio persona + critical response rules (v1.0)
     │           ├── intent_prompt.py     # Intent extraction prompt template (v1.0)
@@ -812,7 +812,7 @@ SavVio uses **OpenRouter** as its primary production hub, providing access to `g
 - [x] Design intent extraction prompt template
 - [x] Create GREEN/YELLOW/RED response templates with rule explanations
 - [x] Version-control all prompt templates (v1.0)
-- [x] Preserve backward compatibility via `prompt_engin.py` facade
+- [x] Preserve backward compatibility via `prompt_engine.py` facade
 - [x] Verify with Gemini API (12/12 checks passed)
 - [x] Write unit tests (77 tests, all passing)
 - [ ] Integrate NeMo Guardrails (deferred to deployment phase)

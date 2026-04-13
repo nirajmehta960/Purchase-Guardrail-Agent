@@ -126,31 +126,36 @@ GCP Cloud Run  (live endpoint)
 ├── deployment/
 │   ├── README.md                          # This file
 │   ├── requirements.txt                   # Python dependencies for inference
-│   ├── infrastructure/
-│   │   └── terraform/                     # Cloud Run + AR + IAM
 │   ├── api/
-│   │   ├── main.py                        # FastAPI app (Port 3500)
-│   │   ├── inference.py                   # Model pipeline orchestration
-│   │   └── products_catalog.py            # Static product metadata
+│   │   ├── Dockerfile                     # API container image
+│   │   ├── main.py                        # FastAPI app (Port 8080 in container, 3500 local)
+│   │   ├── config.py                      # Centralized API configuration (reads env vars)
+│   │   └── routes/                        # Endpoint handlers (predict, health, products)
 │   ├── frontend/                          # Production React/Vite App
+│   │   ├── Dockerfile                     # Multi-stage build (Node → nginx)
 │   │   ├── src/                           # Components (AiChat, Dashboard)
-│   │   ├── vite.config.ts                 # Proxy settings for /api
-│   │   └── README.md                      # Frontend-specific docs
-│   ├── docker/
-│   │   └── Dockerfile                     # Multi-stage production build
+│   │   └── vite.config.ts                 # Proxy settings for /api
+│   ├── mlflow/
+│   │   ├── Dockerfile                     # MLflow tracking server container
+│   │   └── entrypoint.sh                  # Startup script
+│   ├── monitoring/
+│   │   ├── prometheus/                    # Prometheus scrape configs (dev + production)
+│   │   ├── drift/                         # Evidently AI drift detector
+│   │   └── docker-compose.production.yml  # Prometheus + Grafana on GCE VM
+│   ├── terraform/
+│   │   ├── environments/dev/              # Dev Cloud Run + SQL + Artifact Registry
+│   │   ├── environments/prod/             # Prod Cloud Run + SQL + Artifact Registry
+│   │   └── modules/                       # Reusable Cloud Run, SQL, Secrets modules
 │   └── tests/
-│       ├── test_api.py                    # Endpoint validation
-│       └── test_inference.py              # Pipeline orchestration tests
+│       └── test_api.py                    # Endpoint validation (pytest)
 │
 ├── .github/
 │   └── workflows/
-│       └── deploy.yml                     # GitHub Actions deployment pipeline
+│       ├── deployment.yml                 # Build → test → Cloud Run deploy pipeline
+│       └── terraform.yml                  # Infrastructure provisioning pipeline
 │
-├── infrastructure/
-│   └── terraform/                         # (Shared infra configs if applicable)
-│
-└── model-development/                     # Upstream phase — model artifacts live here
-    └── models/                            # Local staging (registry is source of truth)
+└── model_pipeline/
+    └── models/model/                      # Trained model artifact (copied into API image)
 ```
 
 ---
@@ -189,7 +194,7 @@ GCP Cloud Run  (live endpoint)
 |---|---|---|---|
 | Infra Setup | Terraform, GCP | Pulumi | Infra must provision successfully |
 | Resource Provisioning | Terraform | — | Resources verified in GCP |
-| API & Inference | FastAPI, NeMo | Flask | Endpoint response valid |
+| API & Inference | FastAPI, OpenRouter | Flask | Endpoint response valid |
 | Containerization | Docker | Podman | Build success |
 | Resource Deployment | Cloud Run | Kubernetes (GKE) | Endpoint live check |
 | CI/CD | GitHub Actions | Cloud Build, Jenkins | Full pipeline must pass |
@@ -306,28 +311,28 @@ Expose the SavVio model pipeline through a production-grade FastAPI REST API. Th
 Package the full inference stack — FastAPI app, Deterministic Engine, ML model artifact, and LLM wrapper — into a single deployable Docker container.
 
 ### Tasks
-- Write `deployment/docker/Dockerfile`:
+- The Dockerfile lives at `deployment/api/Dockerfile` (built from repo root context):
   ```dockerfile
   FROM python:3.11-slim
-  WORKDIR /app
-  COPY requirements.txt .
-  RUN pip install -r requirements.txt
-  COPY deployment/ ./deployment/
-  CMD ["uvicorn", "deployment.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+  ENV API_HOST="0.0.0.0"
+  ENV API_PORT="8080"
+  CMD ["uvicorn", "deployment.api.main:app", "--host", "0.0.0.0", "--port", "8080"]
   ```
-- Build container locally:
+- Build and run the full stack locally with docker-compose (from repo root):
   ```bash
-  docker build -t savvio-deploy -f deployment/docker/Dockerfile .
+  cp .env.example .env   # fill in DB_USER, DB_PASSWORD, DB_NAME, OPEN_ROUTER_API_KEY
+  docker compose up --build
   ```
-- Run container locally and verify:
+- Or build the API image standalone:
   ```bash
-  docker run -p 8000:8000 savvio-deploy
+  docker build -t savvio-api -f deployment/api/Dockerfile .
+  docker run -p 8080:8080 --env-file .env savvio-api
   ```
-- Test `/health` endpoint: `curl http://localhost:8000/health`
+- Test `/health` endpoint: `curl http://localhost:8080/health`
 - Test `/predict` endpoint with a natural language prompt — confirm Green/Yellow/Red response is returned
 - Confirm response correctness — returned color must match deterministic engine output for the extracted signals
 - Confirm response latency is within acceptable SLA locally before pushing
-- Ensure all environment variables are configurable via `.env` file
+- All environment variables are configured via `.env` (local) or Cloud Run env vars / Secret Manager (prod)
 
 ### Tools
 
@@ -344,24 +349,26 @@ Package the full inference stack — FastAPI app, Deterministic Engine, ML model
 Push the verified container image to Artifact Registry and deploy it to Cloud Run to expose the live `/predict` endpoint.
 
 ### Tasks
-- Tag and push image to Artifact Registry:
+- Deployment is fully automated via `deployment.yml` GitHub Actions workflow on push to `main`
+- To deploy manually:
   ```bash
-  docker tag savvio-deploy gcr.io/<PROJECT_ID>/savvio-deploy:latest
-  docker push gcr.io/<PROJECT_ID>/savvio-deploy:latest
-  ```
-- Deploy to Cloud Run:
-  ```bash
-  gcloud run deploy savvio-deploy \
-    --image gcr.io/<PROJECT_ID>/savvio-deploy:latest \
-    --platform managed \
-    --region us-central1 \
-    --allow-unauthenticated
+  REGION=us-east1
+  PROJECT_ID=savvio-purchase-guardrail
+  IMAGE=$REGION-docker.pkg.dev/$PROJECT_ID/savvio-dev-docker-repo/savvio-api
+
+  docker build -t $IMAGE:latest -f deployment/api/Dockerfile .
+  docker push $IMAGE:latest
+
+  gcloud run deploy savvio-backend-api \
+    --image $IMAGE:latest \
+    --region $REGION \
+    --platform managed
   ```
 - Verify deployment:
   - Confirm API is live: `curl https://<CLOUD_RUN_URL>/health`
   - Confirm `/predict` returns correct Green/Yellow/Red response with a test prompt
   - Confirm response latency is within acceptable SLA
-- Record the live endpoint URL in `deployment/config/deployment_config.yaml`
+- Live URLs: see root README for current Cloud Run endpoints
 
 ---
 
@@ -373,31 +380,46 @@ Automate the full build → test → deploy pipeline on every code push, with ga
 ### Pipeline Architecture
 
 ```
-GitHub Push / PR on deployment/
+GitHub Push to main (deployment/api/**, model_pipeline/src/**, savviocore/**)
         ↓
-GitHub Actions (.github/workflows/deploy.yml) [Dockerized]
-        ├── 1. Unit tests (pytest deployment/tests/)
-        │       └── fail? → BLOCK + alert
-        ├── 2. Docker build
-        │       └── fail? → BLOCK + alert
-        ├── 3. Endpoint response validation (local container smoke test)
-        │       └── fail? → BLOCK + alert
-        ├── 4. Push image to Artifact Registry
-        ├── 5. Deploy to Cloud Run
-        ├── 6. Live endpoint check (/health + /predict with test prompt)
-        │       └── fail? → BLOCK + rollback + alert
-        ├── 7. Latency check (response time within SLA threshold)
-        │       └── breach? → alert
-        └── 8. Slack/email notification on success or failure
+GitHub Actions (.github/workflows/deployment.yml)
+        ├── 1. API unit tests (pytest deployment/tests/)
+        │       └── fail? → BLOCK
+        ├── 2. Frontend lint + tests (bun)
+        │       └── fail? → BLOCK
+        ├── 3. Build & push API image → Artifact Registry
+        ├── 4. Build & push Frontend image → Artifact Registry
+        ├── 5. Build & push MLflow image → Artifact Registry
+        ├── 6. Deploy API → Cloud Run (savvio-backend-api)
+        ├── 7. Deploy Frontend → Cloud Run (savvio-ai)
+        ├── 8. Deploy MLflow → Cloud Run (savvio-ai-mlflow)
+        ├── 9. Live /health endpoint check
+        ├── 10. Drift detection (Evidently AI + Cloud SQL)
+        └── 11. Deploy Prometheus config to GCE VM
 ```
 
-### Tasks
-- Configure `.github/workflows/deploy.yml` with the above gate sequence
-- Automate: test execution → Docker build → image push → Cloud Run deploy → live validation
-- Implement rollback trigger: if live endpoint check fails post-deploy, revert to previous stable image in Artifact Registry
-- Add Slack/email failure alerts at each gate
-- Test full end-to-end CI/CD pipeline by pushing a change and verifying all gates execute correctly
-- Document pipeline YAML for reproducibility
+### Environment Variables Passed to Cloud Run
+
+All env vars and secrets are managed by Terraform (`deployment/terraform/environments/dev/`).
+The `gcloud run deploy` steps in `deployment.yml` only update the container image —
+existing env var configuration on the Cloud Run service is preserved.
+
+Key env vars set by Terraform on the API service:
+
+| Variable | Source | Value |
+|---|---|---|
+| `DB_ENV` | env_var | `"prod"` |
+| `DB_HOST` | env_var | `/cloudsql/<connection-name>` |
+| `DB_USER` | env_var | from Terraform |
+| `DB_NAME` | env_var | from Terraform |
+| `MLFLOW_TRACKING_URI` | env_var | Cloud Run MLflow URL |
+| `LLM_PROVIDER` | env_var | `"openrouter"` |
+| `METRICS_ENABLED` | env_var | `"true"` |
+| `GRAFANA_CLOUD_REMOTE_WRITE_URL` | env_var | from GitHub Secret |
+| `GRAFANA_CLOUD_USERNAME` | env_var | from GitHub Secret |
+| `DB_PASS` | Secret Manager | `savvio-dev-db-password` |
+| `OPEN_ROUTER_API_KEY` | Secret Manager | `savvio-dev-open-router-api-key` |
+| `GRAFANA_CLOUD_API_KEY` | Secret Manager | `savvio-dev-grafana-api-key` |
 
 ### Tools
 
@@ -423,7 +445,7 @@ Track live system performance after deployment — capturing latency, request vo
   - Request volume over time
   - Green/Yellow/Red prediction distribution over time
   - LLM hallucination flag rate
-  - NeMo safety rail trigger volume
+  - code-level guardrails safety rail trigger volume
 - Set alert thresholds in `deployment/monitoring/alert_config.yaml`:
   - Latency breach: response time > 2 seconds (SLA threshold) → alert
   - Prediction distribution shift: Green/Yellow/Red ratio changes significantly → alert
@@ -496,7 +518,7 @@ Validate the deployed system for correctness, latency, and reliability.
   - Verify confidence downgrade checks
   - Verify edge cases: missing fields → Yellow, conflicting rules → more conservative class
 - **Guardrail tests** (`tests/test_llm_wrapper.py`):
-  - Confirm NeMo rails block LLM outputs that contradict deterministic engine color
+  - Confirm code-level guardrails rails block LLM outputs that contradict deterministic engine color
   - Confirm rails block hallucinated financial figures
   - Test adversarial prompts — confirm unsafe completions are blocked
 - **Drift detector tests** (`tests/test_drift_detector.py`):
@@ -522,7 +544,7 @@ Build a live monitoring dashboard to visualize system performance, prediction di
   - Request volume over time
   - Green/Yellow/Red prediction distribution over time
   - LLM hallucination flag rate
-  - NeMo safety rail trigger volume
+  - code-level guardrails safety rail trigger volume
 - Verify dashboard displays accurate data by cross-referencing with Cloud Logging entries
 - Deploy dashboard to be accessible alongside the main application
 
@@ -592,7 +614,7 @@ Build a high-performance, premium user interface that surfaces the AI Advocate's
 - [ ] Deterministic engine preserved and authoritative at inference — ML and LLM cannot override color output
 - [ ] User prompt accepted as natural language input — LLM extracts product information from prompt
 - [ ] Three-layer inference stack connected: LLM extraction → Deterministic Engine → ML Model → LLM explanation
-- [ ] NeMo Guardrails integrated and tested with adversarial prompts
+- [ ] code-level guardrails Guardrails integrated and tested with adversarial prompts
 - [ ] Monitoring dashboard built and deployed
 - [ ] Drift detection covers Green/Yellow/Red output distribution shifts
 - [ ] Production frontend (React/Vite) live and connected to Cloud Run endpoint

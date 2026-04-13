@@ -30,7 +30,7 @@ from core_models.train import train_model, log_model_to_mlflow
 from core_models.evaluate import evaluate_model
 from core_models.optuna_tuner import tune_best_candidate
 from core_models.sensitivity_analysis import analyze_optuna_sensitivity
-from llm.prompt_engin import apply_llm_guardrails
+from llm.prompt_engine import apply_llm_guardrails
 from llm.config import LLMConfig
 
 logger = logging.getLogger(__name__)

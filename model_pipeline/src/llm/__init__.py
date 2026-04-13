@@ -20,7 +20,7 @@ Usage:
     from llm.llm_provider import get_provider
 
 Legacy interface (backward compatible with run_pipeline.py):
-    from llm.prompt_engin import apply_llm_guardrails
+    from llm.prompt_engine import apply_llm_guardrails
 """
 
 from llm.llm_provider import get_provider, LLMProvider

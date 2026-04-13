@@ -125,7 +125,7 @@ This creates two files:
 
 **Update `main.tf` with the public key:**
 
-Open `deployment/terraform/environments/dev/main.tf` and find the `metadata_startup_script` block. Replace the `authorized_keys` echo line with your new public key:
+Open `deployment_pipeline/terraform/environments/dev/main.tf` and find the `metadata_startup_script` block. Replace the `authorized_keys` echo line with your new public key:
 
 ```hcl
 echo "$(cat savvio-vm-key.pub)" \
@@ -152,7 +152,7 @@ The startup script provisions this key into `/home/github-actions/.ssh/authorize
 ### Step 1.1 — Initialize Terraform
 
 ```bash
-cd deployment/terraform/environments/dev
+cd deployment_pipeline/terraform/environments/dev
 
 export GOOGLE_APPLICATION_CREDENTIALS=~/path/to/gcp-sa-key.json
 
@@ -662,7 +662,7 @@ Update the GitHub secrets added in Phase 2:
 
 ### Step 7.3 — Import the Dashboard
 
-The dashboard JSON is in the repo at `deployment/monitoring/grafana/provisioning/dashboards/savvio-monitoring.json`.
+The dashboard JSON is in the repo at `deployment_pipeline/monitoring/grafana/provisioning/dashboards/savvio-monitoring.json`.
 
 In Grafana Cloud:
 1. Go to **Dashboards** → **Import**
@@ -672,7 +672,7 @@ In Grafana Cloud:
 
 ### Step 7.4 — Trigger a Deployment to Deploy Prometheus
 
-The Prometheus stack on the VM is deployed by the `deploy-monitoring` job in `deployment_ci.yml`. Trigger the deployment workflow (or push a change to `deployment/**`) to deploy Prometheus:
+The Prometheus stack on the VM is deployed by the `deploy-monitoring` job in `deployment_ci.yml`. Trigger the deployment workflow (or push a change to `deployment_pipeline/**`) to deploy Prometheus:
 
 GitHub → **Actions** → **Deployment CI/CD** → **Run workflow**.
 
@@ -739,8 +739,8 @@ Make a small harmless change to test each pipeline:
 |----------|-------------|-----------------|
 | Data Pipeline | Edit a comment in `data_pipeline/dags/` | Push to `main` → datapipeline_ci.yml |
 | Model Pipeline | Edit a comment in `model_pipeline/src/` | Push to `main` → modelpipeline_ci.yml |
-| Deployment | Edit a comment in `deployment/api/` | Push to `main` → deployment.yml |
-| Terraform | Edit a comment in `deployment/terraform/` | Open PR → plan comment on PR; merge → apply |
+| Deployment | Edit a comment in `deployment_pipeline/api/` | Push to `main` → deployment.yml |
+| Terraform | Edit a comment in `deployment_pipeline/terraform/` | Open PR → plan comment on PR; merge → apply |
 
 ### Step 8.3 — Verify DAG Deployment to VM
 
@@ -1003,7 +1003,7 @@ If the key is wrong or missing, paste the correct public key from `savvio-vm-key
 **Cause:** The Cloud Run service was created via `gcloud run deploy` (by CI/CD) but is not tracked in Terraform state.
 **Fix:** Import the existing service into Terraform state:
 ```bash
-cd deployment/terraform/environments/dev
+cd deployment_pipeline/terraform/environments/dev
 terraform import module.api.google_cloud_run_v2_service.service \
   projects/savvio-purchase-guardrail/locations/us-east1/services/savvio-backend-api
 ```
@@ -1013,7 +1013,7 @@ Repeat for `savvio-ai` and `savvio-ai-mlflow` if needed, substituting the module
 
 **Symptom:** `terraform plan` shows changes to `client`/`client_version` even when no code changed. Each apply triggers a new Cloud Run revision.
 **Cause:** `gcloud run deploy` sets these metadata fields; Terraform detects them as drift.
-**Fix:** Already handled — `deployment/terraform/modules/cloud_run/main.tf` has `lifecycle { ignore_changes = [template[0].containers[0].image, client, client_version] }`. If you see this on a new environment, verify that block is present.
+**Fix:** Already handled — `deployment_pipeline/terraform/modules/cloud_run/main.tf` has `lifecycle { ignore_changes = [template[0].containers[0].image, client, client_version] }`. If you see this on a new environment, verify that block is present.
 
 ### Stale Terraform state lock
 
@@ -1085,7 +1085,7 @@ Never point `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN` at Cloud SQL — Airflow's own
 
 **Symptom:** `password authentication failed` despite correct credentials; Python `urllib.parse` errors.
 **Cause:** Terraform generates passwords with symbols that break URI parsing.
-**Fix:** The application code URL-encodes passwords before building connection URIs (see `deployment/mlflow/entrypoint.sh`). If a raw psql or pg_restore call fails, URL-encode manually:
+**Fix:** The application code URL-encodes passwords before building connection URIs (see `deployment_pipeline/mlflow/entrypoint.sh`). If a raw psql or pg_restore call fails, URL-encode manually:
 ```bash
 python3 -c "import urllib.parse; print(urllib.parse.quote('<your-password>', safe=''))"
 ```

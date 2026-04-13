@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 # Path Resolution
 # ---------------------------------------------------------------------------
 
-# deployment/api/config.py → deployment/ → SavVio/
+# deployment_pipeline/api/config.py → deployment_pipeline/ → SavVio/
 _DEPLOYMENT_DIR = Path(__file__).resolve().parent.parent
 _PROJECT_ROOT = _DEPLOYMENT_DIR.parent
 

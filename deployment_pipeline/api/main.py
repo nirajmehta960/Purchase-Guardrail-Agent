@@ -20,13 +20,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from deployment.api.config import APIConfig
-from deployment.api.dependencies import get_model_manager, require_db
-from deployment.api.inference import run_inference, _load_user_financial_profile
-from deployment.api.metrics import setup_metrics, track_active_request, release_active_request
-from deployment.api.model_loader import ModelManager
-from deployment.api.products_catalog import list_products as fetch_products
-from deployment.api.schemas import (
+from deployment_pipeline.api.config import APIConfig
+from deployment_pipeline.api.dependencies import get_model_manager, require_db
+from deployment_pipeline.api.inference import run_inference, _load_user_financial_profile
+from deployment_pipeline.api.metrics import setup_metrics, track_active_request, release_active_request
+from deployment_pipeline.api.model_loader import ModelManager
+from deployment_pipeline.api.products_catalog import list_products as fetch_products
+from deployment_pipeline.api.schemas import (
     ErrorResponse,
     HealthResponse,
     PredictRequest,
@@ -299,13 +299,13 @@ async def evaluate_product(
 
 
 # ---------------------------------------------------------------------------
-# Run with: uvicorn deployment.api.main:app --host 0.0.0.0 --port 3500
+# Run with: uvicorn deployment_pipeline.api.main:app --host 0.0.0.0 --port 3500
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        "deployment.api.main:app",
+        "deployment_pipeline.api.main:app",
         host=APIConfig.API_HOST,
         port=APIConfig.API_PORT,
         reload=True,

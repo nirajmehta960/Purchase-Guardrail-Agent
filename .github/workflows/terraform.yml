@@ -5,11 +5,11 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - 'deployment/terraform/**'
+      - 'deployment_pipeline/terraform/**'
   push:
     branches: [main]
     paths:
-      - 'deployment/terraform/**'
+      - 'deployment_pipeline/terraform/**'
 
 # Only one Terraform run at a time to prevent state lock conflicts.
 # On PRs, cancel any in-progress plan for the same branch.
@@ -30,7 +30,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: deployment/terraform/environments/dev
+        working-directory: deployment_pipeline/terraform/environments/dev
 
     steps:
       - name: Checkout code
@@ -91,7 +91,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const plan = fs.readFileSync('deployment/terraform/environments/dev/plan_output.txt', 'utf8');
+            const plan = fs.readFileSync('deployment_pipeline/terraform/environments/dev/plan_output.txt', 'utf8');
             const truncated = plan.length > 60000 ? plan.slice(-60000) + '\n...(truncated)' : plan;
             github.rest.issues.createComment({
               issue_number: context.issue.number,

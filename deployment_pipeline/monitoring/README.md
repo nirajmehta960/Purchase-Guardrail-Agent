@@ -45,7 +45,7 @@ failures, and Layer 2 downgrades.
 ### 1. Start the Monitoring Stack
 
 ```bash
-cd deployment/monitoring
+cd deployment_pipeline/monitoring
 docker-compose -f docker-compose.monitoring.yml up -d
 ```
 
@@ -53,7 +53,7 @@ docker-compose -f docker-compose.monitoring.yml up -d
 
 ```bash
 # From the project root directory (/SavVio)
-./deployment/run.sh api
+./deployment_pipeline/run.sh api
 ```
 
 ### 3. Access Dashboards
@@ -165,7 +165,7 @@ In Grafana Cloud:
 
 ## Configuration
 
-All monitoring settings are in `deployment/api/config.py`:
+All monitoring settings are in `deployment_pipeline/api/config.py`:
 
 | Env Variable | Default | Description |
 |-------------|---------|-------------|

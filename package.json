@@ -1,7 +1,7 @@
 {
   "name": "savvio",
   "private": true,
-  "workspaces": ["deployment/frontend"],
+  "workspaces": ["deployment_pipeline/frontend"],
   "scripts": {
     "dev": "npm run dev -w savvio-frontend",
     "build": "npm run build -w savvio-frontend",

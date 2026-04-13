@@ -4,7 +4,7 @@
 # Spins up Prometheus + Grafana for local dashboard development and testing.
 #
 # Usage:
-#   cd deployment/monitoring
+#   cd deployment_pipeline/monitoring
 #   docker-compose -f docker-compose.monitoring.yml up -d
 #
 # Access:
@@ -13,7 +13,7 @@
 #
 # Prerequisites:
 #   The SavVio API must be running locally on port 3500:
-#     uvicorn deployment.api.main:app --host 0.0.0.0 --port 3500
+#     uvicorn deployment_pipeline.api.main:app --host 0.0.0.0 --port 3500
 # =============================================================================
 
 services:

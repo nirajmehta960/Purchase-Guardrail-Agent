@@ -3,9 +3,9 @@
 # SavVio — Start the backend API and frontend dev server.
 #
 # Usage:
-#   ./deployment/run.sh            # start both (default)
-#   ./deployment/run.sh api        # backend only
-#   ./deployment/run.sh frontend   # frontend only
+#   ./deployment_pipeline/run.sh            # start both (default)
+#   ./deployment_pipeline/run.sh api        # backend only
+#   ./deployment_pipeline/run.sh frontend   # frontend only
 # -------------------------------------------------------------
 set -euo pipefail
 
@@ -40,7 +40,7 @@ start_api() {
     fi
 
     export PYTHONPATH="${ROOT}/model_pipeline/src:${ROOT}/savviocore/src:${ROOT}"
-    uvicorn deployment.api.main:app \
+    uvicorn deployment_pipeline.api.main:app \
         --host 0.0.0.0 \
         --port 3500 \
         --reload \
@@ -52,7 +52,7 @@ start_api() {
 start_frontend() {
     info "Starting frontend dev server on http://localhost:3000"
 
-    cd "$ROOT/deployment/frontend"
+    cd "$ROOT/deployment_pipeline/frontend"
 
     if [[ ! -d node_modules ]]; then
         info "Installing frontend dependencies..."

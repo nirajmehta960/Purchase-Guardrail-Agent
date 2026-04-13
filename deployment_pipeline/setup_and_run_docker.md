@@ -86,7 +86,7 @@ Build and run just the API (no frontend, no Postgres).
 
 ```bash
 # Build (from repo root — build context needs savviocore/, model_pipeline/)
-docker build -f deployment/api/Dockerfile -t savvio-api:test .
+docker build -f deployment_pipeline/api/Dockerfile -t savvio-api:test .
 
 # Run
 docker run --rm -p 8080:8080 savvio-api:test
@@ -103,11 +103,11 @@ curl -s http://localhost:8080/health | python3 -m json.tool
 Build and run just the frontend.
 
 ```bash
-# Build (from deployment/frontend/ — self-contained build context)
-docker build -f deployment/frontend/Dockerfile \
+# Build (from deployment_pipeline/frontend/ — self-contained build context)
+docker build -f deployment_pipeline/frontend/Dockerfile \
   --build-arg VITE_API_BASE=http://localhost:8080 \
   -t savvio-frontend:test \
-  deployment/frontend/
+  deployment_pipeline/frontend/
 
 # Run
 docker run --rm -p 8501:8501 savvio-frontend:test
@@ -131,14 +131,14 @@ The `VITE_API_BASE` build arg sets where the frontend sends API requests. Change
    | `GCP_PROJECT_ID` | GCP project ID | Should already exist |
    | `API_URL_DEV` | Cloud Run API URL (e.g. `https://savvio-dev-api-xxx.run.app`) | **New — add this** |
 
-2. **Terraform** — the Cloud Run services, Artifact Registry, and Cloud SQL must already be provisioned via `deployment/terraform/`.
+2. **Terraform** — the Cloud Run services, Artifact Registry, and Cloud SQL must already be provisioned via `deployment_pipeline/terraform/`.
 
 ### Trigger a deployment
 
 **Automatic:** Push to `main` with changes in any of these paths:
-- `deployment/api/**`
-- `deployment/frontend/src/**`
-- `deployment/requirements.txt`
+- `deployment_pipeline/api/**`
+- `deployment_pipeline/frontend/src/**`
+- `deployment_pipeline/requirements.txt`
 - `savviocore/**`
 - `model_pipeline/src/**`
 - `model_pipeline/models/model/**`
@@ -153,7 +153,7 @@ test-api ──────────► build-push-api ──────┐
 test-frontend ─────► build-push-frontend ──┘
 ```
 
-1. **test-api** — `pytest deployment/tests/`
+1. **test-api** — `pytest deployment_pipeline/tests/`
 2. **test-frontend** — `npm run lint` + `npm test`
 3. **build-push-api** — Docker build → push to Artifact Registry (SHA-tagged)
 4. **build-push-frontend** — Docker build with `VITE_API_BASE` → push to Artifact Registry
@@ -202,10 +202,10 @@ The static files are served by nginx in the production container.
 
 | Problem | Fix |
 |---------|-----|
-| `docker compose up` fails on frontend build | Ensure `deployment/frontend/package-lock.json` exists. If missing: `cd deployment/frontend && npm install --package-lock-only` |
+| `docker compose up` fails on frontend build | Ensure `deployment_pipeline/frontend/package-lock.json` exists. If missing: `cd deployment_pipeline/frontend && npm install --package-lock-only` |
 | API starts but `db_connected: false` | Postgres container may still be starting. Wait for healthcheck (5-10s) or check `docker compose logs postgres` |
 | Frontend loads but API calls fail | Check `VITE_API_BASE` build arg matches where the API is running |
 | `model_loaded: false` in health check | Verify `model_pipeline/models/model/` contains `MLmodel`, `python_model.pkl`, and `artifacts/` |
 | CI/CD build fails on push | Check GitHub Secrets are set (`GCP_SA_KEY`, `GCP_PROJECT_ID`, `API_URL_DEV`) |
-| `npm ci` fails in Dockerfile | Regenerate lockfile: `cd deployment/frontend && npm install --package-lock-only` |
+| `npm ci` fails in Dockerfile | Regenerate lockfile: `cd deployment_pipeline/frontend && npm install --package-lock-only` |
 | Image too large (>2GB) | Check `.dockerignore` is not missing — it excludes data files, experiments, and node_modules |

@@ -43,7 +43,7 @@ cd SavVio/deployment
 ## Step 2 — Terraform folder structure
 
 ```
-deployment/
+deployment_pipeline/
 └── terraform/
     ├── modules/
     │   ├── cloud_sql/
@@ -108,7 +108,7 @@ If you get a "bucket already exists" error, verify if someone already created it
 ## Step 4 — Deploy the dev environment
 
 ```bash
-cd SavVio/deployment/terraform/environments/dev
+cd SavVio/deployment_pipeline/terraform/environments/dev
 
 # Download provider plugins and configure backend
 terraform init
@@ -151,7 +151,7 @@ terraform output
 Same process, different folder:
 
 ```bash
-cd SavVio/deployment/terraform/environments/prod
+cd SavVio/deployment_pipeline/terraform/environments/prod
 
 terraform init
 terraform plan
@@ -175,7 +175,7 @@ Example workflow step:
 ```yaml
 - name: Deploy to dev
   run: |
-    cd deployment/terraform/environments/dev
+    cd deployment_pipeline/terraform/environments/dev
     terraform init
     terraform apply -auto-approve \
       -var="api_image=us-east1-docker.pkg.dev/savvio-ai/savvio-dev-docker-repo/api:${{ github.sha }}" \
@@ -190,7 +190,7 @@ Example workflow step:
 To destroy all dev infrastructure and stop billing:
 
 ```bash
-cd SavVio/deployment/terraform/environments/dev
+cd SavVio/deployment_pipeline/terraform/environments/dev
 terraform destroy
 ```
 

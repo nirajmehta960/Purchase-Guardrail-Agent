@@ -47,7 +47,7 @@ test_venv/
 .env.*.local
 data_pipeline/.env
 model_pipeline/.env
-deployment/.env
+deployment_pipeline/.env
 
 # DVC
 .dvc/cache
@@ -102,7 +102,7 @@ htmlcov/
 *.tfstate.*
 .terraform/
 .terraform.lock.hcl
-!deployment/terraform/modules/secrets/
+!deployment_pipeline/terraform/modules/secrets/
 
 # Kubernetes
 *.kubeconfig
@@ -123,7 +123,7 @@ data_pipeline/config/
 *.pem
 *.key
 *.crt
-!deployment/terraform/modules/secrets/
+!deployment_pipeline/terraform/modules/secrets/
 
 # Compiled files
 *.pyc
@@ -145,8 +145,8 @@ model_pipeline/experiments/
 docs/
 
 # Deployment
-deployment/docker/
-deployment/smoke_test.sh
+deployment_pipeline/docker/
+deployment_pipeline/smoke_test.sh
 
 # JavaScript / Node
 node_modules/
@@ -166,11 +166,11 @@ model_pipeline/reports/sensitivity/
 !model_pipeline/reports/.gitkeep
 
 !.dockerignore
-!deployment/frontend/.dockerignore
+!deployment_pipeline/frontend/.dockerignore
 
 # Copilot and claude instructions
 CLAUDE.md
 copilot-instructions.md
-deployment/monitoring/.env
-deployment/monitoring/reports/
-deployment/monitoring/data/
+deployment_pipeline/monitoring/.env
+deployment_pipeline/monitoring/reports/
+deployment_pipeline/monitoring/data/

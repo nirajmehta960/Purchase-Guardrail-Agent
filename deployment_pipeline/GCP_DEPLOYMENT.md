@@ -55,14 +55,14 @@ This document describes the production architecture and gives a step-by-step fir
 |----------|------|---------|--------------|
 | Data Pipeline CI/CD | `datapipeline_ci.yml` | push/PR to `data_pipeline/**` | Unit tests, DAG parse validation, DB connection check. On main: SSH → VM → git pull → reserialize DAGs |
 | Model Pipeline CI/CD | `modelpipeline_ci.yml` | push/PR to `model_pipeline/**` | Unit tests, DB check, run training, quality gates (F1>0.70, ROC-AUC>0.75), bias gate, rollback check, persist baseline to GCS, trigger deployment |
-| Deployment CI/CD | `deployment.yml` | push to `deployment/**` or `savviocore/**`, weekly cron, workflow_dispatch | API/frontend tests, build Docker images → Artifact Registry, deploy to Cloud Run, health check, drift detection, deploy Prometheus to VM |
-| Terraform | `terraform.yml` | push/PR to `deployment/terraform/**` | PR: plan only + posts plan as comment. Main push: plan + apply |
+| Deployment CI/CD | `deployment.yml` | push to `deployment_pipeline/**` or `savviocore/**`, weekly cron, workflow_dispatch | API/frontend tests, build Docker images → Artifact Registry, deploy to Cloud Run, health check, drift detection, deploy Prometheus to VM |
+| Terraform | `terraform.yml` | push/PR to `deployment_pipeline/terraform/**` | PR: plan only + posts plan as comment. Main push: plan + apply |
 
 ---
 
 ## Terraform-Managed Resources
 
-All infrastructure is defined in `deployment/terraform/environments/dev/main.tf`.
+All infrastructure is defined in `deployment_pipeline/terraform/environments/dev/main.tf`.
 
 | Resource | GCP Name | Type |
 |----------|----------|------|
@@ -181,7 +181,7 @@ gcloud storage buckets create gs://savvio-data-bucket \
 
 **e) Generate the SSH keypair for VM access:**
 
-This keypair allows GitHub Actions to SSH into the GCE VM. The public key is already hardcoded in the VM startup script in `deployment/terraform/environments/dev/main.tf`. If you need to rotate it:
+This keypair allows GitHub Actions to SSH into the GCE VM. The public key is already hardcoded in the VM startup script in `deployment_pipeline/terraform/environments/dev/main.tf`. If you need to rotate it:
 
 1. Generate a new ed25519 keypair:
    ```bash
@@ -195,7 +195,7 @@ This keypair allows GitHub Actions to SSH into the GCE VM. The public key is alr
 ### Step 1 — Provision infrastructure with Terraform
 
 ```bash
-cd deployment/terraform/environments/dev
+cd deployment_pipeline/terraform/environments/dev
 
 # Authenticate Terraform using the service account key
 export GOOGLE_APPLICATION_CREDENTIALS=~/savvio-sa-key.json
@@ -257,8 +257,8 @@ On the VM, clone the repo and configure the environment:
 sudo git clone https://github.com/your-org/SavVio /opt/savvio
 cd /opt/savvio/data_pipeline
 
-# Create the .env file — copy the values from deployment/.env or fill in manually
-sudo cp /opt/savvio/deployment/.env.example /opt/savvio/data_pipeline/.env
+# Create the .env file — copy the values from deployment_pipeline/.env or fill in manually
+sudo cp /opt/savvio/deployment_pipeline/.env.example /opt/savvio/data_pipeline/.env
 sudo nano /opt/savvio/data_pipeline/.env
 ```
 
@@ -405,7 +405,7 @@ Push changes to `model_pipeline/**` or manually trigger `modelpipeline_ci.yml`. 
 
 ### Infrastructure changes
 
-Edit files in `deployment/terraform/environments/dev/`. Push to a PR to see a plan comment. Merge to main to apply.
+Edit files in `deployment_pipeline/terraform/environments/dev/`. Push to a PR to see a plan comment. Merge to main to apply.
 
 ### VM IP changed after restart
 

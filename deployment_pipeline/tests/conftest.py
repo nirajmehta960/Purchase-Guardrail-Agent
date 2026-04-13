@@ -172,8 +172,8 @@ def test_client(mock_model_manager):
     """FastAPI TestClient with DI-overridden ModelManager."""
     from fastapi.testclient import TestClient
 
-    from deployment.api.dependencies import get_model_manager
-    from deployment.api.main import app
+    from deployment_pipeline.api.dependencies import get_model_manager
+    from deployment_pipeline.api.main import app
 
     app.dependency_overrides[get_model_manager] = (
         lambda: mock_model_manager

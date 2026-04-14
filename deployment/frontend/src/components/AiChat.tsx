@@ -12,7 +12,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Sparkles,
   Link2,
   AlertTriangle,
   TrendingDown,
@@ -307,9 +306,15 @@ export const AiChat = () => {
   return (
     <div className="max-w-3xl mx-auto flex flex-col h-full overflow-hidden">
       <div className="flex items-center gap-2 mb-4 shrink-0">
-        <Sparkles className="w-5 h-5 text-primary" />
+        <img
+          src="/icon.png"
+          alt=""
+          width={40}
+          height={40}
+          className="h-9 w-9 sm:h-10 sm:w-10 shrink-0 object-contain"
+        />
         <div>
-          <h1 className="font-heading text-xl font-semibold">Purchase Advisor</h1>
+          <h1 className="font-heading text-xl font-semibold">SavVio AI</h1>
           <p className="text-xs text-muted-foreground">Your fiduciary — always on your side</p>
         </div>
       </div>

@@ -190,7 +190,6 @@ export const AiChat = () => {
   const [isTyping, setIsTyping] = useState(false);
   const [useCatalog, setUseCatalog] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<ProductListItem | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
   const prevUserIdRef = useRef(userId);
 
   useEffect(() => {
@@ -210,7 +209,11 @@ export const AiChat = () => {
   }, [messages, persistMessages]);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    const el = document.getElementById("main-scroll");
+    if (!el) return;
+    requestAnimationFrame(() => {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    });
   }, [messages, isTyping]);
 
   const handleSend = async (text?: string) => {
@@ -304,8 +307,8 @@ export const AiChat = () => {
   const canSend = !!(input.trim() || (useCatalog && selectedProduct));
 
   return (
-    <div className="max-w-3xl mx-auto flex flex-col h-full overflow-hidden">
-      <div className="flex items-center gap-2 mb-4 shrink-0">
+    <div className="max-w-3xl mx-auto flex flex-col gap-4">
+      <div className="flex items-center gap-2 shrink-0">
         <img
           src="/icon.png"
           alt=""
@@ -319,8 +322,8 @@ export const AiChat = () => {
         </div>
       </div>
 
-      {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-4 pb-4 pr-1 scrollbar-thin">
+      {/* Messages — scroll is on #main-scroll (Index) so the scrollbar aligns with both tabs */}
+      <div className="space-y-4">
         {messages.map((msg) => (
           <motion.div
             key={msg.id}
@@ -401,7 +404,7 @@ export const AiChat = () => {
 
       {/* Quick Prompts */}
       {messages.length <= 1 && (
-        <div className="flex flex-wrap gap-2 mb-3">
+        <div className="flex flex-wrap gap-2">
           {quickPrompts.map((prompt) => (
             <button
               key={prompt}
@@ -414,23 +417,23 @@ export const AiChat = () => {
         </div>
       )}
 
-      {/* Catalog product picker */}
-      <CatalogSearch
-        useCatalog={useCatalog}
-        onUseCatalogChange={setUseCatalog}
-        selectedProduct={selectedProduct}
-        onSelectProduct={setSelectedProduct}
-        disabled={isTyping}
-      />
-
-      {/* Input bar */}
-      <MessageInput
-        value={input}
-        onChange={setInput}
-        onSend={() => void handleSend()}
-        disabled={isTyping}
-        canSend={canSend}
-      />
+      {/* Composer — sticky to bottom of scroll viewport while browsing long threads */}
+      <div className="sticky bottom-0 z-20 -mx-4 sm:-mx-6 px-4 sm:px-6 pt-3 pb-1 mt-2 bg-gradient-to-t from-background from-80% via-background/95 to-transparent border-t border-border/30">
+        <CatalogSearch
+          useCatalog={useCatalog}
+          onUseCatalogChange={setUseCatalog}
+          selectedProduct={selectedProduct}
+          onSelectProduct={setSelectedProduct}
+          disabled={isTyping}
+        />
+        <MessageInput
+          value={input}
+          onChange={setInput}
+          onSend={() => void handleSend()}
+          disabled={isTyping}
+          canSend={canSend}
+        />
+      </div>
     </div>
   );
 };

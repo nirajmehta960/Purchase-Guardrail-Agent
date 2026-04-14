@@ -1,14 +1,16 @@
 """
 LLM provider abstraction for SavVio.
 
-Active provider: OpenRouter (paid, no rate limits).
-  Model: google/gemini-2.5-flash
+Active provider: Vertex AI (GCP-native, no API key required).
+  Model: gemini-2.5-flash
   Why: strong instruction-following for structured 4-part financial advice prompts,
-       production-stable (no deprecation risk), ~$0.30/M input + $2.50/M output tokens.
+       auth via Cloud Run service account (no secrets), same GCP region = low latency.
+  Requires: roles/aiplatform.user on the Cloud Run service account.
+  Local dev: run `gcloud auth application-default login` and set VERTEX_PROJECT.
 
 Fallback: MockProvider (deterministic stub for tests / no-key environments).
 
-Free-tier providers (Gemini direct, Groq) are preserved below but commented out.
+Previous providers (OpenRouter, Gemini direct, Groq) are preserved below but commented out.
 Re-enable by swapping get_provider() and uncommenting the class definitions.
 """
 
@@ -153,90 +155,93 @@ class OpenRouterProvider(BaseLLMProvider):
         )
         raw = _post_with_retry(req)
         data = json.loads(raw.decode("utf-8"))
-        return data["choices"][0]["message"]["content"].strip()
-
+        return data["choices"][0]["message"]["content"].strip()     
 
 # ---------------------------------------------------------------------------
-# Free-tier providers — commented out; preserved for reference / fallback.
+# Vertex AI provider — active, GCP-native, no API key required.
 # ---------------------------------------------------------------------------
 
-# class GeminiProvider(BaseLLMProvider):
-#     """
-#     Google Gemini direct API (free tier: 15 RPM / 1,500 RPD).
-#     Exhausts daily quota quickly under load. Use OpenRouter instead.
-#     Re-enable by uncommenting and adding to get_provider() chain.
-#     """
-#     provider_name = "gemini"
-#     _DEFAULT_MODEL = "gemini-2.0-flash"
-#
-#     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-#         key = api_key or os.environ.get("GEMINI_API_KEY", "").strip()
-#         if not key:
-#             raise ValueError("GEMINI_API_KEY is not set")
-#         self._api_key = key
-#         self._model = model or os.environ.get("GEMINI_MODEL", self._DEFAULT_MODEL)
-#
-#     def generate(self, prompt: str, max_tokens: int = 512, temperature: float = 0.3) -> str:
-#         url = (
-#             f"https://generativelanguage.googleapis.com/v1beta/models/"
-#             f"{self._model}:generateContent?key={self._api_key}"
-#         )
-#         body = {
-#             "system_instruction": {"parts": [{"text": _SYSTEM_MESSAGE}]},
-#             "contents": [{"parts": [{"text": prompt}]}],
-#             "generationConfig": {"maxOutputTokens": max_tokens, "temperature": temperature},
-#         }
-#         req = urllib.request.Request(
-#             url,
-#             data=json.dumps(body).encode("utf-8"),
-#             headers={"Content-Type": "application/json"},
-#             method="POST",
-#         )
-#         raw = _post_with_retry(req)
-#         data = json.loads(raw.decode("utf-8"))
-#         return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+class VertexAIProvider(BaseLLMProvider):
+    """
+    Google Vertex AI — Gemini via GCP-native auth (Application Default Credentials).
 
+    On Cloud Run the service account token is fetched automatically.
+    Locally: run `gcloud auth application-default login` and set VERTEX_PROJECT.
 
-# class GroqProvider(BaseLLMProvider):
-#     """
-#     Groq free-tier API (llama-3.3-70b-versatile).
-#     Good quality but rate-limited; requires User-Agent: SavVio/1.0 to
-#     bypass Cloudflare 403. Use OpenRouter for production instead.
-#     Re-enable by uncommenting and adding to get_provider() chain.
-#     """
-#     provider_name = "groq"
-#     _DEFAULT_MODEL = "llama-3.3-70b-versatile"
-#
-#     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-#         key = api_key or os.environ.get("GROQ_API_KEY", "").strip()
-#         if not key:
-#             raise ValueError("GROQ_API_KEY is not set")
-#         self._api_key = key
-#         self._model = model or os.environ.get("GROQ_MODEL", self._DEFAULT_MODEL)
-#
-#     def generate(self, prompt: str, max_tokens: int = 512, temperature: float = 0.3) -> str:
-#         body = {
-#             "model": self._model,
-#             "messages": [
-#                 {"role": "system", "content": _SYSTEM_MESSAGE},
-#                 {"role": "user", "content": prompt},
-#             ],
-#             "max_tokens": max_tokens,
-#             "temperature": temperature,
-#         }
-#         req = urllib.request.Request(
-#             "https://api.groq.com/openai/v1/chat/completions",
-#             data=json.dumps(body).encode("utf-8"),
-#             headers={
-#                 "Content-Type": "application/json",
-#                 "Authorization": f"Bearer {self._api_key}",
-#                 "User-Agent": "SavVio/1.0",  # Required — Cloudflare blocks Python default UA
-#             },
-#             method="POST",
-#         )
-#         raw = _post_with_retry(req)
-#         data = json.loads(raw.decode("utf-8"))
-#         return data["choices"][0]["message"]["content"].strip()
+    Model: gemini-3.0-flash (lower latency in GCP, same region).
+    Cost: ~$0.075/M input tokens, $0.30/M output tokens (direct GCP pricing).
+    No API key needed — IAM controls access via roles/aiplatform.user.
+    """
+
+    provider_name = "vertex"
+    _DEFAULT_MODEL = "gemini-3.0-flash"
+    _DEFAULT_LOCATION = "us-east1"
+
+    def __init__(
+        self,
+        project: Optional[str] = None,
+        location: Optional[str] = None,
+        model: Optional[str] = None,
+    ):
+        self._project = (
+            project
+            or os.environ.get("VERTEX_PROJECT")
+            or os.environ.get("GCP_PROJECT_ID", "").strip()
+        )
+        if not self._project:
+            raise ValueError(
+                "Vertex AI project not set — provide VERTEX_PROJECT or GCP_PROJECT_ID env var"
+            )
+        self._location = location or os.environ.get("VERTEX_LOCATION", self._DEFAULT_LOCATION)
+        self._model = model or os.environ.get("VERTEX_MODEL", self._DEFAULT_MODEL)
+
+    def _get_access_token(self) -> str:
+        """Fetch a GCP access token using Application Default Credentials."""
+        try:
+            import google.auth
+            import google.auth.transport.requests as google_requests
+
+            creds, _ = google.auth.default(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            creds.refresh(google_requests.Request())
+            return creds.token
+        except ImportError:
+            # Fallback: fetch from the GCP metadata server (Cloud Run / GCE only)
+            req = urllib.request.Request(
+                "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+                headers={"Metadata-Flavor": "Google"},
+            )
+            raw = urllib.request.urlopen(req, timeout=5).read()
+            return json.loads(raw.decode("utf-8"))["access_token"]
+
+    def generate(self, prompt: str, max_tokens: int = 512, temperature: float = 0.3) -> str:
+        url = (
+            f"https://{self._location}-aiplatform.googleapis.com/v1"
+            f"/projects/{self._project}/locations/{self._location}"
+            f"/publishers/google/models/{self._model}:generateContent"
+        )
+        body = {
+            "system_instruction": {"parts": [{"text": _SYSTEM_MESSAGE}]},
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "maxOutputTokens": max_tokens,
+                "temperature": temperature,
+            },
+        }
+        token = self._get_access_token()
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}",
+            },
+            method="POST",
+        )
+        raw = _post_with_retry(req)
+        data = json.loads(raw.decode("utf-8"))
+        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
 
 
 # ---------------------------------------------------------------------------
@@ -247,16 +252,22 @@ def get_provider() -> BaseLLMProvider:
     """
     Return the active LLM provider.
 
-    Priority: OpenRouter → Mock (no key configured).
-    Free-tier providers (Gemini, Groq) are disabled — see commented classes above.
+    Priority: Vertex AI → Mock (no GCP project configured).
+    Previous providers (OpenRouter, Gemini direct, Groq) are disabled — see commented classes above.
     """
-    if os.environ.get("OPEN_ROUTER_API_KEY", "").strip():
+    project = (
+        os.environ.get("VERTEX_PROJECT")
+        or os.environ.get("GCP_PROJECT_ID", "").strip()
+    )
+    if project:
         try:
-            p = OpenRouterProvider()
-            logger.info("Using LLM provider: %s (%s)", p.provider_name, p._model)
+            p = VertexAIProvider()
+            logger.info(
+                "Using LLM provider: %s (%s) in %s", p.provider_name, p._model, p._location
+            )
             return p
         except Exception as e:
-            logger.warning("Could not init OpenRouterProvider: %s — falling back to mock", e)
+            logger.warning("Could not init VertexAIProvider: %s — falling back to mock", e)
 
-    logger.info("Using LLM provider: mock (OPEN_ROUTER_API_KEY not set)")
+    logger.info("Using LLM provider: mock (VERTEX_PROJECT / GCP_PROJECT_ID not set)")
     return MockProvider()

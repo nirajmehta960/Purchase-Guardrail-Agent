@@ -115,7 +115,7 @@ export const FinancialDashboard = () => {
     {
       label: "Monthly Income",
       value: fmtMoney(p.monthly_income),
-      change: p.region ? p.region : "—",
+      change: "",
       up: true,
       icon: Wallet,
       sub: true,
@@ -139,7 +139,7 @@ export const FinancialDashboard = () => {
     {
       label: "Credit Score",
       value: p.credit_score != null ? String(p.credit_score) : "—",
-      change: p.employment_status ?? "",
+      change: "",
       up: true,
       icon: ShieldCheck,
       sub: true,
@@ -180,7 +180,7 @@ export const FinancialDashboard = () => {
   ];
 
   return (
-    <div className="space-y-6 h-full overflow-y-auto pb-10 pr-2 scrollbar-thin">
+    <div className="space-y-6">
       <div>
         <h1 className="font-heading text-xl font-semibold mb-1">Financial Health Dashboard</h1>
         <p className="text-sm text-muted-foreground">

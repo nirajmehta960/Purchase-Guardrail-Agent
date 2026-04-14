@@ -30,9 +30,3 @@ variable "grafana_api_key" {
   default     = ""
 }
 
-variable "open_router_api_key" {
-  description = "OpenRouter API key for LLM inference"
-  type        = string
-  sensitive   = true
-  default     = ""
-}

@@ -272,6 +272,7 @@ module "mlflow" {
     ENVIRONMENT              = var.environment
     DB_USER                  = module.database.user_name
     DB_NAME                  = module.database.database_name
+    DB_HOST                  = "/cloudsql/${module.database.connection_name}"
     INSTANCE_CONNECTION_NAME = module.database.connection_name
     MLFLOW_ARTIFACT_ROOT     = "gs://${module.mlflow_bucket.bucket_name}/artifacts"
   }

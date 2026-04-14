@@ -306,7 +306,7 @@ export const AiChat = () => {
 
   return (
     <div className="max-w-3xl mx-auto flex flex-col h-full overflow-hidden">
-      <div className="flex items-center gap-2 mb-4 shrink-0 mt-4">
+      <div className="flex items-center gap-2 mb-4 shrink-0">
         <Sparkles className="w-5 h-5 text-primary" />
         <div>
           <h1 className="font-heading text-xl font-semibold">Purchase Advisor</h1>

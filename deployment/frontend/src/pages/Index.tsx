@@ -16,9 +16,9 @@ const Index = () => {
   const [activeTab, setActiveTab] = useState<TabId>("chat");
 
   return (
-    <div className="min-h-[100dvh] flex flex-col bg-background gradient-glow overflow-x-hidden">
+    <div className="h-[100dvh] flex flex-col bg-background gradient-glow overflow-hidden">
       {/* Header */}
-      <header className="shrink-0 border-b border-border/50 backdrop-blur-md bg-background/80 z-50">
+      <header className="shrink-0 border-b border-border/50 backdrop-blur-md bg-background/80 z-50 sticky top-0">
         <div className="container flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 py-3">
           <button 
             onClick={() => setActiveTab("chat")}
@@ -70,7 +70,7 @@ const Index = () => {
       </header>
 
       {/* Content */}
-      <main className="container flex-1 min-h-0 py-4 sm:py-6 pb-0">
+      <main className="container flex-1 min-h-0 py-4 sm:py-6 pb-0 overflow-hidden">
         <AnimatePresence mode="wait">
           <motion.div
             key={activeTab}

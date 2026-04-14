@@ -52,7 +52,11 @@ const Index = () => {
                     <motion.div
                       layoutId="activeTab"
                       className="absolute inset-0 bg-primary rounded-lg"
-                      transition={{ type: "spring", duration: 0.4, bounce: 0.15 }}
+                      transition={{
+                        type: "spring",
+                        duration: 0.4,
+                        bounce: 0.15,
+                      }}
                     />
                   )}
                   <span className="relative z-10 flex items-center justify-center gap-2 min-w-10">

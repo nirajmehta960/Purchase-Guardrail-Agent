@@ -9,7 +9,12 @@ import {
 } from "react";
 import { fetchUserProfile, type UserProfileResponse } from "../services/api";
 
-const STORAGE_KEY = "savvio_user_id";
+/**
+ * Demo profile loaded on every fresh visit (no localStorage — each page load starts here).
+ * Override at build time: `VITE_DEFAULT_USER_ID=U00009 npm run build`
+ */
+export const DEFAULT_USER_ID =
+  (import.meta.env.VITE_DEFAULT_USER_ID as string | undefined)?.trim() || "U00001";
 
 interface UserContextValue {
   userId: string;
@@ -23,30 +28,14 @@ interface UserContextValue {
 const UserContext = createContext<UserContextValue | null>(null);
 
 export function UserProvider({ children }: { children: ReactNode }) {
-  const [userId, setUserIdState] = useState(() => {
-    try {
-      return localStorage.getItem(STORAGE_KEY) ?? "";
-    } catch {
-      return "";
-    }
-  });
+  const [userId, setUserIdState] = useState(DEFAULT_USER_ID);
   const [userProfile, setUserProfile] = useState<UserProfileResponse | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [isLoadingProfile, setIsLoadingProfile] = useState(false);
 
   const setUserId = useCallback((id: string) => {
     const trimmed = id.trim();
-    setUserIdState(trimmed);
-    try {
-      if (trimmed) localStorage.setItem(STORAGE_KEY, trimmed);
-      else localStorage.removeItem(STORAGE_KEY);
-    } catch {
-      /* ignore */
-    }
-    if (!trimmed) {
-      setUserProfile(null);
-      setProfileError(null);
-    }
+    setUserIdState(trimmed || DEFAULT_USER_ID);
   }, []);
 
   const refetchProfile = useCallback(async () => {

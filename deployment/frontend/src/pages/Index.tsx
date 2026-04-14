@@ -16,28 +16,33 @@ const Index = () => {
   const [activeTab, setActiveTab] = useState<TabId>("chat");
 
   return (
-    <div className="h-screen flex flex-col bg-background gradient-glow overflow-hidden">
+    <div className="min-h-[100dvh] flex flex-col bg-background gradient-glow overflow-x-hidden">
       {/* Header */}
       <header className="shrink-0 border-b border-border/50 backdrop-blur-md bg-background/80 z-50">
-        <div className="container flex items-center min-h-20 py-3 px-4 md:px-6 gap-4">
+        <div className="container flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 py-3">
           <button 
             onClick={() => setActiveTab("chat")}
-            className="flex items-center shrink-0 hover:opacity-90 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-lg"
+            className="flex items-center shrink-0 hover:opacity-90 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-lg self-start sm:self-auto"
             aria-label="Return to AI Advisor"
           >
-            <img src="/savvio-logo.png" alt="SavVio" className="h-[4.5rem] md:h-[5.5rem] w-auto drop-shadow-md" />
+            <img
+              src="/savvio-logo.png"
+              alt="SavVio"
+              className="h-12 sm:h-14 md:h-[4.5rem] w-auto drop-shadow-md"
+            />
           </button>
 
-          <div className="flex items-center gap-4 flex-1 justify-center min-w-0">
+          <div className="flex items-center gap-4 flex-1 justify-center min-w-0 w-full sm:w-auto">
             <UserIdInput />
           </div>
 
-          <nav className="flex items-center gap-2 bg-secondary/50 rounded-xl p-1.5 shrink-0">
+          <nav className="shrink-0 w-full sm:w-auto overflow-x-auto [-webkit-overflow-scrolling:touch]">
+            <div className="inline-flex items-center gap-2 bg-secondary/50 rounded-xl p-1.5 min-w-max">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`relative flex items-center gap-2 px-5 py-2.5 text-base font-semibold rounded-lg transition-colors ${
+                className={`relative flex items-center gap-2 px-3 sm:px-5 py-2 text-sm sm:text-base font-semibold rounded-lg transition-colors ${
                   activeTab === tab.id
                     ? "text-primary-foreground"
                     : "text-muted-foreground hover:text-foreground hover:bg-secondary/40"
@@ -50,18 +55,22 @@ const Index = () => {
                     transition={{ type: "spring", duration: 0.4, bounce: 0.15 }}
                   />
                 )}
-                <span className="relative z-10 flex items-center gap-2">
-                  <tab.icon className="w-4 h-4" />
-                  <span className="hidden sm:inline">{tab.label}</span>
+                <span className="relative z-10 flex items-center justify-center gap-2 min-w-10">
+                  <tab.icon className="w-4 h-4 shrink-0" />
+                  {/* Show compact labels on small screens when space allows; prevents icon collisions on ultra-narrow widths */}
+                  <span className="hidden min-[380px]:inline text-[11px] leading-none sm:text-sm">
+                    {tab.id === "chat" ? "Advisor" : "Dashboard"}
+                  </span>
                 </span>
               </button>
             ))}
+            </div>
           </nav>
         </div>
       </header>
 
       {/* Content */}
-      <main className="container flex-1 min-h-0 px-4 md:px-6 py-6 pb-0">
+      <main className="container flex-1 min-h-0 py-4 sm:py-6 pb-0">
         <AnimatePresence mode="wait">
           <motion.div
             key={activeTab}

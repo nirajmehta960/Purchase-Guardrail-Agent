@@ -20,7 +20,7 @@ const Index = () => {
       {/* Header */}
       <header className="shrink-0 border-b border-border/50 backdrop-blur-md bg-background/80 z-50 sticky top-0">
         <div className="container flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 py-3">
-          <button 
+          <button
             onClick={() => setActiveTab("chat")}
             className="flex items-center shrink-0 hover:opacity-90 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-lg self-start sm:self-auto"
             aria-label="Return to AI Advisor"
@@ -38,32 +38,31 @@ const Index = () => {
 
           <nav className="shrink-0 w-full sm:w-auto overflow-x-auto [-webkit-overflow-scrolling:touch]">
             <div className="inline-flex items-center gap-2 bg-secondary/50 rounded-xl p-1.5 min-w-max">
-            {tabs.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`relative flex items-center gap-2 px-3 sm:px-5 py-2 text-sm sm:text-base font-semibold rounded-lg transition-colors ${
-                  activeTab === tab.id
-                    ? "text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground hover:bg-secondary/40"
-                }`}
-              >
-                {activeTab === tab.id && (
-                  <motion.div
-                    layoutId="activeTab"
-                    className="absolute inset-0 bg-primary rounded-lg"
-                    transition={{ type: "spring", duration: 0.4, bounce: 0.15 }}
-                  />
-                )}
-                <span className="relative z-10 flex items-center justify-center gap-2 min-w-10">
-                  <tab.icon className="w-4 h-4 shrink-0" />
-                  {/* Show compact labels on small screens when space allows; prevents icon collisions on ultra-narrow widths */}
-                  <span className="hidden min-[380px]:inline text-[11px] leading-none sm:text-sm">
-                    {tab.id === "chat" ? "Advisor" : "Dashboard"}
+              {tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`relative flex items-center gap-2 px-3 sm:px-5 py-2 text-sm sm:text-base font-semibold rounded-lg transition-colors ${
+                    activeTab === tab.id
+                      ? "text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground hover:bg-secondary/40"
+                  }`}
+                >
+                  {activeTab === tab.id && (
+                    <motion.div
+                      layoutId="activeTab"
+                      className="absolute inset-0 bg-primary rounded-lg"
+                      transition={{ type: "spring", duration: 0.4, bounce: 0.15 }}
+                    />
+                  )}
+                  <span className="relative z-10 flex items-center justify-center gap-2 min-w-10">
+                    <tab.icon className="w-4 h-4 shrink-0" />
+                    <span className="hidden min-[380px]:inline text-[11px] leading-none sm:text-sm">
+                      {tab.id === "chat" ? "Advisor" : "Dashboard"}
+                    </span>
                   </span>
-                </span>
-              </button>
-            ))}
+                </button>
+              ))}
             </div>
           </nav>
         </div>

@@ -104,6 +104,14 @@ module "database" {
   depends_on          = [google_project_service.apis]
 }
 
+# MLflow gets its own database on the same Cloud SQL instance so its ~21
+# internal tables don't pollute the app database.
+resource "google_sql_database" "mlflow" {
+  name       = "${local.prefix}-mlflow-db"
+  instance   = module.database.instance_name
+  depends_on = [module.database]
+}
+
 # ---- Secrets ----
 module "db_password_secret" {
   source                         = "../../modules/secrets"
@@ -338,7 +346,7 @@ module "mlflow" {
     ENVIRONMENT              = var.environment
     DB_ENV                   = "prod"
     DB_USER                  = module.database.user_name
-    DB_NAME                  = module.database.database_name
+    DB_NAME                  = google_sql_database.mlflow.name
     DB_HOST                  = "/cloudsql/${module.database.connection_name}"
     INSTANCE_CONNECTION_NAME = module.database.connection_name
     MLFLOW_ARTIFACT_ROOT     = "gs://${module.mlflow_bucket.bucket_name}/artifacts"
@@ -347,5 +355,5 @@ module "mlflow" {
     DB_PASS = { secret_id = module.db_password_secret.secret_id, version = "latest" }
   }
 
-  depends_on = [google_project_service.apis, module.db_password_secret]
+  depends_on = [google_project_service.apis, module.db_password_secret, google_sql_database.mlflow]
 }

@@ -91,7 +91,7 @@ cd SavVio
 ### 2. Full Stack via Docker Compose (Recommended)
 Starts Postgres + API + Frontend together:
 ```bash
-cp .env.example .env        # fill in DB_USER, DB_PASSWORD, DB_NAME, OPEN_ROUTER_API_KEY
+cp .env.example .env        # fill in DB_*; for Vertex AI set VERTEX_PROJECT (see deployment/api/README.md)
 docker compose up --build
 # Frontend: http://localhost:8501
 # API:      http://localhost:8080
@@ -103,7 +103,7 @@ docker compose up --build
 python -m venv .venv && source .venv/bin/activate
 pip install -e savviocore
 pip install -r deployment/requirements.txt
-cp .env.example .env        # fill in DB_* and OPEN_ROUTER_API_KEY
+cp .env.example .env        # fill in DB_*; for Vertex AI set VERTEX_PROJECT + `gcloud auth application-default login`
 export $(grep -v '^#' .env | xargs)
 ./deployment/api/run_api.sh
 ```

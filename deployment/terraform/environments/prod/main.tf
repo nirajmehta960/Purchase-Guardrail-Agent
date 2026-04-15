@@ -213,7 +213,6 @@ module "api" {
     DB_HOST                        = "/cloudsql/${module.database.connection_name}"
     INSTANCE_CONNECTION_NAME       = module.database.connection_name
     MLFLOW_TRACKING_URI            = module.mlflow.service_url
-    LLM_PROVIDER                   = "vertex"
     VERTEX_PROJECT                 = var.project_id
     VERTEX_LOCATION                = var.region
     METRICS_ENABLED                = "true"

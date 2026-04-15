@@ -43,10 +43,9 @@ services:
       DB_NAME: ${DB_NAME}
       MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      OPEN_ROUTER_API_KEY: ${OPEN_ROUTER_API_KEY:-}
-      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      VERTEX_PROJECT: ${VERTEX_PROJECT:-}
+      VERTEX_LOCATION: ${VERTEX_LOCATION:-us-east1}
+      VERTEX_MODEL: ${VERTEX_MODEL:-}
       METRICS_ENABLED: "true"
     depends_on:
       postgres:
@@ -59,7 +58,7 @@ services:
       args:
         VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8080}
     ports:
-      - "8501:8080"   # host 8501 → nginx inside container on 8080
+      - "8501:8080" # host 8501 → nginx inside container on 8080
     depends_on:
       - api
 

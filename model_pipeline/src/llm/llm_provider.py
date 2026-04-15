@@ -182,10 +182,11 @@ class VertexAIProvider(BaseLLMProvider):
             project
             or os.environ.get("VERTEX_PROJECT")
             or os.environ.get("GCP_PROJECT_ID", "").strip()
+            or os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
         )
         if not self._project:
             raise ValueError(
-                "Vertex AI project not set — provide VERTEX_PROJECT or GCP_PROJECT_ID env var"
+                "Vertex AI project not set — provide VERTEX_PROJECT, GCP_PROJECT_ID, or GOOGLE_CLOUD_PROJECT env var"
             )
         self._location = location or os.environ.get("VERTEX_LOCATION", self._DEFAULT_LOCATION)
         self._model = model or os.environ.get("VERTEX_MODEL", self._DEFAULT_MODEL)
@@ -256,6 +257,7 @@ def get_provider() -> BaseLLMProvider:
     project = (
         os.environ.get("VERTEX_PROJECT")
         or os.environ.get("GCP_PROJECT_ID", "").strip()
+        or os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
     )
     if project:
         try:

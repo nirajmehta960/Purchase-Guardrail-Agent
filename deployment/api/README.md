@@ -134,13 +134,20 @@ If you run from another directory (for example only `model_pipeline/src`) withou
 
 **Note:** `model_pipeline/src/data/db_loader.py` is used only by the **training pipeline** (`run_pipeline.py`), not by this API. Changing or reverting it does not start or stop the backend.
 
+**LLM (Vertex AI)** — Explanations and intent parsing use **Vertex AI (Gemini)** via `llm.llm_provider.get_provider()`, not OpenRouter. Configure:
+
+1. `gcloud auth application-default login` (uses your user credentials locally).
+2. In the repo root `.env` or `model_pipeline/.env`, set `VERTEX_PROJECT=<your-gcp-project-id>` (and optionally `VERTEX_LOCATION`, default `us-east1`).
+
+Cloud Run receives `VERTEX_PROJECT` / `VERTEX_LOCATION` from Terraform and uses the runtime service account (`roles/aiplatform.user`). `GOOGLE_CLOUD_PROJECT` is also accepted if set.
+
+If no project is resolvable, the API falls back to **`mock`** (template text, not Vertex).
+
 The server initializes everything and will typically output:
 ```log
-[INFO] Loading model manager resources...
-[INFO] Loaded model via mlflow.pyfunc from: .../model_pipeline/models/artifacts
-[INFO] Native LightGBM model available for predict_proba (.../model_pipeline/models/artifacts)
 [INFO] Database connected (env=dev)
-[INFO] LLM provider initialized: mock
+[INFO] Using LLM provider: vertex (gemini-2.5-flash) in us-east1
+[INFO] LLM provider initialized: vertex
 [INFO] Model manager fully loaded.
 ```
 

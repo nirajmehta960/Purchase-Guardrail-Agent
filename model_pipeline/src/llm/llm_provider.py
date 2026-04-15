@@ -28,15 +28,10 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Shared system message — defines SavVio's voice for all real providers.
+# Shared system message — canonical persona + rules for every LLM call.
+# Imported from prompts/system_prompt.py so there is one source of truth.
 # ---------------------------------------------------------------------------
-_SYSTEM_MESSAGE = (
-    "You are SavVio, a fiduciary financial advisor. "
-    "Your job is to explain a purchase recommendation to the user in clear, honest, specific language. "
-    "Always reference the exact numbers given — never invent or round financial facts. "
-    "When customer reviews are provided, quote or paraphrase real details from them. "
-    "Follow the output structure instructions in the user message exactly."
-)
+from llm.prompts.system_prompt import SYSTEM_PROMPT as _SYSTEM_MESSAGE
 
 # ---------------------------------------------------------------------------
 # Retry helper — handles transient 429 / 503 errors.
@@ -168,13 +163,13 @@ class VertexAIProvider(BaseLLMProvider):
     On Cloud Run the service account token is fetched automatically.
     Locally: run `gcloud auth application-default login` and set VERTEX_PROJECT.
 
-    Model: gemini-3.0-flash (lower latency in GCP, same region).
+    Model: gemini-2.5-flash (latest stable on Vertex AI, lower latency in GCP).
     Cost: ~$0.075/M input tokens, $0.30/M output tokens (direct GCP pricing).
     No API key needed — IAM controls access via roles/aiplatform.user.
     """
 
     provider_name = "vertex"
-    _DEFAULT_MODEL = "gemini-3.0-flash"
+    _DEFAULT_MODEL = "gemini-2.5-flash"
     _DEFAULT_LOCATION = "us-east1"
 
     def __init__(
@@ -225,8 +220,11 @@ class VertexAIProvider(BaseLLMProvider):
             "system_instruction": {"parts": [{"text": _SYSTEM_MESSAGE}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
-                "maxOutputTokens": max_tokens,
                 "temperature": temperature,
+                "maxOutputTokens": max_tokens,
+                # Disable thinking — the LLM narrates pre-computed decisions,
+                # it doesn't need internal reasoning. Saves 3-5s latency.
+                "thinkingConfig": {"thinkingBudget": 0},
             },
         }
         token = self._get_access_token()

@@ -71,9 +71,17 @@ function mapRecommendationToSignal(rec: string): Signal | undefined {
 // ---------------------------------------------------------------------------
 
 function InlineBold({ text }: { text: string }) {
+  const cleaned = text.replace(/(?<!\*)\*\*(?!\*)/g, (m, offset, str) => {
+    const before = str.slice(0, offset);
+    const after = str.slice(offset + 2);
+    const openCount = (before.match(/(?<!\*)\*\*(?!\*)/g) || []).length;
+    if (openCount % 2 === 1) return m; // closing marker — keep
+    if (/\*\*(?!\*)/.test(after)) return m; // has a matching close — keep
+    return ""; // orphaned marker — strip
+  });
   return (
     <>
-      {text.split(/(\*\*.*?\*\*)/).map((part, i) =>
+      {cleaned.split(/(\*\*.*?\*\*)/).map((part, i) =>
         part.startsWith("**") && part.endsWith("**") ? (
           <strong key={i} className="font-semibold text-foreground">
             {part.slice(2, -2)}

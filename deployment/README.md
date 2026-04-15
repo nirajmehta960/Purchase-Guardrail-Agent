@@ -320,7 +320,7 @@ Package the full inference stack — FastAPI app, Deterministic Engine, ML model
   ```
 - Build and run the full stack locally with docker-compose (from repo root):
   ```bash
-  cp .env.example .env   # fill in DB_USER, DB_PASSWORD, DB_NAME, OPEN_ROUTER_API_KEY
+  cp .env.example .env   # fill in DB_USER, DB_PASSWORD, DB_NAME; set VERTEX_* for Vertex AI
   docker compose up --build
   ```
 - Or build the API image standalone:
@@ -404,6 +404,8 @@ All env vars and secrets are managed by Terraform (`deployment/terraform/environ
 The `gcloud run deploy` steps in `deployment.yml` only update the container image —
 existing env var configuration on the Cloud Run service is preserved.
 
+If the Cloud Run service was edited in the console, remove legacy **`LLM_PROVIDER=openrouter`** and **`OPEN_ROUTER_API_KEY`** from **`savvio-backend-api`** so they do not override Terraform intent. The API uses **`llm.llm_provider.get_provider()`** (Vertex when `VERTEX_PROJECT` or `GOOGLE_CLOUD_PROJECT` is set), not `LLMConfig.PROVIDER`.
+
 Key env vars set by Terraform on the API service:
 
 | Variable | Source | Value |
@@ -413,12 +415,12 @@ Key env vars set by Terraform on the API service:
 | `DB_USER` | env_var | from Terraform |
 | `DB_NAME` | env_var | from Terraform |
 | `MLFLOW_TRACKING_URI` | env_var | Cloud Run MLflow URL |
-| `LLM_PROVIDER` | env_var | `"openrouter"` |
+| `VERTEX_PROJECT` | env_var | GCP project ID (same as Cloud Run project) |
+| `VERTEX_LOCATION` | env_var | Vertex region (e.g. `us-east1`, matches Terraform `var.region`) |
 | `METRICS_ENABLED` | env_var | `"true"` |
 | `GRAFANA_CLOUD_REMOTE_WRITE_URL` | env_var | from GitHub Secret |
 | `GRAFANA_CLOUD_USERNAME` | env_var | from GitHub Secret |
 | `DB_PASS` | Secret Manager | `savvio-dev-db-password` |
-| `OPEN_ROUTER_API_KEY` | Secret Manager | `savvio-dev-open-router-api-key` |
 | `GRAFANA_CLOUD_API_KEY` | Secret Manager | `savvio-dev-grafana-api-key` |
 
 ### Tools

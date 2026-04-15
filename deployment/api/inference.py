@@ -247,7 +247,9 @@ def _load_product_data(product: ProductResolution, manager) -> tuple[dict, list]
     reviews_df = pd.DataFrame(review_rows, columns=review_cols) if review_rows else pd.DataFrame()
 
     # Compute product + review features
-    products_df = pd.read_sql("SELECT product_id, price, average_rating, rating_number, rating_variance, category FROM products", manager.db_engine)
+    with manager.db_engine.connect() as _conn:
+        _result = _conn.execute(text("SELECT product_id, price, average_rating, rating_number, rating_variance, category FROM products"))
+        products_df = pd.DataFrame(_result.fetchall(), columns=_result.keys())
     cat_stats = compute_category_stats(products_df)
     max_rn = float(products_df["rating_number"].max() or 0)
 
@@ -324,8 +326,9 @@ def _apply_layer2_downgrade(ml_label: str, product_data: dict):
 # Stage 5: LLM Response Generation + Guardrails
 # ---------------------------------------------------------------------------
 
-def _generate_explanation(product: ProductResolution, ml: MLScore, user_profile: dict, manager, downgrade_result=None, review_snippets: list = None) -> str:
+def _generate_explanation(product: ProductResolution, ml: MLScore, user_profile: dict, manager, downgrade_result=None, review_snippets: list = None, product_data: dict = None) -> str:
     """Invokes LLM for natural language reasoning and validates output against decision color."""
+    product_data = product_data or {}
     final_color = (downgrade_result.final_label if downgrade_result else None) or ml.predicted_label or "YELLOW"
     original_color = (downgrade_result.original_label if downgrade_result else None) or final_color
     was_downgraded = downgrade_result.was_downgraded if downgrade_result else False
@@ -347,15 +350,51 @@ def _generate_explanation(product: ProductResolution, ml: MLScore, user_profile:
         ml_unavailable_reason=ml.unavailable_reason,
         hypothetical_purchase=(product.evaluation_mode == "hypothetical"),
         user_context=product.user_context,
+        # Financial raw
+        monthly_income=float(user_profile.get("monthly_income", 0) or 0),
+        monthly_expenses=float(user_profile.get("monthly_expenses", 0) or 0),
+        savings_balance=float(user_profile.get("savings_balance", 0) or 0),
+        liquid_savings=float(user_profile.get("liquid_savings", 0) or 0),
+        discretionary_income=float(user_profile.get("discretionary_income", 0) or 0),
+        employment_status=str(user_profile.get("employment_status", "") or ""),
+        region=str(user_profile.get("region", "") or ""),
+        credit_score=user_profile.get("credit_score"),
+        has_loan=bool(user_profile.get("has_loan", False)),
+        loan_amount=float(user_profile.get("loan_amount", 0) or 0),
+        monthly_emi=float(user_profile.get("monthly_emi", 0) or 0),
+        loan_interest_rate=float(user_profile.get("loan_interest_rate", 0) or 0),
+        loan_term_months=int(user_profile.get("loan_term_months", 0) or 0),
+        # Financial computed
         affordability_score=ml.affordability_score,
         affordability_score_unreliable=ml.affordability_unreliable,
         savings_to_price_ratio=ml.savings_to_price_ratio,
         emergency_fund_months=float(user_profile.get("emergency_fund_months", 0) or 0),
         debt_to_income_ratio=float(user_profile.get("debt_to_income_ratio", 0) or 0),
-        monthly_income=float(user_profile.get("monthly_income", 0) or 0),
         monthly_expense_burden_ratio=float(user_profile.get("monthly_expense_burden_ratio", 0) or 0),
         price_to_income_ratio=ml.price_to_income_ratio,
-        credit_score=user_profile.get("credit_score"),
+        saving_to_income_ratio=float(user_profile.get("saving_to_income_ratio", 0) or 0),
+        residual_utility_score=ml.residual_utility_score,
+        net_worth_indicator=ml.net_worth_indicator,
+        credit_risk_indicator=ml.credit_risk_indicator,
+        # Product signals
+        category=str(product_data.get("category", "") or ""),
+        average_rating=float(product_data.get("average_rating", 0) or 0),
+        rating_count=int(product_data.get("rating_number", 0) or 0),
+        rating_variance=float(product_data.get("rating_variance", 0) or 0),
+        cold_start_flag=bool(product_data.get("cold_start_flag", 0)),
+        category_rating_deviation=float(product_data.get("category_rating_deviation", 0) or 0),
+        value_density=float(product_data.get("value_density", 0) or 0),
+        review_confidence=float(product_data.get("review_confidence", 0) or 0),
+        rating_polarization=float(product_data.get("rating_polarization", 0) or 0),
+        quality_risk_score=float(product_data.get("quality_risk_score", 0) or 0),
+        price_category_rank=float(product_data.get("price_category_rank", 0) or 0),
+        # Review signals
+        verified_purchase_ratio=float(product_data.get("verified_purchase_ratio", 0) or 0),
+        sentiment_spread=float(product_data.get("sentiment_spread", 0) or 0),
+        helpful_concentration=float(product_data.get("helpful_concentration", 0) or 0),
+        review_depth_score=float(product_data.get("review_depth_score", 0) or 0),
+        reviewer_diversity=float(product_data.get("reviewer_diversity", 0) or 0),
+        extreme_rating_ratio=float(product_data.get("extreme_rating_ratio", 0) or 0),
         review_snippets=review_snippets or [],
     )
 
@@ -425,7 +464,7 @@ def run_inference(request: PredictRequest, manager) -> PredictResponse:
 
     final_label = (downgrade_result.final_label if downgrade_result else None) or ml.predicted_label or "YELLOW"
 
-    explanation = _generate_explanation(resolution, ml, user_profile, manager, downgrade_result, review_snippets)
+    explanation = _generate_explanation(resolution, ml, user_profile, manager, downgrade_result, review_snippets, product_data)
 
     elapsed = time.time() - start_time
     logger.info("Inference complete: %s (%.3fs)", final_label, elapsed)

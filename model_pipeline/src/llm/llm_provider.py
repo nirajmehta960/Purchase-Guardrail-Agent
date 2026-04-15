@@ -168,13 +168,13 @@ class VertexAIProvider(BaseLLMProvider):
     On Cloud Run the service account token is fetched automatically.
     Locally: run `gcloud auth application-default login` and set VERTEX_PROJECT.
 
-    Model: gemini-3.0-flash (lower latency in GCP, same region).
+    Model: gemini-2.5-flash (latest stable on Vertex AI, lower latency in GCP).
     Cost: ~$0.075/M input tokens, $0.30/M output tokens (direct GCP pricing).
     No API key needed — IAM controls access via roles/aiplatform.user.
     """
 
     provider_name = "vertex"
-    _DEFAULT_MODEL = "gemini-3.0-flash"
+    _DEFAULT_MODEL = "gemini-2.5-flash"
     _DEFAULT_LOCATION = "us-east1"
 
     def __init__(
@@ -225,8 +225,9 @@ class VertexAIProvider(BaseLLMProvider):
             "system_instruction": {"parts": [{"text": _SYSTEM_MESSAGE}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
-                "maxOutputTokens": max_tokens,
                 "temperature": temperature,
+                # No maxOutputTokens — let the model use its full output budget.
+                # Thinking is enabled by default (thinkingBudget omitted = model decides).
             },
         }
         token = self._get_access_token()

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { User } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { useUser } from "../context/UserContext";
+import { useUser, DEFAULT_USER_ID } from "../context/UserContext";
 
 export function UserIdInput() {
   const { userId, setUserId, profileError, isLoadingProfile } = useUser();
@@ -26,7 +26,7 @@ export function UserIdInput() {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && apply()}
-          placeholder="User ID (e.g. U00047)"
+          placeholder={`User ID (default ${DEFAULT_USER_ID})`}
           className={`h-10 sm:h-11 text-sm sm:text-base bg-secondary/40 min-w-0 ${
             hasError ? "border-destructive focus-visible:ring-destructive/40" : "border-border/60"
           }`}

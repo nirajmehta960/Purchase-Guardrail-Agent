@@ -52,7 +52,11 @@ const Index = () => {
                     <motion.div
                       layoutId="activeTab"
                       className="absolute inset-0 bg-primary rounded-lg"
-                      transition={{ type: "spring", duration: 0.4, bounce: 0.15 }}
+                      transition={{
+                        type: "spring",
+                        duration: 0.4,
+                        bounce: 0.15,
+                      }}
                     />
                   )}
                   <span className="relative z-10 flex items-center justify-center gap-2 min-w-10">
@@ -68,21 +72,26 @@ const Index = () => {
         </div>
       </header>
 
-      {/* Content */}
-      <main className="container flex-1 min-h-0 py-4 sm:py-6 pb-0 overflow-hidden">
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={activeTab}
-            className="h-full"
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -12 }}
-            transition={{ duration: 0.25 }}
-          >
-            {activeTab === "chat" && <AiChat />}
-            {activeTab === "dashboard" && <FinancialDashboard />}
-          </motion.div>
-        </AnimatePresence>
+      {/* Content — one full-width scroll region (scrollbar on viewport edge) for both tabs */}
+      <main className="flex-1 min-h-0 min-w-0 flex flex-col">
+        <div
+          id="main-scroll"
+          className="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden scrollbar-thin [-webkit-overflow-scrolling:touch]"
+        >
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activeTab}
+              className="container mx-auto w-full max-w-full px-4 sm:px-6 py-4 sm:py-6 pb-8"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -12 }}
+              transition={{ duration: 0.25 }}
+            >
+              {activeTab === "chat" && <AiChat />}
+              {activeTab === "dashboard" && <FinancialDashboard />}
+            </motion.div>
+          </AnimatePresence>
+        </div>
       </main>
     </div>
   );

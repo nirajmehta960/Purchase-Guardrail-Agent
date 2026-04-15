@@ -7,12 +7,6 @@ variable "api_image"       { type = string }
 variable "frontend_image"  { type = string }
 variable "mlflow_image"    { type = string }
 
-variable "open_router_api_key" {
-  description = "OpenRouter API key for LLM inference"
-  type        = string
-  sensitive   = true
-}
-
 variable "grafana_remote_write_url" {
   description = "Grafana Cloud Prometheus remote-write URL"
   type        = string

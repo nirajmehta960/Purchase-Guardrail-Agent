@@ -33,6 +33,7 @@ resource "google_project_service" "apis" {
     "artifactregistry.googleapis.com",
     "run.googleapis.com",
     "iam.googleapis.com",
+    "aiplatform.googleapis.com",
   ])
   service            = each.key
   disable_on_destroy = false
@@ -48,6 +49,12 @@ resource "google_service_account" "cloud_run" {
 resource "google_project_iam_member" "run_sql_client" {
   project = var.project_id
   role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+resource "google_project_iam_member" "run_vertex_ai_user" {
+  project = var.project_id
+  role    = "roles/aiplatform.user"
   member  = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
@@ -81,14 +88,6 @@ module "db_password_secret" {
   source                         = "../../modules/secrets"
   secret_id                      = "${local.prefix}-db-password"
   secret_data                    = module.database.password
-  accessor_service_account_email = google_service_account.cloud_run.email
-  depends_on                     = [google_project_service.apis]
-}
-
-module "open_router_secret" {
-  source                         = "../../modules/secrets"
-  secret_id                      = "${local.prefix}-open-router-api-key"
-  secret_data                    = var.open_router_api_key
   accessor_service_account_email = google_service_account.cloud_run.email
   depends_on                     = [google_project_service.apis]
 }
@@ -214,18 +213,19 @@ module "api" {
     DB_HOST                        = "/cloudsql/${module.database.connection_name}"
     INSTANCE_CONNECTION_NAME       = module.database.connection_name
     MLFLOW_TRACKING_URI            = module.mlflow.service_url
-    LLM_PROVIDER                   = "openrouter"
+    LLM_PROVIDER                   = "vertex"
+    VERTEX_PROJECT                 = var.project_id
+    VERTEX_LOCATION                = var.region
     METRICS_ENABLED                = "true"
     GRAFANA_CLOUD_REMOTE_WRITE_URL = var.grafana_remote_write_url
     GRAFANA_CLOUD_USERNAME         = var.grafana_cloud_username
   }
   secret_env_vars = {
     DB_PASS               = { secret_id = module.db_password_secret.secret_id, version = "latest" }
-    OPEN_ROUTER_API_KEY   = { secret_id = module.open_router_secret.secret_id, version = "latest" }
     GRAFANA_CLOUD_API_KEY = { secret_id = module.grafana_api_key_secret.secret_id, version = "latest" }
   }
 
-  depends_on = [google_project_service.apis, module.db_password_secret, module.open_router_secret, module.grafana_api_key_secret, module.mlflow]
+  depends_on = [google_project_service.apis, module.db_password_secret, module.grafana_api_key_secret, module.mlflow]
 }
 
 # ---- Cloud Run: Frontend ----

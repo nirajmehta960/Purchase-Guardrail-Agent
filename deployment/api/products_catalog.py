@@ -9,6 +9,11 @@ from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
+# Text before first "|" / "｜" — the customer-facing title, without SKU tails.
+_HEADLINE_SQL = "TRIM(SPLIT_PART(REPLACE(product_name, '｜', '|'), '|', 1))"
+# Drop one-word / typo rows ("Washer", "cvgvdf", bare brands); require a phrase-like title.
+_MIN_HEADLINE_LEN = 18
+
 
 def list_products(
     db_engine: Any,
@@ -26,6 +31,8 @@ def list_products(
 
     Rows: product_id, product_name, price, average_rating, rating_number.
     Filters by COALESCE(price,0) in [price_min, price_max]; optional ILIKE on product_name.
+    Rows must have a headline (text before first |) with at least min length and a space
+    so single-token junk names are excluded from browse.
     """
     pmin = default_price_min if price_min is None else float(price_min)
     pmax = default_price_max if price_max is None else float(price_max)
@@ -45,10 +52,16 @@ def list_products(
         where_clauses.append("product_name ILIKE :name_pat")
         params["name_pat"] = pat
 
+    where_clauses.append(f"LENGTH({_HEADLINE_SQL}) >= :min_headline_len")
+    where_clauses.append(f"POSITION(' ' IN {_HEADLINE_SQL}) > 0")
+    params["min_headline_len"] = _MIN_HEADLINE_LEN
+
     where_sql = " AND ".join(where_clauses)
 
     count_sql = text(f"SELECT COUNT(*) AS c FROM products WHERE {where_sql}")
 
+    # Popularity first — short-title-first was surfacing junk (single words, typos). Quality
+    # filters above require a multi-word headline of minimum length.
     list_sql = text(
         f"""
         SELECT product_id, product_name, price, average_rating, rating_number

@@ -20,6 +20,39 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { fetchProducts, type ProductListItem } from "../services/api";
 
+/** Strip noise after first vertical bar, then cap length for one-line catalog rows. */
+const CATALOG_TITLE_MAX = 52;
+
+function primaryProductTitle(name: string): string {
+  const t = name.trim();
+  return t.split(/[|｜]/)[0]?.trim() ?? t;
+}
+
+/**
+ * Amazon-style titles are often comma-stacked marketing clauses. For display, use the
+ * first clause when the headline is long and comma-heavy so the row reads like a product name, not a paragraph.
+ */
+function scannableProductTitle(raw: string): string {
+  const primary = primaryProductTitle(raw);
+  const commaCount = (primary.match(/,/g) ?? []).length;
+  if (commaCount >= 2 && primary.length > 55) {
+    const first = primary.split(",")[0]?.trim() ?? primary;
+    if (first.length >= 10) return first;
+  }
+  return primary;
+}
+
+function shortCatalogTitle(name: string): { display: string; tooltip: string | null } {
+  const raw = name.trim();
+  const primary = primaryProductTitle(raw);
+  const readable = scannableProductTitle(raw);
+  const display =
+    readable.length > CATALOG_TITLE_MAX ? `${readable.slice(0, CATALOG_TITLE_MAX - 1)}…` : readable;
+  const tooltip =
+    display.endsWith("…") || raw !== readable || readable !== primary ? raw : null;
+  return { display, tooltip };
+}
+
 interface CatalogSearchProps {
   useCatalog: boolean;
   onUseCatalogChange: (v: boolean) => void;
@@ -71,6 +104,8 @@ export function CatalogSearch({
     };
   }, [catalogOpen, searchQ]);
 
+  const selectedCatalog = selectedProduct ? shortCatalogTitle(selectedProduct.product_name) : null;
+
   return (
     <div className="glass-card px-3 py-2.5 mb-2 space-y-2 rounded-xl border border-border/40">
       <div className="flex items-center justify-between gap-3">
@@ -106,11 +141,10 @@ export function CatalogSearch({
                 aria-expanded={catalogOpen}
                 className="min-w-[200px] max-w-full justify-between font-normal text-left h-9"
                 disabled={disabled}
+                title={selectedCatalog?.tooltip ?? undefined}
               >
-                <span className="truncate">
-                  {selectedProduct
-                    ? `${selectedProduct.product_name.slice(0, 48)}${selectedProduct.product_name.length > 48 ? "…" : ""}`
-                    : "Search products…"}
+                <span className="truncate min-w-0 text-left">
+                  {selectedCatalog ? selectedCatalog.display : "Search products…"}
                 </span>
                 <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
               </Button>
@@ -132,23 +166,28 @@ export function CatalogSearch({
                   )}
                   {!catalogLoading && catalogItems.length > 0 && (
                     <CommandGroup>
-                      {catalogItems.map((p) => (
-                        <CommandItem
-                          key={p.product_id}
-                          value={p.product_id}
-                          onSelect={() => {
-                            onSelectProduct(p);
-                            setCatalogOpen(false);
-                          }}
-                        >
-                          <span className="flex flex-col gap-0.5 min-w-0">
-                            <span className="truncate font-medium">{p.product_name}</span>
-                            <span className="text-xs text-muted-foreground">
-                              {p.price != null ? `$${p.price.toLocaleString()}` : "—"} · {p.product_id}
+                      {catalogItems.map((p) => {
+                        const { display, tooltip } = shortCatalogTitle(p.product_name);
+                        return (
+                          <CommandItem
+                            key={p.product_id}
+                            value={p.product_id}
+                            title={tooltip ?? undefined}
+                            onSelect={() => {
+                              onSelectProduct(p);
+                              setCatalogOpen(false);
+                            }}
+                            className="cursor-pointer items-start"
+                          >
+                            <span className="flex min-w-0 w-full flex-col gap-0.5">
+                              <span className="font-medium leading-snug">{display}</span>
+                              <span className="text-xs text-muted-foreground">
+                                {p.price != null ? `$${p.price.toLocaleString()}` : "—"} · {p.product_id}
+                              </span>
                             </span>
-                          </span>
-                        </CommandItem>
-                      ))}
+                          </CommandItem>
+                        );
+                      })}
                     </CommandGroup>
                   )}
                 </CommandList>

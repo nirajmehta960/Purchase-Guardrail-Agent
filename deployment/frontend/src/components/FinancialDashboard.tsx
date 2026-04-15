@@ -115,7 +115,7 @@ export const FinancialDashboard = () => {
     {
       label: "Monthly Income",
       value: fmtMoney(p.monthly_income),
-      change: p.region ? p.region : "—",
+      change: "",
       up: true,
       icon: Wallet,
       sub: true,
@@ -139,7 +139,7 @@ export const FinancialDashboard = () => {
     {
       label: "Credit Score",
       value: p.credit_score != null ? String(p.credit_score) : "—",
-      change: p.employment_status ?? "",
+      change: "",
       up: true,
       icon: ShieldCheck,
       sub: true,
@@ -180,7 +180,7 @@ export const FinancialDashboard = () => {
   ];
 
   return (
-    <div className="space-y-6 h-full overflow-y-auto pb-10 pr-2 scrollbar-thin">
+    <div className="space-y-6">
       <div>
         <h1 className="font-heading text-xl font-semibold mb-1">Financial Health Dashboard</h1>
         <p className="text-sm text-muted-foreground">
@@ -300,7 +300,11 @@ export const FinancialDashboard = () => {
                     justifyContent: 'center',
                     paddingTop: '10px'
                   }}
-                  formatter={(value) => <span style={{ marginLeft: '4px', marginRight: '28px', color: 'hsl(215, 20%, 65%)' }}>{value}</span>}
+                  formatter={(value) => (
+                    <span style={{ marginLeft: "4px", marginRight: "28px", color: "hsl(215, 20%, 65%)" }}>
+                      {value}
+                    </span>
+                  )}
                 />
                 <Pie 
                   data={allocationData} 
@@ -313,11 +317,19 @@ export const FinancialDashboard = () => {
                   paddingAngle={5} 
                   stroke="none"
                   label={({ x, y, value, cx }) => (
-                    <text x={x} y={y} fill="hsl(215, 20%, 65%)" textAnchor={x > cx ? 'start' : 'end'} dominantBaseline="central" fontSize={12} fontWeight={500}>
+                    <text
+                      x={x}
+                      y={y}
+                      fill="hsl(215, 20%, 65%)"
+                      textAnchor={x > cx ? "start" : "end"}
+                      dominantBaseline="central"
+                      fontSize={12}
+                      fontWeight={500}
+                    >
                       ${Math.round(value).toLocaleString()}
                     </text>
                   )}
-                  labelLine={{ stroke: 'hsl(215, 20%, 40%)', strokeWidth: 1 }}
+                  labelLine={{ stroke: "hsl(215, 20%, 40%)", strokeWidth: 1 }}
                 >
                   {allocationData.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={entry.fill} />
@@ -397,8 +409,16 @@ export const FinancialDashboard = () => {
               <ResponsiveContainer>
                 <BarChart data={impactData} layout="vertical" margin={{ top: 0, right: 30, left: 30, bottom: 0 }} barSize={35}>
                   <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="hsl(222,30%,18%)" />
-                  <XAxis type="number" stroke="hsl(215,20%,55%)" fontSize={11} domain={[0, 'dataMax + 2']} hide/>
-                  <YAxis type="category" dataKey="name" stroke="hsl(215,20%,55%)" fontSize={11} width={120} tickLine={false} axisLine={false} />
+                  <XAxis type="number" stroke="hsl(215,20%,55%)" fontSize={11} domain={[0, "dataMax + 2"]} hide />
+                  <YAxis
+                    type="category"
+                    dataKey="name"
+                    stroke="hsl(215,20%,55%)"
+                    fontSize={11}
+                    width={120}
+                    tickLine={false}
+                    axisLine={false}
+                  />
                   <Tooltip contentStyle={CustomTooltipStyle} cursor={{fill: 'transparent'}} />
                   <Bar dataKey="Emergency Fund (Months)" radius={[0, 4, 4, 0]}>
                     {impactData.map((entry, index) => (

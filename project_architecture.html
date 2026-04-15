@@ -6,560 +6,616 @@
   <title>SavVio — System Architecture</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    *{margin:0;padding:0;box-sizing:border-box}
 
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-
-    body {
-      font-family: 'Inter', sans-serif;
-      background: #f8f9fb;
-      color: #1e293b;
-      padding: 40px 24px 30px;
-      min-width: 1220px;
+    body{
+      font-family:'Inter',sans-serif;background:#f8f9fb;color:#1e293b;
+      padding:36px 32px 28px; min-width:1260px;
     }
 
-    /* ── header ── */
-    .header { text-align: center; margin-bottom: 32px; }
-    .header h1 {
-      font-size: 30px; font-weight: 800;
-      background: linear-gradient(135deg,#6366f1,#06b6d4);
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-      letter-spacing: -.5px;
-    }
-    .header p { margin-top: 5px; font-size: 13px; color: #64748b; }
+    /* ══════════ HEADER ══════════ */
+    .hdr{text-align:center;margin-bottom:30px}
+    .hdr h1{font-size:28px;font-weight:800;background:linear-gradient(135deg,#6366f1,#06b6d4);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-.4px}
+    .hdr p{margin-top:4px;font-size:12.5px;color:#64748b}
 
-    /* ── swim-lane rows ── */
-    .lane {
-      display: flex; align-items: stretch; margin-bottom: 14px; position: relative;
+    /* ══════════ SWIM-LANE ROW ══════════ */
+    .lane{display:flex;align-items:stretch;margin-bottom:8px;position:relative}
+    .lane-lbl{
+      writing-mode:vertical-rl;text-orientation:mixed;transform:rotate(180deg);
+      font-weight:700;font-size:11.5px;letter-spacing:.8px;text-transform:uppercase;
+      padding:10px 8px;border-radius:8px 0 0 8px;
+      display:flex;align-items:center;justify-content:center;
+      min-width:40px;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.18);flex-shrink:0;
     }
-    .lane-label {
-      writing-mode: vertical-rl; text-orientation: mixed; transform: rotate(180deg);
-      font-weight: 700; font-size: 12px; letter-spacing: 1px; text-transform: uppercase;
-      padding: 10px 9px; border-radius: 10px 0 0 10px;
-      display: flex; align-items: center; justify-content: center;
-      min-width: 42px; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.2); flex-shrink: 0;
-    }
-    .lane-body {
-      flex: 1; border: 2px dashed; border-left: none; border-radius: 0 14px 14px 0;
-      padding: 18px 18px 14px; position: relative; background: #fff;
-    }
-    .lane-title {
-      position: absolute; top: -11px; left: 16px;
-      font-size: 11px; font-weight: 600; padding: 1px 10px;
-      border-radius: 6px; color: #fff;
+    .lane-bd{
+      flex:1;border:2px dashed;border-left:none;border-radius:0 12px 12px 0;
+      padding:20px 20px 16px;position:relative;background:#fff;
     }
 
     /* lane colours */
-    .lane--dp .lane-label{background:#0d9488} .lane--dp .lane-body{border-color:#99f6e4} .lane--dp .lane-title{background:#0d9488}
-    .lane--model .lane-label{background:#d97706} .lane--model .lane-body{border-color:#fde68a} .lane--model .lane-title{background:#d97706}
-    .lane--cicd .lane-label{background:#16a34a} .lane--cicd .lane-body{border-color:#bbf7d0} .lane--cicd .lane-title{background:#16a34a}
-    .lane--api .lane-label{background:#6366f1} .lane--api .lane-body{border-color:#c7d2fe} .lane--api .lane-title{background:#6366f1}
-    .lane--fe .lane-label{background:#2563eb} .lane--fe .lane-body{border-color:#bfdbfe} .lane--fe .lane-title{background:#2563eb}
-    .lane--mon .lane-label{background:#9333ea} .lane--mon .lane-body{border-color:#e9d5ff} .lane--mon .lane-title{background:#9333ea}
-    .lane--tf .lane-label{background:#475569} .lane--tf .lane-body{border-color:#cbd5e1} .lane--tf .lane-title{background:#475569}
+    .L-dp .lane-lbl{background:#0d9488} .L-dp .lane-bd{border-color:#99f6e4}
+    .L-mp .lane-lbl{background:#d97706} .L-mp .lane-bd{border-color:#fde68a}
+    .L-ci .lane-lbl{background:#16a34a} .L-ci .lane-bd{border-color:#bbf7d0}
+    .L-tf .lane-lbl{background:#475569} .L-tf .lane-bd{border-color:#cbd5e1}
+    .L-api .lane-lbl{background:#6366f1} .L-api .lane-bd{border-color:#c7d2fe}
+    .L-fe .lane-lbl{background:#2563eb} .L-fe .lane-bd{border-color:#bfdbfe}
+    .L-mon .lane-lbl{background:#9333ea} .L-mon .lane-bd{border-color:#e9d5ff}
 
-    /* ── node boxes ── */
-    .node {
-      background: #f1f5f9; border: 1.5px solid #cbd5e1; border-radius: 9px;
-      padding: 9px 13px; font-size: 11.5px; font-weight: 500;
-      text-align: center; line-height: 1.35; position: relative;
-      transition: transform .15s, box-shadow .15s; cursor: default;
+    /* ══════════ SECTION TITLE (top-left of lane body) ══════════ */
+    .sec-title{
+      position:absolute;top:-10px;left:14px;
+      font-size:11px;font-weight:600;padding:1px 9px;border-radius:5px;color:#fff;
     }
-    .node:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,.08); }
+    .L-dp .sec-title{background:#0d9488} .L-mp .sec-title{background:#d97706}
+    .L-ci .sec-title{background:#16a34a} .L-tf .sec-title{background:#475569}
+    .L-api .sec-title{background:#6366f1} .L-fe .sec-title{background:#2563eb}
+    .L-mon .sec-title{background:#9333ea}
 
-    .node--accent{background:linear-gradient(135deg,#ede9fe,#e0e7ff);border-color:#a5b4fc}
-    .node--green{background:linear-gradient(135deg,#dcfce7,#d1fae5);border-color:#86efac}
-    .node--amber{background:linear-gradient(135deg,#fef3c7,#fef9c3);border-color:#fcd34d}
-    .node--rose{background:linear-gradient(135deg,#ffe4e6,#fce7f3);border-color:#fda4af}
-    .node--sky{background:linear-gradient(135deg,#e0f2fe,#dbeafe);border-color:#7dd3fc}
-    .node--purple{background:linear-gradient(135deg,#f3e8ff,#ede9fe);border-color:#c4b5fd}
-    .node--db{background:linear-gradient(135deg,#dbeafe,#bfdbfe);border-color:#60a5fa;border-radius:6px 6px 16px 16px;font-weight:600}
-    .node--docker{background:linear-gradient(135deg,#e0f2fe,#cffafe);border-color:#22d3ee}
-    .node--gcs{background:linear-gradient(135deg,#dcfce7,#d1fae5);border-color:#22c55e;border-radius:16px}
-    .node--dark{background:#24292e;color:#fff;border-color:#24292e}
-    .node--highlight{border-width:2px;border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,.12)}
-    .node--small{font-size:10.5px;padding:5px 9px}
-
-    .node .badge{display:inline-block;font-size:8.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;padding:2px 6px;border-radius:4px;margin-top:3px;color:#fff}
-    .badge--teal{background:#0d9488} .badge--orange{background:#d97706} .badge--indigo{background:#6366f1}
-    .badge--green{background:#16a34a} .badge--purple{background:#9333ea} .badge--blue{background:#2563eb}
-    .badge--rose{background:#e11d48} .badge--slate{background:#475569}
-
-    /* ── docker-box ── */
-    .docker-box {
-      border: 2.5px solid #0ea5e9; border-radius: 14px; padding: 14px 12px 10px;
-      position: relative; background: rgba(14,165,233,.03);
+    /* ══════════ INNER TECHNOLOGY BOXES (Airflow, Docker, etc.) ══════════ */
+    /* Dashed tech-box like old diagram */
+    .tech-box{
+      border:2px dashed #94a3b8;border-radius:12px;
+      padding:22px 16px 14px;position:relative;
+      background:rgba(241,245,249,.45);
     }
-    .docker-box-label {
-      position: absolute; top: -10px; left: 14px;
-      font-size: 10px; font-weight: 700; padding: 1px 8px;
-      border-radius: 5px; background: #0ea5e9; color: #fff;
-      letter-spacing: .3px;
+    .tech-box-lbl{
+      position:absolute;top:-10px;left:14px;
+      font-size:10.5px;font-weight:700;padding:1px 9px;border-radius:5px;
+      color:#0ea5e9;background:#fff;border:1.5px dashed #0ea5e9;
+      letter-spacing:.3px;
+    }
+    /* Docker badge (icon in corner like old diagram) */
+    .docker-badge{
+      position:absolute;top:-18px;right:20px;font-size:28px;line-height:1;
+      filter:drop-shadow(0 1px 2px rgba(0,0,0,.12));
     }
 
-    /* ── flow ── */
-    .flow{display:flex;align-items:center;flex-wrap:wrap;gap:5px}
-    .flow--col{flex-direction:column;align-items:stretch}
+    /* ══════════ NODE BOXES ══════════ */
+    .n{
+      background:#f1f5f9;border:1.5px solid #cbd5e1;border-radius:8px;
+      padding:9px 12px;font-size:11px;font-weight:500;text-align:center;
+      line-height:1.35;transition:transform .12s,box-shadow .12s;cursor:default;
+    }
+    .n:hover{transform:translateY(-2px);box-shadow:0 5px 14px rgba(0,0,0,.07)}
+    .n b{font-weight:700}
+    .n-a{background:linear-gradient(135deg,#ede9fe,#e0e7ff);border-color:#a5b4fc}
+    .n-g{background:linear-gradient(135deg,#dcfce7,#d1fae5);border-color:#86efac}
+    .n-am{background:linear-gradient(135deg,#fef3c7,#fef9c3);border-color:#fcd34d}
+    .n-r{background:linear-gradient(135deg,#ffe4e6,#fce7f3);border-color:#fda4af}
+    .n-sk{background:linear-gradient(135deg,#e0f2fe,#dbeafe);border-color:#7dd3fc}
+    .n-pu{background:linear-gradient(135deg,#f3e8ff,#ede9fe);border-color:#c4b5fd}
+    .n-db{background:linear-gradient(135deg,#dbeafe,#bfdbfe);border-color:#60a5fa;border-radius:6px 6px 14px 14px;font-weight:600}
+    .n-gcs{background:linear-gradient(135deg,#dcfce7,#ecfdf5);border-color:#22c55e;border-radius:14px}
+    .n-dk{background:#24292e;color:#fff;border-color:#24292e}
+    .n-hl{border-width:2px;border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,.1)}
+    .n-sm{font-size:10px;padding:5px 8px}
+    .sub{font-size:9px;color:#64748b;font-weight:600;margin-top:2px}
+    .bdg{display:inline-block;font-size:8px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;padding:2px 6px;border-radius:3px;margin-top:2px;color:#fff}
+    .bdg-t{background:#0d9488} .bdg-o{background:#d97706} .bdg-i{background:#6366f1}
+    .bdg-g{background:#16a34a} .bdg-p{background:#9333ea} .bdg-b{background:#2563eb}
+    .bdg-r{background:#e11d48} .bdg-s{background:#475569}
 
-    /* arrows */
-    .arrow{color:#94a3b8;font-size:17px;font-weight:700;flex-shrink:0;user-select:none;line-height:1}
-    .arrow--down{transform:rotate(90deg);display:block;text-align:center;margin:3px auto}
-    .arrow--color{color:#0ea5e9}
+    /* ══════════ FLEXBOX HELPERS ══════════ */
+    .f{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+    .f-col{flex-direction:column;align-items:stretch}
+    .f-lg{gap:10px} .f-md{gap:7px} .f-sm{gap:3px}
+    .par{display:flex;flex-direction:column;gap:3px}
+    .w-a{flex:0 0 auto} .mt4{margin-top:4px} .mt6{margin-top:6px} .mt8{margin-top:8px}
 
-    /* sub-label */
-    .sub-label{font-size:9.5px;color:#64748b;font-weight:600;margin-top:2px}
+    /* ══════════ CSS ARROWS (proper line + arrowhead) ══════════ */
+    /* Horizontal arrow */
+    .arr{
+      display:flex;align-items:center;flex-shrink:0;height:20px;position:relative;
+    }
+    .arr .line{
+      width:28px;height:0;border-top:2px solid #94a3b8;
+    }
+    .arr .head{
+      width:0;height:0;border-top:5px solid transparent;border-bottom:5px solid transparent;
+      border-left:8px solid #94a3b8;margin-left:-1px;
+    }
+    /* Shorter arrow */
+    .arr-s .line{width:16px}
+    /* Coloured arrow */
+    .arr-c .line{border-color:#0ea5e9}
+    .arr-c .head{border-left-color:#0ea5e9}
+    /* Labeled arrow */
+    .arr-lbl{
+      position:absolute;top:-12px;left:50%;transform:translateX(-50%);
+      font-size:8.5px;font-weight:600;color:#475569;white-space:nowrap;
+    }
 
-    /* parallel stack */
-    .parallel{display:flex;flex-direction:column;gap:3px}
+    /* Vertical section connector arrow (SVG-based for cleanliness) */
+    .conn{
+      display:flex;flex-direction:column;align-items:center;margin:2px 0;position:relative;z-index:1;
+    }
+    .conn-lbl{font-size:9px;font-weight:600;color:#6366f1;margin-bottom:1px;letter-spacing:.2px}
+    .conn svg{display:block}
+
+    /* ══════════ LAYOUT: section with external services ══════════ */
+    .section-outer{
+      display:flex;align-items:stretch;gap:14px;
+    }
+    .section-main{flex:1;min-width:0}
+    .section-side{
+      display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;
+      flex:0 0 auto;
+    }
+
+    /* Horizontal labeled arrow for GCS / external connections */
+    .harrow{
+      display:flex;align-items:center;position:relative;
+    }
+    .harrow .hline{
+      width:40px;height:0;border-top:2px solid #0ea5e9;
+    }
+    .harrow .hhead{
+      width:0;height:0;border-top:5px solid transparent;border-bottom:5px solid transparent;
+    }
+    .harrow .hhead-r{border-left:8px solid #0ea5e9;margin-left:-1px}
+    .harrow .hhead-l{border-right:8px solid #0ea5e9;margin-right:-1px}
+    .harrow .hlbl{
+      position:absolute;top:-13px;left:50%;transform:translateX(-50%);
+      font-size:8px;font-weight:700;color:#0ea5e9;white-space:nowrap;letter-spacing:.2px;
+    }
+
+    /* Vertical labeled arrow for external connections */
+    .varrow{
+      display:flex;flex-direction:column;align-items:center;position:relative;
+    }
+    .varrow .vline{
+      width:0;height:24px;border-left:2px solid #0ea5e9;
+    }
+    .varrow .vhead-d{
+      width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;
+      border-top:8px solid #0ea5e9;margin-top:-1px;
+    }
+    .varrow .vhead-u{
+      width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;
+      border-bottom:8px solid #0ea5e9;margin-bottom:-1px;
+    }
+    .varrow .vlbl{
+      font-size:8px;font-weight:700;color:#0ea5e9;white-space:nowrap;
+    }
 
     /* validation gate */
-    .gate{width:4px;height:34px;background:repeating-linear-gradient(0deg,#f59e0b 0 4px,transparent 4px 8px);border-radius:2px;flex-shrink:0}
+    .gate{width:4px;height:30px;background:repeating-linear-gradient(0deg,#f59e0b 0 4px,transparent 4px 8px);border-radius:2px;flex-shrink:0}
 
-    /* layer stack */
-    .layers{display:flex;flex-direction:column;gap:0;border:2px solid #a5b4fc;border-radius:11px;overflow:hidden}
-    .layers .node{border-radius:0;border-left:none;border-right:none;border-top:none}
-    .layers .node:first-child{border-top:none}
-    .layers .node:last-child{border-bottom:none}
-
-    /* connectors between rows */
-    .connector{display:flex;justify-content:center;margin:-4px 0;position:relative;z-index:1}
-    .connector .arrow--down{font-size:20px;color:#6366f1}
-    .connector-label{font-size:9.5px;font-weight:600;color:#6366f1;text-align:center}
-
-    /* helpers */
-    .gap-lg{gap:10px} .gap-md{gap:6px} .gap-sm{gap:3px}
-    .w-auto{flex:0 0 auto} .ml-auto{margin-left:auto}
-    .mt-6{margin-top:6px} .mt-8{margin-top:8px}
-    .row-2{display:flex;gap:8px;align-items:center}
-
-    .footer{text-align:center;margin-top:26px;font-size:10.5px;color:#94a3b8}
-
-    @media(max-width:1300px){body{overflow-x:auto}}
+    .footer{text-align:center;margin-top:24px;font-size:10px;color:#94a3b8}
   </style>
 </head>
 <body>
 
 <!-- ═══════════════════ HEADER ═══════════════════ -->
-<div class="header">
+<div class="hdr">
   <h1>SavVio — System Architecture</h1>
   <p>AI-Driven Financial Advocacy Tool &nbsp;·&nbsp; MLOps End-to-End Pipeline</p>
 </div>
 
 
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- 1. DATA PIPELINE                                                  -->
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<div class="lane lane--dp">
-  <div class="lane-label">Data Pipeline</div>
-  <div class="lane-body">
-    <div class="lane-title">Airflow DAGs · GCE VM</div>
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<!-- 1 · DATA PIPELINE                                                    -->
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<div class="lane L-dp">
+  <div class="lane-lbl">Data Pipeline</div>
+  <div class="lane-bd">
+    <div class="sec-title">GCE VM</div>
 
-    <!-- Docker box wraps the whole pipeline -->
-    <div class="docker-box" style="margin-top:6px">
-      <div class="docker-box-label">🐳 Dockerized</div>
+    <div class="section-outer" style="margin-top:6px">
 
-      <!-- Row 1: main flow -->
-      <div class="flow gap-lg" style="margin-top:4px">
+      <!-- ── MAIN: Docker + Airflow area ── -->
+      <div class="section-main">
 
-        <!-- GCS source -->
-        <div class="node node--gcs w-auto">
-          ☁️ <strong>GCS Bucket</strong>
-          <div class="sub-label">Raw Data Source</div>
+        <!-- Docker dashed box -->
+        <div class="tech-box" style="border-color:#0ea5e9">
+          <div class="tech-box-lbl">🐳 Docker</div>
+
+          <!-- Airflow dashed box inside Docker -->
+          <div class="tech-box" style="border-color:#d97706;margin-top:4px">
+            <div class="tech-box-lbl" style="color:#d97706;border-color:#d97706">Airflow DAGs</div>
+
+            <!-- Pipeline flow -->
+            <div class="f f-lg" style="margin-top:6px">
+
+              <!-- Sources -->
+              <div class="par">
+                <div class="n n-g n-sm">Financial Profiles</div>
+                <div class="n n-g n-sm">Product Catalog</div>
+                <div class="n n-g n-sm">User Reviews</div>
+                <div class="sub" style="text-align:center">JSONL / CSV</div>
+              </div>
+
+              <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+              <div class="n">⚙️ Ingestion<br><span class="sub">(parallel)</span></div>
+
+              <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+              <!-- Parallel: Raw Validation + Anomaly -->
+              <div class="par">
+                <div class="n n-am n-sm">🛡️ Raw Validation<br><span class="bdg bdg-o">Great Expectations</span></div>
+                <div class="n n-am n-sm">🔍 Anomaly Detection</div>
+                <div class="sub" style="text-align:center">parallel</div>
+              </div>
+
+              <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+              <div class="n">Preprocessing<br><span class="sub">(per data type)</span></div>
+
+              <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+              <div class="gate"></div>
+              <div class="n n-am n-sm">🛡️ Processed<br>Validation</div>
+
+              <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+              <div class="n n-r">📊 Bias<br>Analysis</div>
+
+              <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+              <div class="n n-a">Feature<br>Engineering</div>
+
+              <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+              <div class="gate"></div>
+              <div class="n n-am n-sm">🛡️ Featured<br>Validation</div>
+
+              <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+              <div class="n n-pu">🤗 Vector<br>Embeddings<br><span class="bdg bdg-p">HF Sentence Transformer</span></div>
+
+              <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+              <div class="par">
+                <div class="n n-sk n-sm">3 Featured Tables</div>
+                <div class="n n-sk n-sm">2 Embedding Tables</div>
+                <div class="sub" style="text-align:center">DB Loading</div>
+              </div>
+
+            </div><!-- /flow -->
+
+            <!-- Annotations row -->
+            <div class="f f-sm mt6">
+              <div class="n n-sm" style="font-size:9px;background:#e0e7ff;border-color:#a5b4fc">DVC Versioning</div>
+              <div class="n n-sm" style="font-size:9px;background:#ffe4e6;border-color:#fda4af">📧 Email Alerts at Each Gate</div>
+            </div>
+
+          </div><!-- /airflow box -->
+        </div><!-- /docker box -->
+
+      </div><!-- /section-main -->
+
+      <!-- ── SIDE: External services (GCS + Cloud SQL) ── -->
+      <div class="section-side">
+
+        <!-- GCS Bucket -->
+        <div class="n n-gcs w-a" style="padding:12px 16px">
+          ☁️ <b>Google Cloud<br>Storage Bucket</b>
         </div>
 
-        <span class="arrow arrow--color">→</span>
-
-        <!-- Sources -->
-        <div class="parallel">
-          <div class="node node--green node--small">Financial Profiles</div>
-          <div class="node node--green node--small">Product Catalog</div>
-          <div class="node node--green node--small">User Reviews</div>
-          <div class="sub-label" style="text-align:center">JSONL / CSV</div>
+        <!-- Arrows between GCS and pipeline -->
+        <div style="display:flex;flex-direction:column;gap:4px;align-items:center">
+          <div class="harrow" style="flex-direction:row-reverse">
+            <div class="hhead hhead-l"></div><div class="hline" style="width:20px"></div>
+            <div class="hlbl" style="position:static;transform:none;font-size:8px">Raw Data</div>
+          </div>
+          <div class="harrow">
+            <div class="hlbl" style="position:static;transform:none;font-size:8px">Cleaned Data</div>
+            <div class="hline" style="width:20px"></div><div class="hhead hhead-r"></div>
+          </div>
         </div>
-
-        <span class="arrow">→</span>
-
-        <div class="node">⚙️ Ingestion<br><span class="sub-label">(parallel)</span></div>
-
-        <span class="arrow">→</span>
-
-        <!-- Parallel: Raw Validation + Anomaly Detection -->
-        <div class="parallel">
-          <div class="node node--amber node--small">🛡️ Raw Validation<br><span class="badge badge--orange">Great Expectations</span></div>
-          <div class="node node--amber node--small">🔍 Anomaly Detection</div>
-          <div class="sub-label" style="text-align:center">parallel</div>
-        </div>
-
-        <span class="arrow">→</span>
-
-        <div class="node">Preprocessing<br><span class="sub-label">(per data type)</span></div>
-
-        <span class="arrow">→</span>
-        <div class="gate"></div>
-        <div class="node node--amber node--small">🛡️ Processed<br>Validation</div>
-
-        <span class="arrow">→</span>
-
-        <!-- Bias Analysis moved here -->
-        <div class="node node--rose">📊 Bias<br>Analysis</div>
-
-        <span class="arrow">→</span>
-
-        <div class="node node--accent">Feature<br>Engineering</div>
-
-        <span class="arrow">→</span>
-        <div class="gate"></div>
-        <div class="node node--amber node--small">🛡️ Featured<br>Validation</div>
-
-        <span class="arrow">→</span>
-
-        <!-- Vector Embeddings -->
-        <div class="node node--purple">🤗 Vector<br>Embeddings<br><span class="badge badge--purple">HuggingFace Sentence Transformer</span></div>
-
-        <span class="arrow">→</span>
-
-        <!-- DB Loading -->
-        <div class="parallel">
-          <div class="node node--sky node--small">3 Featured Tables</div>
-          <div class="node node--sky node--small">2 Embedding Tables</div>
-          <div class="sub-label" style="text-align:center">DB Loading</div>
-        </div>
-
-        <span class="arrow arrow--color">→</span>
 
         <!-- Cloud SQL -->
-        <div class="node node--db">🗄️ Cloud SQL<br>(PostgreSQL)<br><span class="badge badge--indigo">pgvector</span></div>
+        <div class="n n-db w-a" style="padding:12px 16px">
+          🗄️ <b>Cloud SQL<br>(PostgreSQL)</b><br>
+          <span class="bdg bdg-i">pgvector</span>
+        </div>
 
+      </div><!-- /section-side -->
+
+    </div><!-- /section-outer -->
+
+  </div>
+</div>
+
+<!-- ── connector arrow between sections ── -->
+<div class="conn">
+  <div class="conn-lbl">5 Tables → Cloud SQL (PostgreSQL + pgvector)</div>
+  <svg width="24" height="24" viewBox="0 0 24 24"><path d="M12 4 L12 18" stroke="#6366f1" stroke-width="2.5" fill="none"/><path d="M6 14 L12 20 L18 14" stroke="#6366f1" stroke-width="2.5" fill="none" stroke-linejoin="round"/></svg>
+</div>
+
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<!-- 2 · MODEL PIPELINE                                                    -->
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<div class="lane L-mp">
+  <div class="lane-lbl">Model Pipeline</div>
+  <div class="lane-bd">
+    <div class="sec-title" style="background:#d97706">MLflow · Tracking · Logging · Model Saving & Serving</div>
+
+    <div class="section-outer" style="margin-top:6px">
+      <div class="section-main">
+
+        <div class="tech-box" style="border-color:#0ea5e9">
+          <div class="tech-box-lbl">🐳 Docker</div>
+
+          <!-- Row 1: main flow -->
+          <div class="f f-md" style="margin-top:6px;flex-wrap:wrap">
+
+            <div class="n n-db w-a">🗄️ Cloud SQL<br><span class="sub">5 Tables</span></div>
+
+            <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+            <div class="n n-a">Feature<br>Engineering<br><span class="sub">Affordability, Financial<br>Ratios, Product/Review</span></div>
+
+            <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+            <div class="n n-r">📊 Bias Analysis<br>& Mitigation<br><span class="sub">On features</span></div>
+
+            <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+            <div class="n n-am">⚙️ Deterministic<br>Engine<br><span class="sub">Generates G / Y / R labels</span></div>
+
+            <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+            <div class="n">Training Data<br>Generator</div>
+
+            <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+            <div class="n n-hl">
+              🧠 <b>Multi-Model<br>Comparison</b>
+              <div class="sub">XGBoost · Random Forest<br>Logistic Reg · etc.</div>
+              <div class="bdg bdg-o">Optuna Hyperparams</div>
+            </div>
+
+            <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+            <div class="n">📊 Model<br>Evaluation<br><span class="sub">Accuracy · Precision<br>Recall · F1</span></div>
+
+            <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+            <div class="n">Sensitivity<br>Analysis</div>
+
+            <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+            <div class="n n-r">🛡️ Bias Detection<br>& Reporting<br><span class="sub">On model results</span></div>
+
+            <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+            <div class="n n-g">
+              🏆 <b>Best /<br>Champion<br>Model</b>
+            </div>
+
+          </div>
+
+        </div><!-- /docker box -->
+
+      </div><!-- /section-main -->
+
+      <!-- SIDE: MLflow + GCP -->
+      <div class="section-side">
+        <div class="n n-g w-a" style="padding:10px 14px">
+          🚀 <b>MLflow<br>Registry</b>
+          <div class="sub">Save · Serve</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:2px;align-items:center">
+          <div class="harrow"><div class="hline" style="width:16px"></div><div class="hhead hhead-r"></div><div class="hlbl" style="position:static;transform:none;font-size:8px">Model</div></div>
+        </div>
+        <div class="n n-sk w-a" style="padding:10px 14px">
+          ☁️ <b>Pushed to<br>GCP</b>
+        </div>
       </div>
 
-      <!-- Row 2: annotations -->
-      <div class="flow gap-sm mt-6" style="justify-content:space-between">
-        <div class="flow gap-sm">
-          <div class="node node--small" style="font-size:10px;background:#e0e7ff;border-color:#a5b4fc">DVC Versioning</div>
-          <div class="node node--small" style="font-size:10px;background:#ffe4e6;border-color:#fda4af">📧 Email Alerts at Each Gate</div>
-        </div>
-        <!-- GCS arrows -->
-        <div class="flow gap-sm">
-          <div class="node node--small node--gcs" style="font-size:10px">☁️ Cleaned Data → GCS</div>
-          <div class="node node--small node--gcs" style="font-size:10px">☁️ Raw Data ← GCS</div>
-        </div>
-      </div>
-    </div><!-- /docker-box -->
+    </div><!-- /section-outer -->
 
   </div>
 </div>
 
 <!-- connector -->
-<div class="connector">
-  <div>
-    <div class="connector-label">5 Tables in Cloud SQL (PostgreSQL + pgvector)</div>
-    <div class="arrow arrow--down">↓</div>
-  </div>
+<div class="conn">
+  <div class="conn-lbl">Champion Model + Deployment Artifacts</div>
+  <svg width="24" height="24" viewBox="0 0 24 24"><path d="M12 4 L12 18" stroke="#6366f1" stroke-width="2.5" fill="none"/><path d="M6 14 L12 20 L18 14" stroke="#6366f1" stroke-width="2.5" fill="none" stroke-linejoin="round"/></svg>
 </div>
 
 
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- 2. MODEL PIPELINE                                                 -->
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<div class="lane lane--model">
-  <div class="lane-label">Model Pipeline</div>
-  <div class="lane-body">
-    <div class="lane-title">MLflow · Experiment Tracking · Logging · Model Saving & Serving</div>
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<!-- 3 · CI/CD & DEPLOYMENT                                               -->
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<div class="lane L-ci">
+  <div class="lane-lbl">CI/CD & Deploy</div>
+  <div class="lane-bd">
+    <div class="sec-title" style="background:#16a34a">GitHub Actions</div>
 
-    <div class="docker-box" style="margin-top:6px">
-      <div class="docker-box-label">🐳 Dockerized</div>
+    <div class="f f-lg" style="margin-top:8px">
 
-      <!-- Row 1: main flow -->
-      <div class="flow gap-lg" style="margin-top:4px">
-
-        <div class="node node--db w-auto">🗄️ Cloud SQL<br><span class="sub-label">5 Tables</span></div>
-
-        <span class="arrow">→</span>
-
-        <div class="node node--accent">Feature<br>Engineering<br><span class="sub-label">Affordability, Financial<br>Ratios, Product/Review</span></div>
-
-        <span class="arrow">→</span>
-
-        <!-- Bias Analysis & Mitigation (after feature eng) -->
-        <div class="node node--rose">📊 Bias Analysis<br>& Mitigation<br><span class="sub-label">On features</span></div>
-
-        <span class="arrow">→</span>
-
-        <!-- Deterministic Engine → labels -->
-        <div class="node node--amber">⚙️ Deterministic<br>Engine<br><span class="sub-label">Generates G/Y/R labels</span></div>
-
-        <span class="arrow">→</span>
-
-        <div class="node">Training Data<br>Generator</div>
-
-        <span class="arrow">→</span>
-
-        <!-- Multi-model comparison -->
-        <div class="node node--highlight">
-          🧠 <strong>Multi-Model<br>Comparison</strong>
-          <div class="sub-label">XGBoost · Random Forest<br>Logistic Reg · etc.</div>
-          <div class="badge badge--orange">Optuna Hyperparams</div>
-        </div>
-
-        <span class="arrow">→</span>
-
-        <div class="node">📊 Model<br>Evaluation<br><span class="sub-label">Accuracy · Precision<br>Recall · F1</span></div>
-
-        <span class="arrow">→</span>
-
-        <div class="node">Sensitivity<br>Analysis</div>
-
-        <span class="arrow">→</span>
-
-        <!-- Bias on model results -->
-        <div class="node node--rose">🛡️ Bias Detection<br>& Reporting<br><span class="sub-label">On model results</span></div>
-
-        <span class="arrow">→</span>
-
-        <!-- Best/Champion model -->
-        <div class="node node--green">
-          🏆 <strong>Best /<br>Champion<br>Model</strong>
-        </div>
-
+      <div class="n n-dk">
+        <b>GitHub</b>
+        <div style="font-size:9px;color:#8b949e;margin-top:2px">Push to main</div>
       </div>
 
-      <!-- Row 2: model output -->
-      <div class="flow gap-lg mt-6" style="justify-content:flex-end">
-        <div class="node node--small" style="font-size:10px;background:#dcfce7;border-color:#86efac">🚀 Saved → MLflow Registry</div>
-        <div class="node node--small" style="font-size:10px;background:#e0f2fe;border-color:#7dd3fc">☁️ Pushed to GCP</div>
-        <div class="node node--small" style="font-size:10px;background:#fef3c7;border-color:#fcd34d">MLflow: Tracking · Logging · Saving · Serving</div>
+      <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+      <div class="par" style="gap:3px">
+        <div class="n n-g n-sm">datapipeline_ci.yml</div>
+        <div class="n n-g n-sm">modelpipeline_ci.yml</div>
+        <div class="n n-g n-sm">deployment.yml</div>
+        <div class="n n-g n-sm">terraform.yml</div>
+        <div class="sub" style="text-align:center">4 Workflows</div>
       </div>
 
-    </div><!-- /docker-box -->
+      <div class="arr"><div class="line"></div><div class="head"></div></div>
 
-  </div>
-</div>
-
-<!-- connector -->
-<div class="connector">
-  <div>
-    <div class="connector-label">Champion Model + Deployment Artifacts</div>
-    <div class="arrow arrow--down">↓</div>
-  </div>
-</div>
-
-
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- 3. CI/CD & DEPLOYMENT                                             -->
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<div class="lane lane--cicd">
-  <div class="lane-label">CI/CD & Deploy</div>
-  <div class="lane-body">
-    <div class="lane-title">GitHub Actions</div>
-
-    <div class="flow gap-lg" style="margin-top:6px">
-
-      <div class="node node--dark">
-        <strong>GitHub</strong>
-        <div style="font-size:10px;color:#8b949e;margin-top:2px">Push to main</div>
-      </div>
-
-      <span class="arrow" style="color:#24292e">→</span>
-
-      <div class="parallel" style="gap:3px">
-        <div class="node node--small node--green">datapipeline_ci.yml</div>
-        <div class="node node--small node--green">modelpipeline_ci.yml</div>
-        <div class="node node--small node--green">deployment.yml</div>
-        <div class="node node--small node--green">terraform.yml</div>
-        <div class="sub-label" style="text-align:center">4 Workflows</div>
-      </div>
-
-      <span class="arrow">→</span>
-
-      <div class="node">
+      <div class="n">
         🧪 Tests
-        <div class="sub-label">Unit · Integration<br>Lint · Frontend</div>
+        <div class="sub">Unit · Integration<br>Lint · Frontend</div>
       </div>
 
-      <span class="arrow">→</span>
+      <div class="arr"><div class="line"></div><div class="head"></div></div>
 
-      <div class="node node--docker">🐳 Build &<br>Push</div>
+      <div class="n" style="background:linear-gradient(135deg,#e0f2fe,#cffafe);border-color:#22d3ee">🐳 Build &<br>Push</div>
 
-      <span class="arrow">→</span>
+      <div class="arr"><div class="line"></div><div class="head"></div></div>
 
-      <div class="node node--sky">Artifact<br>Registry<br><span class="sub-label">GCR</span></div>
+      <div class="n n-sk">Artifact<br>Registry<br><span class="sub">GCR</span></div>
 
-      <span class="arrow">→</span>
+      <div class="arr"><div class="line"></div><div class="head"></div></div>
 
-      <!-- Deploy targets -->
-      <div class="parallel" style="gap:3px">
-        <div class="node node--small" style="background:linear-gradient(135deg,#fef3c7,#fef9c3);border-color:#fcd34d">📦 Data Pipeline → <strong>GCE VM</strong></div>
-        <div class="node node--small node--accent">☁️ Backend API → <strong>Cloud Run</strong></div>
-        <div class="node node--small node--accent">☁️ Frontend → <strong>Cloud Run</strong></div>
-        <div class="node node--small node--accent">☁️ MLflow → <strong>Cloud Run</strong></div>
-        <div class="sub-label" style="text-align:center">Deploy Targets</div>
+      <div class="par" style="gap:3px">
+        <div class="n n-am n-sm">📦 Data Pipeline → <b>GCE VM</b></div>
+        <div class="n n-a n-sm">☁️ Backend API → <b>Cloud Run</b></div>
+        <div class="n n-a n-sm">☁️ Frontend → <b>Cloud Run</b></div>
+        <div class="n n-a n-sm">☁️ MLflow → <b>Cloud Run</b></div>
+        <div class="sub" style="text-align:center">Deploy Targets</div>
       </div>
 
     </div>
 
-    <div class="flow gap-sm mt-6">
-      <div class="node node--small" style="font-size:10px;background:#dcfce7;border-color:#86efac">✅ Health Check Post-Deploy</div>
-      <div class="node node--small" style="font-size:10px;background:#fef3c7;border-color:#fcd34d">Post-Deploy: Drift Detection (Evidently AI)</div>
-      <div class="node node--small" style="font-size:10px;background:#e0f2fe;border-color:#7dd3fc">Post-Deploy: Monitoring Pipeline Refresh</div>
+    <div class="f f-sm mt6">
+      <div class="n n-sm" style="font-size:9px;background:#dcfce7;border-color:#86efac">✅ Health Check Post-Deploy</div>
+      <div class="n n-sm" style="font-size:9px;background:#fef3c7;border-color:#fcd34d">Post-Deploy: Drift Detection (Evidently AI)</div>
+      <div class="n n-sm" style="font-size:9px;background:#e0f2fe;border-color:#7dd3fc">Post-Deploy: Monitoring Pipeline Refresh</div>
     </div>
 
   </div>
 </div>
 
-<!-- Terraform — separate box -->
-<div class="lane lane--tf" style="margin-top: -4px;">
-  <div class="lane-label">Infra</div>
-  <div class="lane-body">
-    <div class="lane-title">Terraform · GCP Infrastructure</div>
-    <div class="flow gap-lg" style="margin-top:6px">
-      <div class="node">⚙️ <strong>Terraform</strong><br><span class="sub-label">Infrastructure as Code</span></div>
-      <span class="arrow">→</span>
-      <div class="parallel" style="gap:3px">
-        <div class="node node--small node--sky">Cloud Run Services</div>
-        <div class="node node--small node--sky">Cloud SQL Instance</div>
-        <div class="node node--small node--sky">GCS Buckets</div>
-        <div class="node node--small node--sky">Artifact Registry</div>
-        <div class="node node--small node--sky">IAM & Secrets</div>
+<!-- Terraform separate lane -->
+<div class="lane L-tf" style="margin-top:-2px">
+  <div class="lane-lbl">Infra</div>
+  <div class="lane-bd">
+    <div class="sec-title" style="background:#475569">Terraform · GCP Infrastructure</div>
+    <div class="f f-lg" style="margin-top:8px">
+      <div class="n">⚙️ <b>Terraform</b><br><span class="sub">Infrastructure as Code</span></div>
+      <div class="arr"><div class="line"></div><div class="head"></div></div>
+      <div class="par" style="gap:3px">
+        <div class="n n-sk n-sm">Cloud Run Services</div>
+        <div class="n n-sk n-sm">Cloud SQL Instance</div>
+        <div class="n n-sk n-sm">GCS Buckets</div>
+        <div class="n n-sk n-sm">Artifact Registry</div>
+        <div class="n n-sk n-sm">IAM & Secrets</div>
       </div>
-      <span class="arrow">→</span>
-      <div class="node node--green">☁️ GCP<br><span class="sub-label">Production Environment</span></div>
+      <div class="arr"><div class="line"></div><div class="head"></div></div>
+      <div class="n n-g">☁️ <b>GCP</b><br><span class="sub">Production Env</span></div>
     </div>
   </div>
 </div>
 
 <!-- connector -->
-<div class="connector">
-  <div>
-    <div class="connector-label">Deploys Backend API</div>
-    <div class="arrow arrow--down">↓</div>
-  </div>
+<div class="conn">
+  <div class="conn-lbl">Deploys Backend API</div>
+  <svg width="24" height="24" viewBox="0 0 24 24"><path d="M12 4 L12 18" stroke="#6366f1" stroke-width="2.5" fill="none"/><path d="M6 14 L12 20 L18 14" stroke="#6366f1" stroke-width="2.5" fill="none" stroke-linejoin="round"/></svg>
 </div>
 
 
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- 4. BACKEND / INFERENCE API                                        -->
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<div class="lane lane--api">
-  <div class="lane-label">Backend / API</div>
-  <div class="lane-body">
-    <div class="lane-title">FastAPI · Cloud Run</div>
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<!-- 4 · BACKEND / INFERENCE API                                          -->
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<div class="lane L-api">
+  <div class="lane-lbl">Backend / API</div>
+  <div class="lane-bd">
+    <div class="sec-title" style="background:#6366f1">FastAPI · Cloud Run</div>
 
-    <div class="docker-box" style="margin-top:6px">
-      <div class="docker-box-label">🐳 Dockerized</div>
+    <div class="section-outer" style="margin-top:6px">
+      <div class="section-main">
 
-      <!-- Main flow -->
-      <div class="flow gap-lg" style="margin-top:4px">
+        <div class="tech-box" style="border-color:#0ea5e9">
+          <div class="tech-box-lbl">🐳 Docker</div>
 
-        <div class="node node--green w-auto">👤 User<br>Query</div>
+          <div class="f f-md" style="margin-top:6px">
 
-        <span class="arrow">→</span>
+            <div class="n n-g w-a">👤 User<br>Query</div>
 
-        <!-- LLM Intent Parse -->
-        <div class="node node--accent">
-          LLM Intent<br>Parser
-          <div class="sub-label">Parses user input</div>
-        </div>
+            <div class="arr"><div class="line"></div><div class="head"></div></div>
 
-        <span class="arrow">→</span>
+            <div class="n n-a">LLM Intent<br>Parser<br><span class="sub">Parses user input</span></div>
 
-        <!-- User finances → predict() -->
-        <div class="node node--sky">
-          predict()
-          <div class="sub-label">User finances +<br>Product features</div>
-        </div>
+            <div class="arr"><div class="line"></div><div class="head"></div></div>
 
-        <span class="arrow">→</span>
+            <div class="n n-sk">predict()<br><span class="sub">User finances +<br>Product features</span></div>
 
-        <!-- Champion model -->
-        <div class="node node--highlight">
-          🏆 <strong>Champion<br>Model</strong>
-          <div class="sub-label">Best classifier<br>from MLflow</div>
-        </div>
+            <div class="arr"><div class="line"></div><div class="head"></div></div>
 
-        <span class="arrow">→</span>
+            <div class="n n-hl">🏆 <b>Champion<br>Model</b><br><span class="sub">Best classifier<br>from MLflow</span></div>
 
-        <!-- LLM generates response using 5 tables -->
-        <div class="node node--accent">
-          <strong>LLM Response<br>Generator</strong>
-          <div class="sub-label">Model output +<br>data from 5 tables</div>
-        </div>
+            <div class="arr"><div class="line"></div><div class="head"></div></div>
 
-        <span class="arrow">→</span>
+            <div class="n n-a"><b>LLM Response<br>Generator</b><br><span class="sub">Model output +<br>data from 5 tables</span></div>
 
-        <div class="node node--rose">
-          🛡️ Guardrails
-          <div class="sub-label">Color consistency<br>Fallback to template</div>
-        </div>
+            <div class="arr"><div class="line"></div><div class="head"></div></div>
 
-        <span class="arrow">→</span>
+            <div class="n n-r">🛡️ Guardrails<br><span class="sub">Color consistency<br>Fallback to template</span></div>
 
-        <div class="node node--green w-auto">
-          ✅ Response<br>to User
-          <div class="sub-label">Recommendation +<br>Explanation</div>
-        </div>
+            <div class="arr"><div class="line"></div><div class="head"></div></div>
+
+            <div class="n n-g w-a">✅ Response<br>to User<br><span class="sub">Recommendation +<br>Explanation</span></div>
+
+          </div>
+
+          <!-- LLM providers row -->
+          <div class="f f-md mt6">
+            <div class="n n-hl n-sm" style="font-size:9px"><b>Primary LLM:</b> Vertex AI · Gemini 2.5 Flash</div>
+            <div class="n n-am n-sm" style="font-size:9px"><b>Backup LLM:</b> OpenRouter · Gemma</div>
+          </div>
+
+          <!-- Metrics row -->
+          <div class="f f-sm mt4">
+            <div class="n n-sm" style="font-size:9px;background:#fef3c7;border-color:#fcd34d">Prometheus Metrics: Latency · Inference Count · ML Confidence · Guardrail Failures · Downgrades</div>
+          </div>
+
+        </div><!-- /docker box -->
 
       </div>
 
-      <!-- Row 2: LLM provider + data sources -->
-      <div class="flow gap-lg mt-6">
-        <div class="node node--small node--highlight" style="font-size:10px">
-          <strong>Primary LLM:</strong> Vertex AI · Gemini 2.5 Flash
-        </div>
-        <div class="node node--small" style="font-size:10px;background:#fef3c7;border-color:#fcd34d">
-          <strong>Backup LLM:</strong> OpenRouter · Gemma
-        </div>
-        <div class="node node--small node--db" style="font-size:10px">
-          🗄️ Cloud SQL → 5 Tables (Financial Profiles · Products · Reviews · Product Embeddings · Review Embeddings)
+      <!-- SIDE: Cloud SQL -->
+      <div class="section-side">
+        <div class="n n-db w-a" style="padding:12px 14px">
+          🗄️ <b>Cloud SQL</b><br>
+          <span class="sub">5 Tables</span><br>
+          <span class="sub">Financial · Products<br>Reviews · Prod Embed<br>Review Embed</span>
         </div>
       </div>
 
-      <!-- Row 3: metrics -->
-      <div class="flow gap-sm mt-6">
-        <div class="node node--small" style="font-size:10px;background:#fef3c7;border-color:#fcd34d">Prometheus Metrics: Latency · Inference Count · ML Confidence · Guardrail Failures · Downgrades</div>
-      </div>
-
-    </div><!-- /docker-box -->
+    </div>
 
   </div>
 </div>
 
 <!-- connector -->
-<div class="connector">
-  <div>
-    <div class="connector-label">API ↔ Frontend</div>
-    <div class="arrow arrow--down">↓</div>
-  </div>
+<div class="conn">
+  <div class="conn-lbl">API ↔ Frontend</div>
+  <svg width="24" height="24" viewBox="0 0 24 24"><path d="M12 4 L12 18" stroke="#6366f1" stroke-width="2.5" fill="none"/><path d="M6 14 L12 20 L18 14" stroke="#6366f1" stroke-width="2.5" fill="none" stroke-linejoin="round"/></svg>
 </div>
 
 
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- 5. FRONTEND                                                       -->
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<div class="lane lane--fe">
-  <div class="lane-label">Frontend</div>
-  <div class="lane-body">
-    <div class="lane-title">React Application · Cloud Run</div>
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<!-- 5 · FRONTEND                                                          -->
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<div class="lane L-fe">
+  <div class="lane-lbl">Frontend</div>
+  <div class="lane-bd">
+    <div class="sec-title" style="background:#2563eb">React Application · Cloud Run</div>
 
-    <div class="docker-box" style="margin-top:6px">
-      <div class="docker-box-label">🐳 Dockerized</div>
+    <div class="tech-box" style="border-color:#0ea5e9;margin-top:6px">
+      <div class="tech-box-lbl">🐳 Docker</div>
 
-      <div class="flow gap-lg" style="margin-top:4px">
+      <div class="f f-lg" style="margin-top:6px">
 
-        <div class="node node--green w-auto">👤 End User</div>
+        <div class="n n-g w-a">👤 End User</div>
 
-        <span class="arrow">→</span>
+        <div class="arr"><div class="line"></div><div class="head"></div></div>
 
-        <div class="node node--highlight">
-          <strong>React + Vite + Tailwind</strong>
-          <div class="sub-label">savvio-ai · Cloud Run</div>
-          <div class="badge badge--blue">TypeScript</div>
+        <div class="n n-hl">
+          <b>React + Vite + Tailwind</b>
+          <div class="sub">savvio-ai · Cloud Run</div>
+          <div class="bdg bdg-b">TypeScript</div>
         </div>
 
-        <span class="arrow">↔</span>
+        <div class="arr"><div class="line"></div><div class="head"></div></div>
 
-        <div class="node node--accent">
+        <div class="n n-a">
           FastAPI Backend
-          <div class="sub-label">savvio-backend-api</div>
-          <div class="sub-label">/api/predict · /api/health</div>
+          <div class="sub">savvio-backend-api</div>
+          <div class="sub">/api/predict · /api/health</div>
         </div>
 
       </div>
@@ -569,58 +625,44 @@
 </div>
 
 <!-- connector -->
-<div class="connector">
-  <div>
-    <div class="connector-label">Metrics Exported</div>
-    <div class="arrow arrow--down">↓</div>
-  </div>
+<div class="conn">
+  <div class="conn-lbl">Metrics Exported</div>
+  <svg width="24" height="24" viewBox="0 0 24 24"><path d="M12 4 L12 18" stroke="#6366f1" stroke-width="2.5" fill="none"/><path d="M6 14 L12 20 L18 14" stroke="#6366f1" stroke-width="2.5" fill="none" stroke-linejoin="round"/></svg>
 </div>
 
 
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- 6. MONITORING & OBSERVABILITY                                     -->
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<div class="lane lane--mon">
-  <div class="lane-label">Monitoring</div>
-  <div class="lane-body">
-    <div class="lane-title">Observability Stack</div>
-    <div class="flow gap-lg" style="margin-top:6px">
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<!-- 6 · MONITORING & OBSERVABILITY                                        -->
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<div class="lane L-mon">
+  <div class="lane-lbl">Monitoring</div>
+  <div class="lane-bd">
+    <div class="sec-title" style="background:#9333ea">Observability Stack</div>
+    <div class="f f-lg" style="margin-top:8px">
 
-      <div class="node node--accent">
-        ☁️ Cloud Run API
-        <div class="sub-label">/metrics endpoint</div>
-      </div>
+      <div class="n n-a">☁️ Cloud Run API<br><span class="sub">/metrics endpoint</span></div>
 
-      <span class="arrow">→</span>
+      <div class="arr"><div class="line"></div><div class="head"></div></div>
 
-      <div class="node node--highlight">
-        👁️ <strong>Prometheus</strong>
-        <div class="sub-label">GCE VM · Scrape</div>
-      </div>
+      <div class="n n-hl">👁️ <b>Prometheus</b><br><span class="sub">GCE VM · Scrape</span></div>
 
-      <span class="arrow">→</span>
+      <div class="arr"><div class="line"></div><div class="head"></div></div>
 
-      <div class="node node--purple">
-        📊 <strong>Grafana Cloud</strong>
-        <div class="sub-label">Remote Write<br>Dashboards</div>
-      </div>
+      <div class="n n-pu">📊 <b>Grafana Cloud</b><br><span class="sub">Remote Write · Dashboards</span></div>
 
-      <div style="width:30px"></div>
+      <div style="width:24px"></div>
 
-      <div class="node node--rose">
-        📊 <strong>Evidently AI</strong>
-        <div class="sub-label">Data & Model<br>Drift Detection</div>
-      </div>
+      <div class="n n-r">📊 <b>Evidently AI</b><br><span class="sub">Data & Model Drift Detection</span></div>
 
-      <div style="width:30px"></div>
+      <div style="width:24px"></div>
 
-      <div class="parallel" style="gap:3px; flex:0 0 auto">
-        <div class="node node--small">API Latency Histograms</div>
-        <div class="node node--small">Inference Counts by Color</div>
-        <div class="node node--small">ML Confidence Distribution</div>
-        <div class="node node--small">Guardrail Failure Rate</div>
-        <div class="node node--small">Layer 2 Downgrade Events</div>
-        <div class="sub-label" style="text-align:center">Custom Metrics</div>
+      <div class="par" style="gap:3px;flex:0 0 auto">
+        <div class="n n-sm">API Latency Histograms</div>
+        <div class="n n-sm">Inference Counts by Color</div>
+        <div class="n n-sm">ML Confidence Distribution</div>
+        <div class="n n-sm">Guardrail Failure Rate</div>
+        <div class="n n-sm">Layer 2 Downgrade Events</div>
+        <div class="sub" style="text-align:center">Custom Metrics</div>
       </div>
 
     </div>
@@ -630,7 +672,7 @@
 
 <!-- ═══════════════════ FOOTER ═══════════════════ -->
 <div class="footer">
-  SavVio Architecture Diagram &nbsp;·&nbsp; Updated April 2026 &nbsp;·&nbsp;
+  SavVio Architecture &nbsp;·&nbsp; April 2026 &nbsp;·&nbsp;
   Flow: Data Pipeline → Model Pipeline → CI/CD → Backend API → Frontend → Monitoring
 </div>
 

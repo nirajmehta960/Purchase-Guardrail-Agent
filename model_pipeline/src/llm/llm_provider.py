@@ -28,15 +28,10 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Shared system message — defines SavVio's voice for all real providers.
+# Shared system message — canonical persona + rules for every LLM call.
+# Imported from prompts/system_prompt.py so there is one source of truth.
 # ---------------------------------------------------------------------------
-_SYSTEM_MESSAGE = (
-    "You are SavVio, a fiduciary financial advisor. "
-    "Your job is to explain a purchase recommendation to the user in clear, honest, specific language. "
-    "Always reference the exact numbers given — never invent or round financial facts. "
-    "When customer reviews are provided, quote or paraphrase real details from them. "
-    "Follow the output structure instructions in the user message exactly."
-)
+from llm.prompts.system_prompt import SYSTEM_PROMPT as _SYSTEM_MESSAGE
 
 # ---------------------------------------------------------------------------
 # Retry helper — handles transient 429 / 503 errors.
@@ -226,8 +221,10 @@ class VertexAIProvider(BaseLLMProvider):
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": temperature,
-                # No maxOutputTokens — let the model use its full output budget.
-                # Thinking is enabled by default (thinkingBudget omitted = model decides).
+                "maxOutputTokens": max_tokens,
+                # Disable thinking — the LLM narrates pre-computed decisions,
+                # it doesn't need internal reasoning. Saves 3-5s latency.
+                "thinkingConfig": {"thinkingBudget": 0},
             },
         }
         token = self._get_access_token()

@@ -158,7 +158,7 @@ User message: {q!r}
 """
 
     try:
-        raw = llm_provider.generate(prompt, max_tokens=256, temperature=0.1)
+        raw = llm_provider.generate(prompt, max_tokens=256, temperature=0.0)
         data = _parse_llm_json(raw)
         if data:
             intent = str(data.get("intent", "out_of_scope")).lower()

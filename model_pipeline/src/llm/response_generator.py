@@ -194,11 +194,31 @@ def generate_response(context: RecommendationContext, llm_provider: Any) -> str:
         reviews_block = "Customer voice (most helpful reviews):\n" + "\n".join(
             f"  {s}" for s in context.review_snippets
         )
+        # Rating-based review framing — mirrors how a shopper reads Amazon reviews
+        if context.average_rating >= 4.0:
+            review_tone = (
+                "This product is rated above **4 stars**, so most buyers are happy. "
+                "Lead with what customers praise, then briefly mention any concerns if present. "
+                "Think of it like scanning Amazon — you'd see mostly positive reviews with a few complaints."
+            )
+        elif context.average_rating >= 3.0:
+            review_tone = (
+                "This product is rated between **3 and 4 stars**, so opinions are mixed. "
+                "Give equal weight to positive and negative feedback. "
+                "Think of it like scanning Amazon — you'd see a split of happy and unhappy buyers."
+            )
+        else:
+            review_tone = (
+                "This product is rated below **3 stars**, so most buyers are unhappy. "
+                "Lead with the main complaints, then mention any positives if present. "
+                "Think of it like scanning Amazon — you'd see mostly negative reviews with a few defenders."
+            )
+
         reviews_instruction = (
-            "- Weave 1–2 specific details from the customer reviews into your explanation "
-            "so the user understands what real buyers experienced with this product. "
-            "If reviews are positive, note what customers praise. "
-            "If reviews are mixed or negative, flag the concerns honestly."
+            f"- {review_tone}\n"
+            "- Quote or closely paraphrase 1–2 real review lines from the CUSTOMER VOICE data. "
+            "Present reviews HONESTLY regardless of the recommendation color — "
+            "the color reflects the user's FINANCIAL situation, not the product quality."
         )
     else:
         reviews_block = "Customer voice: no reviews available for this product."
@@ -254,84 +274,103 @@ def generate_response(context: RecommendationContext, llm_provider: Any) -> str:
             direction = "above" if context.category_rating_deviation > 0 else "below"
             cat_dev_str = f" ({abs(context.category_rating_deviation):.2f}★ {direction} {context.category} category average)"
 
-        cold_str = " — WARNING: fewer than 10 reviews, rating unreliable" if context.cold_start_flag else ""
+        cold_str = " — very few reviews, so the rating may not be reliable" if context.cold_start_flag else ""
         variance_label = (
-            "highly inconsistent (polarised)" if context.rating_variance > 2.0
-            else "somewhat inconsistent" if context.rating_variance > 1.0
-            else "consistent"
+            "ratings are all over the place — buyers disagree strongly" if context.rating_variance > 2.0
+            else "ratings vary a fair bit" if context.rating_variance > 1.0
+            else "ratings are consistent"
         )
         value_label = (
-            "strong value for money" if context.value_density > 1.5
-            else "moderate value for money" if context.value_density > 0.8
-            else "low value for money relative to price"
+            "buyers feel they get a lot for the price" if context.value_density > 1.5
+            else "reasonable for its price range" if context.value_density > 0.8
+            else "pricey for what you get compared to alternatives"
         )
         confidence_pct = context.review_confidence * 100
         polarization_label = (
-            "highly polarised (love-it-or-hate-it)" if context.rating_polarization > 0.4
-            else "moderately polarised" if context.rating_polarization > 0.2
-            else "consensus rating"
+            "opinions are really split — people either love it or hate it" if context.rating_polarization > 0.4
+            else "some disagreement among buyers" if context.rating_polarization > 0.2
+            else "most buyers agree on the rating"
         )
-        quality_risk_label = (
-            "HIGH quality risk" if context.quality_risk_score > 0.6
-            else "MODERATE quality risk" if context.quality_risk_score > 0.3
-            else "LOW quality risk"
+        quality_concern_label = (
+            "there are significant concerns about product quality" if context.quality_risk_score > 0.6
+            else "there are some questions about product quality" if context.quality_risk_score > 0.3
+            else "product quality appears solid based on reviews"
         )
         price_rank_pct = context.price_category_rank * 100
+        price_tier_label = (
+            f"one of the more expensive options" if price_rank_pct > 66
+            else f"a mid-range option" if price_rank_pct > 33
+            else f"a budget-friendly option"
+        )
 
-        product_block = f"""PRODUCT QUALITY SIGNALS (all ML-derived — use to explain the recommendation):
+        product_block = f"""WHAT WE KNOW ABOUT THIS PRODUCT (describe these findings in your own words):
 - Rating: {context.average_rating:.2f}★ from {context.rating_count:,} reviews{cold_str}{cat_dev_str}
-- Rating variance: {context.rating_variance:.2f} — {variance_label}
-- Rating polarisation: {polarization_label} (score: {context.rating_polarization:.2f})
-- Value for money: {value_label} (density score: {context.value_density:.2f})
-- Review confidence: {confidence_pct:.0f}% (based on review volume relative to category)
-- Quality risk: {quality_risk_label} (score: {context.quality_risk_score:.2f}, 0=low 1=high)
-- Price tier: {'top' if price_rank_pct > 66 else 'mid' if price_rank_pct > 33 else 'budget'} {price_rank_pct:.0f}th percentile in {context.category or 'its category'}"""
+- {variance_label}
+- {polarization_label}
+- Price vs. quality: {value_label}
+- Enough reviews to be confident? {"Yes" if confidence_pct > 50 else "Not really"} ({confidence_pct:.0f}% confidence based on review volume)
+- Quality outlook: {quality_concern_label}
+- In {context.category or 'its category'}, this is {price_tier_label}"""
     else:
         product_block = "PRODUCT QUALITY SIGNALS: no catalog data (hypothetical evaluation — product not in database)." if context.hypothetical_purchase else "PRODUCT QUALITY SIGNALS: no product data available."
 
-    # --- Review aggregate signals ---
+    # --- Review aggregate signals (plain-English labels) ---
     if context.rating_count > 0:
         sentiment_label = (
-            "strongly positive" if context.sentiment_spread > 0.4
-            else "mildly positive" if context.sentiment_spread > 0.1
-            else "mixed" if context.sentiment_spread > -0.1
-            else "negative-leaning"
+            "buyers are overwhelmingly happy" if context.sentiment_spread > 0.4
+            else "most buyers are satisfied" if context.sentiment_spread > 0.1
+            else "buyer opinions are mixed" if context.sentiment_spread > -0.1
+            else "more buyers are unhappy than happy"
         )
         depth_label = (
-            "detailed and substantive" if context.review_depth_score > 0.6
-            else "moderate depth" if context.review_depth_score > 0.3
-            else "brief/shallow"
+            "reviews are detailed and thoughtful" if context.review_depth_score > 0.6
+            else "reviews have a fair amount of detail" if context.review_depth_score > 0.3
+            else "most reviews are short and lack detail"
         )
         diversity_label = (
-            "high reviewer diversity (authentic)" if context.reviewer_diversity > 0.8
-            else "moderate diversity" if context.reviewer_diversity > 0.5
-            else "low diversity — possible review manipulation risk"
+            "reviews come from many different people" if context.reviewer_diversity > 0.8
+            else "a decent variety of reviewers" if context.reviewer_diversity > 0.5
+            else "a small group of people wrote most reviews — take ratings with a grain of salt"
         )
         extreme_label = (
-            "very polarised (high 1★+5★ concentration)" if context.extreme_rating_ratio > 0.7
-            else "moderately polarised" if context.extreme_rating_ratio > 0.4
-            else "balanced distribution"
-        )
-        helpful_label = (
-            "helpful votes concentrated in few reviewers" if context.helpful_concentration > 0.6
-            else "broadly distributed helpful votes"
+            "mostly 5-star or 1-star — very few middle-ground ratings" if context.extreme_rating_ratio > 0.7
+            else "a fair number of extreme ratings" if context.extreme_rating_ratio > 0.4
+            else "ratings are spread across the full range"
         )
 
-        review_signals_block = f"""REVIEW QUALITY SIGNALS:
-- Overall sentiment: {sentiment_label} (spread score: {context.sentiment_spread:+.2f})
-- Verified buyers: {context.verified_purchase_ratio:.0%} of reviews from verified purchases
-- Reviewer diversity: {diversity_label} ({context.reviewer_diversity:.0%} unique reviewers)
-- Extreme ratings (1★+5★): {context.extreme_rating_ratio:.0%} — {extreme_label}
-- Review depth: {depth_label} (score: {context.review_depth_score:.2f})
-- Helpful vote distribution: {helpful_label} (concentration: {context.helpful_concentration:.2f})"""
+        review_signals_block = f"""REVIEW TRUSTWORTHINESS (paraphrase these findings — never quote the labels directly):
+- Overall mood: {sentiment_label}
+- {context.verified_purchase_ratio:.0%} of reviews are from verified buyers
+- Who's reviewing: {diversity_label}
+- Rating spread: {extreme_label}
+- Review quality: {depth_label}"""
     else:
-        review_signals_block = "REVIEW QUALITY SIGNALS: no review data available."
+        review_signals_block = "REVIEW TRUSTWORTHINESS: no reviews available for this product."
 
-    prompt = f"""You are SavVio, a fiduciary financial advisor. Explain this purchase recommendation to the user in clear, honest, personalised language using the exact data provided below. Never invent or round numbers.
+    # --- Color-specific tone guidance (positive framing) ---
+    if context.recommendation_color == "GREEN":
+        color_tone = (
+            "TONE: This is a GREEN recommendation — be encouraging and affirming. "
+            "Highlight what makes this purchase comfortable for the user. "
+            "Keep the tone confident and supportive."
+        )
+    elif context.recommendation_color == "YELLOW":
+        color_tone = (
+            "TONE: This is a YELLOW recommendation — be balanced and honest. "
+            "Acknowledge the user can technically afford it, but surface the specific concerns. "
+            "Suggest a concrete step before buying (e.g. wait a pay cycle, compare alternatives)."
+        )
+    else:
+        color_tone = (
+            "TONE: This is a RED recommendation — be kind but firm. "
+            "Lead with empathy, then clearly explain why now is not the right time. "
+            "Recommend a specific financial priority instead (e.g. emergency fund, debt reduction)."
+        )
 
-DECISION: {context.recommendation_color} — do NOT contradict or soften this verdict.{downgrade_note}
-{"IMPORTANT: Do NOT suggest buying, proceeding, or frame this purchase positively." if context.recommendation_color == "RED" else ""}
-{"IMPORTANT: Do NOT warn against the purchase, call it risky, or suggest hesitation." if context.recommendation_color == "GREEN" else ""}
+    prompt = f"""Explain this purchase recommendation using the exact data below. Only cite numbers from the data — never invent figures.
+
+DECISION: {context.recommendation_color} — your response must align with this verdict.
+{color_tone}{downgrade_note}
 
 ━━━ PURCHASE ━━━
 Product : {context.product_name}
@@ -342,22 +381,22 @@ Employment  : {context.employment_status or "not specified"} | Region: {context.
 Monthly income    : ${context.monthly_income:,.2f}
 Monthly expenses  : ${context.monthly_expenses:,.2f}
 Monthly EMI       : ${context.monthly_emi:,.2f}
-Discretionary income (income − expenses − EMI): ${context.discretionary_income:,.2f}
+Left over each month (income − expenses − EMI): ${context.discretionary_income:,.2f}
 Savings balance   : ${context.savings_balance:,.2f}  |  Liquid savings: ${context.liquid_savings:,.2f}
 Credit score      : {credit_line}  |  Credit risk level: {credit_risk_label}
 {loan_lines}
 
-Computed financial signals (ML-derived — USE THESE to inform your explanation, but NEVER quote these metric names in your response):
+Computed signals (use these to inform your explanation, but describe them in everyday language):
 - {afs_line}
-- Price-to-income ratio     : {pir_pct:.1f}% of monthly income
-- Expense burden ratio      : {meb_pct:.1f}% of income already committed to fixed costs
-- Savings-to-price ratio    : {context.savings_to_price_ratio:.2f}x (savings cover the price this many times over)
-- Saving-to-income ratio    : {stir_pct:.1f}% (liquid savings relative to monthly income)
-- Emergency fund            : {context.emergency_fund_months:.1f} months (target: 3–6)
-- Debt-to-income ratio      : {dti_pct:.1f}%
-- Residual utility score    : {context.residual_utility_score:+.3f} (headroom after purchase relative to obligations)
-- Net worth indicator       : {context.net_worth_indicator:+.3f} (savings minus debt relative to income)
-- Rules triggered           : {rules_txt}
+- {pir_pct:.1f}% of monthly income would go to this purchase
+- {meb_pct:.1f}% of income already committed to fixed costs
+- Savings cover the price {context.savings_to_price_ratio:.2f}x over
+- Liquid savings = {stir_pct:.1f}% of monthly income
+- Emergency fund: {context.emergency_fund_months:.1f} months (target: 3–6)
+- {dti_pct:.1f}% of income goes to debt payments
+- Headroom after purchase: {context.residual_utility_score:+.3f}
+- Savings minus debt relative to income: {context.net_worth_indicator:+.3f}
+- Rules triggered: {rules_txt}
 {f"- User added context: {context.user_context}" if context.user_context else ""}
 
 ━━━ {product_block}
@@ -367,36 +406,92 @@ Computed financial signals (ML-derived — USE THESE to inform your explanation,
 ━━━ CUSTOMER VOICE ━━━
 {reviews_block}
 
-━━━ YOUR TASK ━━━
-Write the response in exactly 4 named sections. Each section has a bold markdown heading followed by 2–4 sentences of flowing prose. Bold (**like this**) every specific dollar amount, percentage, or number you cite.
+━━━ INSTRUCTIONS ━━━
+Start your response DIRECTLY with the first heading — no greeting, no intro sentence, no preamble.
+Write exactly 4 sections using these headings (with emojis). Output nothing before the first heading.
 
-CRITICAL OUTPUT RULES — violating any of these will cause the response to be rejected:
-1. Use ONLY these four headings (exactly as written, including the emoji):
-   **💰 Your Financial Picture**
-   **🛍️ About This Product**
-   **💬 What Buyers Are Saying**
-   **✅ Our Analysis**   (change emoji to ⚠️ for YELLOW, 🚫 for RED)
-2. PLAIN ENGLISH ONLY — never use any of these terms in your response: discretionary income, affordability score, debt-to-income, savings-to-price ratio, residual utility, net worth indicator, credit risk indicator, price-to-income ratio, rating polarization, value density, review confidence, cold start, sentiment spread, helpful concentration, review depth, reviewer diversity, extreme rating ratio, expense burden, saving-to-income ratio.
-   Translate everything into words anyone would use in a normal conversation. Examples:
-   ❌ "Your discretionary income is $2,349"  →  ✅ "After all your bills, you have **$2,349** left over each month"
-   ❌ "Your debt-to-income is 28%"  →  ✅ "**28%** of your income already goes to debt payments"
-   ❌ "Affordability score: +2,000"  →  ✅ "This purchase leaves you with a comfortable financial cushion"
-   ❌ "Rating polarization is high"  →  ✅ "Opinions are split — buyers either love it or don't"
-3. Each section must be prose — no nested bullets or sub-lists inside a section.
-4. Keep the total response under 180 words.
+  **💰 Your Financial Picture**
+  **🛍️ About This Product**
+  **💬 What Buyers Are Saying**
+  **{"✅" if context.recommendation_color == "GREEN" else "⚠️" if context.recommendation_color == "YELLOW" else "🚫"} Our Analysis**
+
+Style:
+- Write in plain English a teenager would understand. Describe what the data means
+  for the user instead of naming the metric. For example:
+  Say "you have **$423** left each month after bills" instead of "discretionary income is $423".
+  Say "opinions are really split — buyers either love it or hate it" instead of "highly polarized".
+  Say "it's pricey for what you get" instead of "low value for money".
+- Bold (**like this**) every dollar amount, percentage, or number you cite.
+- Each section is 2–3 sentences of flowing prose — no bullet points inside sections.
+- Keep the total response under 180 words.
 
 Section guidance:
-**💰 Your Financial Picture** — 2 sentences MAX. Pick the 1–2 most telling facts about whether the user can afford this (e.g. monthly leftover money, savings buffer). Skip anything the user doesn't need to act on. No jargon, no ratios by name — just the human implication.
-**🛍️ About This Product** — 2 sentences. Plain-English quality summary. Mention the star rating and number of reviews; translate everything else into everyday language (e.g. "reviews are mixed", "considered a budget-friendly option in its category").
-**💬 What Buyers Are Saying** — 1–2 sentences. Quote or closely paraphrase 1–2 real reviewer lines. If no reviews, say so in one sentence.
-**✅ Our Analysis** — 2 sentences. Start with "Based on your finances and this product's track record, we found this purchase [safe / needs caution / not advisable]." Follow with one concrete, specific action the user can take right now.
+💰 Your Financial Picture — Pick the 1–2 most telling facts about affordability. This is about the USER's finances, not the product.
+🛍️ About This Product — Mention star rating and review count; summarise quality in everyday words. Be honest — a great product is great even if the user can't afford it.
+💬 What Buyers Are Saying — Quote or closely paraphrase 1–2 real reviewer lines from the CUSTOMER VOICE data. Present both positive AND negative feedback honestly. Do NOT cherry-pick only positive reviews for GREEN or only negative reviews for RED. The reviews reflect the PRODUCT, not the user's wallet.
+Our Analysis — Open with "Based on your finances and this product's track record, we found this purchase [safe / needs caution / not advisable]." The verdict is primarily driven by FINANCIAL health. Follow with one concrete next step.
 
-Write warmly but with fiduciary honesty. A teenager with no finance knowledge should understand every sentence."""
+━━━ REFERENCE EXAMPLES ━━━
+These examples use FICTIONAL data to demonstrate format, tone, and structure ONLY.
+DO NOT copy any numbers, product names, review quotes, or facts from these examples.
+Your response must use ONLY the real data provided in the context sections above.
+
+EXAMPLE (RED — tone: kind but firm):
+💰 Your Financial Picture
+These headphones cost **$349**, which is more than the **$210** you have left each month after all your bills. With **82%** of your income already committed to fixed costs, there's very little room for a purchase this size.
+
+🛍️ About This Product
+This model has a **3.6-star** rating from **1,450** reviews, which is below average for wireless headphones. Opinions are mixed, and it ranks as one of the pricier options in its category.
+
+💬 What Buyers Are Saying
+One reviewer called them "comfortable for long flights," but several others reported the noise cancellation failing after a few months, with one writing "bass died completely within 6 weeks."
+
+🚫 Our Analysis
+Based on your finances and this product's track record, we found this purchase not advisable at this time. We strongly recommend building your emergency fund past **1.5** months before considering big purchases.
+
+EXAMPLE (YELLOW — tone: balanced, cautious):
+💰 Your Financial Picture
+You have **$720** left each month after bills, and these **$159** running shoes would take about **22%** of that. Your savings could cover the price **5** times over, but your emergency fund is sitting at only **2.8** months.
+
+🛍️ About This Product
+These running shoes have a **4.1-star** rating from **3,800** reviews. They're a mid-range option in the athletic footwear category, and quality feedback is mostly positive though not unanimous.
+
+💬 What Buyers Are Saying
+Many runners praise the comfort, with one saying "best shoes I've trained in all year." However, a few noted the sole wears down quickly, with one reviewer mentioning "traction was gone after 3 months of regular use."
+
+⚠️ Our Analysis
+Based on your finances and this product's track record, we found this purchase needs caution. You can afford it, but your emergency savings are below the **3-month** target. Consider waiting until next month to keep your buffer intact.
+
+EXAMPLE (GREEN — tone: encouraging, affirming):
+💰 Your Financial Picture
+After all your monthly bills, you still have **$1,850** left over, and your savings could cover this **$79** coffee maker more than **20** times over. You're in a strong position for this purchase.
+
+🛍️ About This Product
+This coffee maker has a strong **4.7-star** rating from **12,400** reviews and is one of the top-rated options in its price range. Buyers consistently praise the brew quality and durability.
+
+💬 What Buyers Are Saying
+One reviewer called it "the best coffee I've made at home," while another noted it "paid for itself in two weeks of skipping the cafe."
+
+✅ Our Analysis
+Based on your finances and this product's track record, we found this purchase safe and well within your means. Go ahead if it fits your needs — just keep an eye on your monthly spending as usual.
+
+REMINDER: The examples above are for FORMAT and TONE only. Every number, product detail, and review quote in YOUR response must come from the real data provided in the sections above. Never copy or reuse content from the examples."""
 
     try:
         raw = llm_provider.generate(prompt, temperature=0.35)
         if raw and len(raw.strip()) > 20:
-            return raw.strip()
+            text = raw.strip()
+            # Strip any preamble the LLM adds before the first heading.
+            for anchor in ("**💰", "💰"):
+                idx = text.find(anchor)
+                if idx > 0:
+                    text = text[idx:]
+                    break
+            # LLMs sometimes drop the opening ** on the very first token.
+            # Ensure the first heading has proper bold markers.
+            if text.startswith("💰") and not text.startswith("**💰"):
+                text = "**" + text
+            return text
     except Exception as e:
         logger.warning("LLM response generation failed: %s", e)
 

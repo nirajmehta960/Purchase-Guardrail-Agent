@@ -120,7 +120,7 @@ from llm.inference_pipeline import process_user_query
 response = process_user_query(
     query="Should I buy this $1200 MacBook?",
     user_id="user_99",
-    provider=get_provider("openrouter")
+    provider=get_provider()  # Vertex AI when VERTEX_PROJECT / GOOGLE_CLOUD_PROJECT is set
 )
 
 print(response.decision)    # "RED"

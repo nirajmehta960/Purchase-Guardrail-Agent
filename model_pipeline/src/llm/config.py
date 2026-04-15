@@ -11,13 +11,12 @@ import os
 
 class LLMConfig:
     # ---------------------------------------------------------------------------
-    # Provider Selection
+    # Provider label (training / MLflow logging only)
     # ---------------------------------------------------------------------------
-    # "mock" — deterministic template-based responses (no API calls)
-    # "openai" — OpenAI GPT-4.1
-    # "gemini" — Google Gemini 3
-    # "claude" — Anthropic Claude 4.5
-    PROVIDER = os.getenv("LLM_PROVIDER", "mock")
+    # Runtime inference uses `llm.llm_provider.get_provider()` → Vertex AI when
+    # VERTEX_PROJECT, GCP_PROJECT_ID, or GOOGLE_CLOUD_PROJECT is set; otherwise mock.
+    # This field is for lineage in run_pipeline / prompt_engine — keep it aligned.
+    PROVIDER = os.getenv("LLM_PROVIDER", "vertex")
 
     # ---------------------------------------------------------------------------
     # API Keys (only needed for real providers)
@@ -26,7 +25,7 @@ class LLMConfig:
     OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1")
 
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.0-flash")
+    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
     ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")

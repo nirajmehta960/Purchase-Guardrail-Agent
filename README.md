@@ -1,14 +1,14 @@
 # SavVio
 
-An AI-driven financial advocacy tool designed to bridge the gap between e-commerce and personal finance. SavVio serves as a "Financial Fiduciary" that evaluates whether a user should make a purchase based on their real-time financial health and the product's actual utility.
+An AI-driven financial advocacy tool designed to bridge the gap between e-commerce and personal finance. SavVio serves as a "Financial Fiduciary" that evaluates whether a user should make a purchase based on their real-time financial health and the product's quality and utility.
 
 ## Project Overview
 
 SavVio is a comprehensive MLOps project that integrates real-time product data with sensitive financial streams to provide responsible, conversational shopping guidance. Unlike traditional shopping assistants that focus on maximizing conversion, SavVio evaluates purchases based on:
 
 - **Financial Health**: User's income, expenses, savings, and debt obligations.
-- **Product Utility**: Analysis of product specifications and real-world usefulness.
-- **Affordability Metrics**: Calculated discretionary budget and residual utility scores.
+- **Product Utility**: Analysis of product specifications, quality and real-world usefulness.
+- **Decision Engine**: Generates final recommondation based on user's financial health and the product's utility.
 
 The system provides Green/Yellow/Red light recommendations before users complete their purchase.
 
@@ -29,27 +29,28 @@ The system provides Green/Yellow/Red light recommendations before users complete
 ### 1. Data Pipeline Orchestration
 The data pipeline is managed by Apache Airflow running on GCE. It handles:
 - Automated ingestion of financial and product datasets.
-- Data cleaning and normalization using Spark and Pandas.
+- Data cleaning and normalization using Pandas.
 - Feature engineering for financial ratios and sentiment analysis of reviews.
+- Generated vector embeddings for products using HF Hub.
 - Data versioning with DVC and storage in Google Cloud SQL and GCS.
 
 ### 2. Model Development & Training
 The platform uses a sophisticated ML pipeline:
-- **XGBoost Classifier**: Trained on historic financial outcomes to predict purchase viability.
-- **Optuna Optimization**: Automated hyperparameter tuning to ensure peak model performance.
-- **Bias Detection**: Integrated metrics to detect and mitigate bias across demographic slices.
+- **Model Training**: Trained Multiple model on historic financial outcomes to predict purchase viability.
+- **Optuna Optimization**: Automated hyperparameter tuning using bayesian optimization to ensure peak model performance.
+- **Bias Detection & Mitigation**: Integrated metrics to detect and mitigate bias across demographic slices pre and post training.
 - **Experiment Tracking**: Full lineage and performance logging via MLflow.
+- **Model Selection and Serve**: Champion model is selected based on accuracy and saved in GCP Artifact Repository for Serving.
 
 ### 3. Inference & Decision Logic
 The system employs a three-layer decision engine to ensure fiduciary responsibility:
-- **Deterministic Layer**: Authoritative financial rules that enforce strict budget and emergency fund guardrails.
-- **ML Layer**: Probabilistic scoring that identifies risk patterns in consumer behavior.
-- **Generative Layer**: OpenRouter LLM (default: Gemini 2.0 Flash) for conversational explanations, validated by code-level guardrails.
+- **Deterministic Layer**: Authoritative financial rules that enforce strict financial health and product quality guardrails.
+- **Generative Layer**: Gemini 2.5 Flash via Vertex AI(backup OpenRouter) for conversational explanations, validated by code-level guardrails.
 
 ### 4. Monitoring & Observability
 Continuous monitoring ensures the system remains reliable and accurate:
 - **System Metrics**: Real-time tracking of API latency and throughput via Prometheus and Grafana.
-- **Model Drift**: Drift detection using Evidently AI to identify performance decay.
+- **Drift Detection**: Identify drift detection using Evidently AI to identify performance decay.
 - **Data Quality**: Schema and anomaly monitoring via Great Expectations.
 
 ## Project Structure
@@ -62,7 +63,7 @@ SavVio/
 │   ├── api/                    # FastAPI service
 │   ├── frontend/               # React web application
 │   ├── monitoring/             # Prometheus and Grafana configuration
-├── infrastructure/             # Terraform and GCP configuration
+|   ├── terraform/              # Terraform and GCP configuration
 └── .github/workflows/          # CI/CD pipeline definitions
 ```
 
@@ -79,6 +80,11 @@ SavVio/
 | Observability | Prometheus, Grafana, Evidently AI |
 | Database | PostgreSQL (Cloud SQL) |
 | Versioning | Git, DVC |
+
+---
+## SavVIO Architecture
+
+![alt text](savvio_architecture.png "SavVio Architecture")
 
 ## Local Setup
 

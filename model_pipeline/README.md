@@ -62,6 +62,14 @@ SavVio/
 
 ## Quick Reference: Tools by Phase
 
+## CI/CD Deployment Note
+
+- Workflow: `.github/workflows/modelpipeline_ci.yml`
+- Build source: `model_pipeline/docker-compose.yml` (`ml-trainer` service via `docker buildx bake`)
+- Image target: `us-east1-docker.pkg.dev/<project>/savvio-dev-docker-repo/savvio-model-pipeline`
+- Deploy target: Terraform-managed Cloud Run service `savvio-ai`
+- Infra source of truth: `.github/workflows/terraform.yml` + `deployment_pipeline/terraform/environments/dev/*`
+
 | Phase | Primary Tools | Alternatives | CI/CD Gate |
 |-------|--------------|--------------|------------|
 | Data Loading | DVC, GCS, Pandas | Polars, LakeFS | Data version + schema check |

@@ -1,13 +1,8 @@
-# Local full-stack testing — no cloud dependencies.
-#
-# Usage:
-#   docker compose up --build        # build and start everything
-#   docker compose down -v           # tear down + remove volumes
+# Docker compose for SavVio full-stack deployment.
 #
 # Endpoints:
 #   Frontend:  http://localhost:8501  (host:8501 → container:8080)
 #   API:       http://localhost:8080
-#   API docs:  http://localhost:8080/docs
 
 services:
   postgres:

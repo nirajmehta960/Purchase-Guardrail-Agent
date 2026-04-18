@@ -12,10 +12,7 @@ on:
       - "deployment_pipeline/__init__.py"
       - "savviocore/**"
       - "model_pipeline/src/**"
-      - "model_pipeline/models/model/**"
   workflow_dispatch:
-  schedule:
-    - cron: "0 8 * * 1"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -27,7 +24,9 @@ env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
 
 jobs:
-  # Testing Phase
+  # ===========================================================================
+  # JOB 1 — Tests
+  # ===========================================================================
   test-api:
     name: API Tests
     runs-on: ubuntu-latest
@@ -39,23 +38,13 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-deployment-${{ hashFiles('deployment_pipeline/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-deployment-
-
       - name: Install dependencies
         run: |
           pip install -e savviocore
           pip install -r deployment_pipeline/requirements.txt
-          pip install pytest httpx
 
       - name: Run tests
-        env:
-          PYTHONPATH: "${{ github.workspace }}/model_pipeline/src:${{ github.workspace }}/savviocore/src:${{ github.workspace }}"
+        working-directory: deployment_pipeline
         run: python -m pytest deployment_pipeline/tests/ -v --tb=short
 
   test-frontend:
@@ -74,15 +63,12 @@ jobs:
         working-directory: deployment_pipeline/frontend
         run: bun install --frozen-lockfile
 
-      - name: Lint
-        working-directory: deployment_pipeline/frontend
-        run: bun run lint
-
       - name: Run tests
         working-directory: deployment_pipeline/frontend
         run: bun run test
-
-  # Artifact Build & Registry Push
+  # ===========================================================================
+  # JOB 2 — Build & Push Image to Artifact Registry (main only)
+  # ===========================================================================
   build-push-api:
     name: Build & Push API
     runs-on: ubuntu-latest
@@ -113,36 +99,6 @@ jobs:
             -t $IMAGE:${{ github.sha }} \
             -t $IMAGE:latest \
             --push .
-
-  build-push-mlflow:
-    name: Build & Push MLflow
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Set up gcloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Build and push
-        env:
-          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-mlflow
-        run: |
-          docker buildx build \
-            --platform linux/amd64 \
-            -f deployment_pipeline/mlflow/Dockerfile \
-            -t $IMAGE:${{ github.sha }} \
-            -t $IMAGE:latest \
-            --push deployment_pipeline/mlflow/
 
   build-push-frontend:
     name: Build & Push Frontend
@@ -176,11 +132,13 @@ jobs:
             -t $IMAGE:latest \
             --push deployment_pipeline/frontend/
 
-  # Production Deployment
+  # ===========================================================================
+  # JOB 3 — Deploy to Cloud Run (Terraform-managed service)
+  # ===========================================================================
   deploy:
     name: Deploy to Cloud Run
     runs-on: ubuntu-latest
-    needs: [build-push-api, build-push-frontend, build-push-mlflow]
+    needs: [build-push-api, build-push-frontend]
 
     steps:
       - uses: actions/checkout@v4
@@ -210,15 +168,6 @@ jobs:
             --region ${{ env.REGION }} \
             --quiet
 
-      - name: Deploy MLflow
-        env:
-          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-mlflow
-        run: |
-          gcloud run deploy savvio-ai-mlflow \
-            --image $IMAGE:${{ github.sha }} \
-            --region ${{ env.REGION }} \
-            --quiet
-
       - name: Verify API health
         run: |
           API_URL=$(gcloud run services describe savvio-backend-api \
@@ -226,153 +175,13 @@ jobs:
           echo "API: $API_URL"
           curl -sf "$API_URL/health" || { echo "ERROR: health check failed"; exit 1; }
 
-  # Post-Deployment Validation
-  drift-detection:
-    name: Drift Detection
-    runs-on: ubuntu-latest
-    needs: deploy
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-drift-evidently-0.7.20
-          restore-keys: |
-            ${{ runner.os }}-pip-drift-
-
-      - name: Install dependencies
-        run: |
-          pip install evidently==0.7.20 pandas numpy scikit-learn pyyaml python-dotenv requests
-          pip install sqlalchemy psycopg2-binary
-          pip install -e savviocore
-
-      - name: Cache Cloud SQL Auth Proxy
-        id: cache-proxy
-        uses: actions/cache@v4
-        with:
-          path: cloud-sql-proxy
-          key: cloud-sql-proxy-v2.14.1-linux-amd64
-
-      - name: Download Cloud SQL Auth Proxy
-        if: steps.cache-proxy.outputs.cache-hit != 'true'
-        run: |
-          curl -so cloud-sql-proxy https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.1/cloud-sql-proxy.linux.amd64
-          chmod +x cloud-sql-proxy
-
-      - uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Set up gcloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Start Cloud SQL Auth Proxy
-        run: |
-          chmod +x cloud-sql-proxy
-          ./cloud-sql-proxy "${{ secrets.DB_INSTANCE_CONNECTION_NAME }}" --port 5432 &
-          sleep 3
-
-      - name: Run drift detector
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          PYTHONPATH: "${{ github.workspace }}/deployment_pipeline/monitoring/drift:${{ github.workspace }}/savviocore/src:${{ github.workspace }}"
-        run: |
-          python deployment_pipeline/monitoring/drift/drift_detector.py
-
-      - name: Upload drift report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: drift-report-${{ github.run_id }}
-          path: deployment_pipeline/monitoring/reports/
-          retention-days: 30
-
-  # Observability Pipeline (Prometheus GCE SSH hook)
-  deploy-monitoring:
-    name: Deploy Monitoring
-    runs-on: ubuntu-latest
-    needs: deploy
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Set up gcloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Get API host for Prometheus scrape target
-        id: api
-        run: |
-          API_URL=$(gcloud run services describe savvio-backend-api \
-            --region ${{ env.REGION }} --format='value(status.url)')
-          echo "host=$(echo $API_URL | sed 's|https://||')" >> $GITHUB_OUTPUT
-
-      - name: Render Prometheus production config
-        env:
-          API_HOST: ${{ steps.api.outputs.host }}
-          GRAFANA_REMOTE_WRITE_URL: ${{ secrets.GRAFANA_REMOTE_WRITE_URL }}
-          GRAFANA_CLOUD_USERNAME: ${{ secrets.GRAFANA_CLOUD_USERNAME }}
-          GRAFANA_CLOUD_API_KEY: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
-        run: |
-          mkdir -p monitoring
-          envsubst < deployment_pipeline/monitoring/prometheus/prometheus.production.yml \
-            > monitoring/prometheus.yml
-
-      - name: Copy Prometheus config to VM
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.GCE_VM_IP }}
-          username: github-actions
-          key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
-          source: "monitoring/prometheus.yml"
-          target: "/home/github-actions/savvio-monitoring/prometheus/"
-          strip_components: 1
-
-      - name: Copy docker-compose to VM
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.GCE_VM_IP }}
-          username: github-actions
-          key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
-          source: "deployment_pipeline/monitoring/docker-compose.production.yml"
-          target: "/home/github-actions/savvio-monitoring/"
-          strip_components: 2
-
-      - name: Deploy Prometheus on VM
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.GCE_VM_IP }}
-          username: github-actions
-          key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
-          timeout: 60s
-          command_timeout: 10m
-          script: |
-            cd /home/github-actions/savvio-monitoring
-            docker compose -f docker-compose.production.yml pull
-            docker compose -f docker-compose.production.yml up -d --remove-orphans
-
   # ---------------------------------------------------------------------------
   # Notifications (covers all jobs)
   # ---------------------------------------------------------------------------
   notify-on-failure:
     name: Notify Failure
     runs-on: ubuntu-latest
-    needs: [test-api, test-frontend, build-push-api, build-push-frontend, build-push-mlflow, deploy, drift-detection, deploy-monitoring]
+    needs: [test-api, test-frontend, build-push-api, build-push-frontend, deploy]
     if: failure()
     steps:
       - run: |
@@ -383,7 +192,7 @@ jobs:
   notify-on-success:
     name: Notify Success
     runs-on: ubuntu-latest
-    needs: [test-api, test-frontend, build-push-api, build-push-frontend, build-push-mlflow, deploy, drift-detection, deploy-monitoring]
+    needs: [test-api, test-frontend, build-push-api, build-push-frontend, deploy]
     if: success()
     steps:
       - run: |

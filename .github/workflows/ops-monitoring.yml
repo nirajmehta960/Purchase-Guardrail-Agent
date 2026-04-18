@@ -165,25 +165,3 @@ jobs:
             cd /home/github-actions/savvio-monitoring
             docker compose -f docker-compose.production.yml pull
             docker compose -f docker-compose.production.yml up -d --remove-orphans
-
-  notify-on-failure:
-    name: Notify Failure
-    runs-on: ubuntu-latest
-    needs: [drift-detection, deploy-monitoring]
-    if: always() && contains(needs.*.result, 'failure')
-    steps:
-      - run: |
-          echo "Ops workflow FAILED — ${{ env.ENVIRONMENT }} — ${{ github.sha }}"
-          echo "Branch:       ${{ github.ref_name }}"
-          echo "Triggered by: ${{ github.actor }}"
-
-  notify-on-success:
-    name: Notify Success
-    runs-on: ubuntu-latest
-    needs: [drift-detection, deploy-monitoring]
-    if: always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
-    steps:
-      - run: |
-          echo "Ops workflow PASSED — ${{ env.ENVIRONMENT }} — ${{ github.sha }}"
-          echo "Branch:       ${{ github.ref_name }}"
-          echo "Triggered by: ${{ github.actor }}"

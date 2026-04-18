@@ -35,7 +35,7 @@ env:
   REGION: us-east1
   IMAGE: us-east1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/savvio-dev-docker-repo/savvio-model-pipeline
   # Terraform creates this Cloud Run service.
-  CLOUD_RUN_SERVICE: savvio-ai
+  CLOUD_RUN_SERVICE: savvio-ai-ml-trainer
 
 jobs:
   # ===========================================================================

@@ -66,10 +66,6 @@ jobs:
         working-directory: deployment/frontend
         run: npm ci
 
-      # - name: Lint
-      #   working-directory: deployment/frontend
-      #   run: npm run lint
-
       - name: Run tests
         working-directory: deployment/frontend
         run: npm test
@@ -191,6 +187,7 @@ jobs:
     if: success()
     steps:
       - run: echo "PASSED — ${{ env.ENVIRONMENT }} — ${{ github.sha }}"
+      
   drift-detection:
     name: Drift Detection
     runs-on: ubuntu-latest

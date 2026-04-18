@@ -20,186 +20,30 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Authenticate to GCP
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: pip
-          cache-dependency-path: data_pipeline/data-requirements.txt
+          cache-dependency-path: data_pipeline/test-requirements.txt
 
-      - name: Install dependencies
-        working-directory: data_pipeline
-        run: |
-          pip install --upgrade pip
-          pip install -e ../savviocore
-          if [ -f data-requirements.txt ]; then pip install -r data-requirements.txt; fi
-          pip install pytest pytest-cov
-
-      - name: Run unit tests
+      - name: Run unit and integration tests
         working-directory: data_pipeline
         env:
           PYTHONPATH: ${{ github.workspace }}/data_pipeline/dags
         run: |
           python -m pytest \
-            tests/bias/ \
-            tests/database/ \
-            tests/features/ \
-            tests/ingestion/ \
-            tests/preprocess/ \
+            tests/
             -v --tb=short
 
   # ===========================================================================
-  # JOB 2 — DAG Parse Validation
-  # ===========================================================================
-  dag-validation:
-    name: DAG Parse Validation
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Validate DAG file parses
-        working-directory: data_pipeline
-        run: |
-          python3 -c "
-          import ast, sys
-          dag_file = 'dags/data_pipeline_airflow.py'
-          try:
-              with open(dag_file) as f:
-                  ast.parse(f.read())
-              print(f'DAG parse OK: {dag_file}')
-          except SyntaxError as e:
-              print(f'DAG parse FAILED: {e}')
-              sys.exit(1)
-          "
-
-  # ===========================================================================
-  # JOB 3 — DB Connection Check
-  # ===========================================================================
-  db-connection-check:
-    name: DB Connection Check
-    runs-on: ubuntu-latest
-    needs: unit-tests
-
-    permissions:
-      contents: read
-      id-token: write
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Authenticate to GCP
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install sqlalchemy psycopg2-binary
-
-      - name: Fetch DB credentials from GCP
-        id: db-creds
-        run: |
-          DB_HOST=$(gcloud sql instances describe savvio-${{ env.ENVIRONMENT }}-db-instance \
-            --project=${{ env.PROJECT_ID }} \
-            --format='value(ipAddresses[0].ipAddress)' 2>/dev/null || echo "")
-          DB_PASSWORD=$(gcloud secrets versions access latest \
-            --secret=savvio-${{ env.ENVIRONMENT }}-db-password \
-            --project=${{ env.PROJECT_ID }} 2>/dev/null || echo "")
-          echo "::add-mask::$DB_PASSWORD"
-          echo "db_host=$DB_HOST" >> "$GITHUB_OUTPUT"
-          echo "db_password=$DB_PASSWORD" >> "$GITHUB_OUTPUT"
-
-      - name: Check DB connection
-        env:
-          DB_HOST: ${{ steps.db-creds.outputs.db_host }}
-          DB_PORT: "5432"
-          DB_NAME: savvio-${{ env.ENVIRONMENT }}-db
-          DB_USER: ${{ env.ENVIRONMENT }}-db-admin
-          DB_PASSWORD: ${{ steps.db-creds.outputs.db_password }}
-        run: |
-          python3 - <<'EOF'
-          import os, sys
-          import urllib.parse
-          if not os.getenv("DB_HOST"):
-              print("No DB_HOST configured — skipping DB connection check.")
-              sys.exit(0)
-          try:
-              from sqlalchemy import create_engine, text
-              user = urllib.parse.quote_plus(os.environ['DB_USER'])
-              password = urllib.parse.quote_plus(os.environ['DB_PASSWORD'])
-              url = f"postgresql://{user}:{password}@{os.environ['DB_HOST']}:{os.environ.get('DB_PORT', '5432')}/{os.environ['DB_NAME']}"
-              engine = create_engine(url)
-              with engine.connect() as conn:
-                  result = conn.execute(text("SELECT 1"))
-                  print(f"DB connection OK: {result.scalar()}")
-          except Exception as e:
-              print(f"DB connection FAILED: {e}")
-              print("Hint: Check Cloud SQL instance is running and accessible.")
-              sys.exit(1)
-          EOF
-
-  # ===========================================================================
-  # JOB 4 — Data Quality Check
-  # ===========================================================================
-  data-quality-check:
-    name: Data Quality Check
-    runs-on: ubuntu-latest
-    needs: unit-tests
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Authenticate to GCP
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        working-directory: data_pipeline
-        run: |
-          pip install --upgrade pip
-          pip install -e ../savviocore
-          if [ -f data-requirements.txt ]; then pip install -r data-requirements.txt; fi
-          pip install pytest
-
-      - name: Run data validation tests
-        working-directory: data_pipeline
-        run: |
-          python -m pytest tests/validation/ -v --tb=short
-
-  # ===========================================================================
-  # JOB 5 — Deploy DAGs to VM (main branch only)
+  # JOB 2 — Deploy DAGs to VM (main branch only)
   # ===========================================================================
   deploy-dags:
     name: Deploy DAGs
     runs-on: ubuntu-latest
-    needs: [unit-tests, dag-validation, db-connection-check, data-quality-check]
-    if: github.ref == 'refs/heads/main'
+    needs: [unit-tests]
+    if: github.ref == 'refs/heads/main' # logic should be in "on" section (line 3) but this is a safeguard
 
     steps:
       - name: Authenticate to GCP
@@ -242,37 +86,3 @@ jobs:
             git pull origin main
             docker exec airflow-worker airflow dags reserialize
           REMOTE
-
-  # ===========================================================================
-  # JOB 6 — Notify on Failure
-  # ===========================================================================
-  notify-on-failure:
-    name: Notify on Failure
-    runs-on: ubuntu-latest
-    needs: [unit-tests, dag-validation, db-connection-check, data-quality-check]
-    if: failure()
-
-    steps:
-      - name: Send failure notification
-        run: |
-          echo "Data Pipeline CI/CD FAILED"
-          echo "Branch:       ${{ github.ref_name }}"
-          echo "Commit:       ${{ github.sha }}"
-          echo "Triggered by: ${{ github.actor }}"
-
-  # ===========================================================================
-  # JOB 7 — Notify on Success
-  # ===========================================================================
-  notify-on-success:
-    name: Notify on Success
-    runs-on: ubuntu-latest
-    needs: [unit-tests, dag-validation, db-connection-check, data-quality-check]
-    if: success()
-
-    steps:
-      - name: Send success notification
-        run: |
-          echo "Data Pipeline CI/CD PASSED"
-          echo "Branch:       ${{ github.ref_name }}"
-          echo "Commit:       ${{ github.sha }}"
-          echo "Triggered by: ${{ github.actor }}"

@@ -5,7 +5,7 @@ from pathlib import Path
 from src.ingestion.run_ingestion import ingest_financial_task, ingest_product_task, ingest_review_task
 from src.preprocess.run_preprocessing import preprocess_financial_task, preprocess_product_task, preprocess_review_task
 from src.features.run_features import feature_financial_task, feature_product_review_task
-from src.database.run_database import setup_database_task, load_financial_task, load_products_task, load_reviews_task
+from src.database.run_database import setup_database_task, load_financial_task, load_products_task, load_reviews_task, generate_and_load_embedding_task
 from src.validation.run_validation import validate_raw, validate_processed, validate_features, validate_raw_anomalies
 from src.bias.run_bias import bias_financial_task, bias_product_task, bias_review_task
 
@@ -553,14 +553,14 @@ load_review = PythonOperator(
     dag=dag,
 )
 
-# generate_load_embeddings = PythonOperator(
-#     task_id='generate_load_embeddings',
-#     python_callable=generate_and_load_embedding_task,
-#     dag=dag,
-# )
+generate_load_embeddings = PythonOperator(
+    task_id='generate_load_embeddings',
+    python_callable=generate_and_load_embedding_task,
+    dag=dag,
+)
 
 check_featured_validation >> setup_database
-setup_database >> [load_financial, load_product] >> load_review
+setup_database >> [load_financial, load_product] >> load_review >> generate_load_embeddings
 
 # --- BRANCH: all DB loading succeeded? ---
 check_db_loading = BranchPythonOperator(

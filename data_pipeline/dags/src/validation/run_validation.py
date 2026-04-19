@@ -108,7 +108,7 @@ def _handle_report(report: ValidationReport) -> None:
     """
     Central handler for validation reports.
     - HALT   → raise exception (stops Airflow task)
-    - ALERT  → send notification (email/Slack placeholder)
+    - ALERT  → send notification (email placeholder)
     - CONTINUE → log and proceed
     """
     action = report.summary["pipeline_action"]
@@ -136,7 +136,7 @@ def _handle_report(report: ValidationReport) -> None:
 def _send_alert(report: ValidationReport) -> None:
     """
     Placeholder for alert dispatch.
-    In production, wire up to Airflow EmailOperator or SlackWebhookOperator.
+    In production, wire up to Airflow EmailOperator.
     """
     summary = report.summary
     failed_checks = [r for r in report.results if not r.passed]

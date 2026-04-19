@@ -26,7 +26,7 @@ cd model_pipeline
 # Service startup order (enforced by health checks):
 #   1. postgres  → MLflow metadata backend
 #   2. storage   → RustFS S3-compatible artifact store
-#   3. mlflow    → Tracking server at http://localhost:5000
+#   3. mlflow    → Tracking server at http://localhost:${MLFLOW_PORT}  (default 5001)
 #   4. ml-trainer → Runs the full pipeline, then exits
 docker compose up --build
 ```
@@ -51,10 +51,11 @@ The other services (postgres, storage, mlflow) keep running so you can inspect r
 
 **MLflow UI** — runs, nested runs, metrics, artifacts, and registered models:
 ```
-http://localhost:5000
+http://localhost:${MLFLOW_PORT}    # default in .env: 5001
 ```
-Navigate to: **Experiments → savvio_model_pipeline** to see baseline + tuned runs.
-Navigate to: **Models → SavvioChampionModel** to see the registered champion model.
+Navigate to: **Experiments → SavVio_Prediction** (or whatever
+`MLFLOW_EXPERIMENT_NAME` is set to) to see baseline + tuned runs.
+Navigate to: **Models → SavVio_Predictor** to see the registered champion model.
 
 **Local models** — champion model and label encoder are saved to the host machine:
 ```bash
@@ -92,21 +93,22 @@ pip install -r requirements.txt
 # 4) Start MLflow tracking server in this folder (Terminal A).
 #    - backend-store-uri: run metadata DB
 #    - default-artifact-root: model/artifact files
+#    Pick any free port — make sure step 6 uses the same one.
 mlflow server \
 	--backend-store-uri sqlite:///mlflow.db \
 	--default-artifact-root ./mlruns \
 	--host 127.0.0.1 \
-	--port 5000
+	--port 5001
 
 # 5) In a second terminal (Terminal B), activate env again and run pipeline.
 cd model_pipeline
 source .venv/bin/activate
 
 # 6) Point training script to local MLflow server and run end-to-end pipeline.
-MLFLOW_TRACKING_URI=http://127.0.0.1:5000 python src/run_pipeline.py
+MLFLOW_TRACKING_URI=http://127.0.0.1:5001 python src/run_pipeline.py
 
 # 7) Open MLflow UI to review runs, metrics, artifacts, and registered models.
-open http://127.0.0.1:5000
+open http://127.0.0.1:5001
 ```
 
 ### Individual Components
@@ -117,8 +119,8 @@ python src/data/db_loader.py
 # Run data validation after loading
 python src/data/validate_data.py
 
-# View MLflow UI
-open http://localhost:5000
+# View MLflow UI (port from .env MLFLOW_PORT, default 5001)
+open http://localhost:5001
 ```
 
 ### Running Tests

@@ -45,9 +45,15 @@ test_venv/
 .env
 .env.local
 .env.*.local
+.env.ci
 data_pipeline/.env
 model_pipeline/.env
 deployment/.env
+
+# VM bootstrap scripts — must be created on the host, never committed
+# (they typically contain DB passwords / connection names)
+vm_env_setup.sh
+vm_*.sh
 
 # DVC
 .dvc/cache
@@ -109,7 +115,6 @@ htmlcov/
 
 # OS
 Thumbs.db
-.DS_Store
 
 # Temporary files
 tmp/
@@ -129,7 +134,6 @@ data_pipeline/config/
 *.pyc
 *.pyo
 *.pyd
-.env
 
 # temp_data
 */temp_data/*
@@ -147,6 +151,8 @@ docs/
 # Deployment
 deployment/docker/
 deployment/smoke_test.sh
+# Local deployment test harness / generated artifacts (not versioned)
+deploy_tests/
 
 # JavaScript / Node
 node_modules/

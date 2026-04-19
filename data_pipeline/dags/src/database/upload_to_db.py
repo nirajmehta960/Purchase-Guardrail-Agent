@@ -20,7 +20,14 @@ from savviocore.database.db_schema import create_tables
 
 logger = logging.getLogger(__name__)
 
-JSONL_STREAM_CHUNKSIZE = 100_000
+# Streaming/batch sizes — env-driven so they can be tuned without code changes.
+# JSONL_STREAM_CHUNKSIZE: rows per chunk when reading large JSONL into pandas.
+# UPSERT_CHUNK_SIZE:      rows per execute_values batch when upserting into PG.
+# JSONL_LARGE_FILE_MB:    threshold above which JSONL reads switch to streaming.
+JSONL_STREAM_CHUNKSIZE = int(os.getenv("JSONL_STREAM_CHUNKSIZE", "100000"))
+UPSERT_CHUNK_SIZE = int(os.getenv("UPSERT_CHUNK_SIZE", "5000"))
+REVIEWS_INSERT_PAGE_SIZE = int(os.getenv("REVIEWS_INSERT_PAGE_SIZE", "25000"))
+_JSONL_LARGE_FILE_MB = float(os.getenv("JSONL_LARGE_FILE_MB", "300"))
 
 # ---------------------------------------------------------------------------
 # Column mapping: source field → DB column
@@ -94,10 +101,9 @@ def _read_csv(path: str) -> pd.DataFrame:
 
 def _read_jsonl(path: str) -> pd.DataFrame:
     """Read a JSONL file (one JSON object per line)."""
-    # df = pd.read_json(path, lines=True)
     file_size_mb = os.path.getsize(path) / (1024 * 1024)
-    if file_size_mb > 300:
-        chunks = pd.read_json(path, lines=True, chunksize=100_000)
+    if file_size_mb > _JSONL_LARGE_FILE_MB:
+        chunks = pd.read_json(path, lines=True, chunksize=JSONL_STREAM_CHUNKSIZE)
         df = pd.concat(chunks, ignore_index=True)
     else:
         df = pd.read_json(path, lines=True)
@@ -124,7 +130,7 @@ def _upsert_df(
     table_name: str,
     conflict_cols: list,
     update_cols: list,
-    chunksize: int = 5_000,
+    chunksize: int = UPSERT_CHUNK_SIZE,
 ) -> int:
     """
     Upsert a DataFrame into a PostgreSQL table.
@@ -307,7 +313,7 @@ def load_reviews(engine, jsonl_path: str) -> int:
             if df.empty:
                 continue
             tuples = [tuple(row) for row in df.itertuples(index=False, name=None)]
-            execute_values(cursor, sql, tuples, page_size=25_000)
+            execute_values(cursor, sql, tuples, page_size=REVIEWS_INSERT_PAGE_SIZE)
             total_rows += len(tuples)
             logger.info("Reviews chunk %d inserted: %d rows (running total: %d)", i, len(tuples), total_rows)
 

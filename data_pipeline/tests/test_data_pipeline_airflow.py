@@ -82,9 +82,6 @@ _stub("airflow.providers.standard.operators.trigger_dagrun",
 _stub("airflow.providers.smtp")
 _stub("airflow.providers.smtp.operators")
 _stub("airflow.providers.smtp.operators.smtp", EmailOperator=_EmailOperator)
-_stub("airflow.providers.slack")
-_stub("airflow.providers.slack.operators")
-_stub("airflow.providers.slack.operators.slack_webhook", SlackWebhookOperator=MagicMock())
 
 # airflow SDK (used inside make_branch_check)
 _stub("airflow.sdk")
@@ -98,7 +95,7 @@ _stub("airflow.sdk.execution_time.task_runner",
 for _name, _fns in {
     "src.ingestion.run_ingestion":      ["ingest_financial_task", "ingest_product_task", "ingest_review_task"],
     "src.preprocess.run_preprocessing": ["preprocess_financial_task", "preprocess_product_task", "preprocess_review_task"],
-    "src.features.run_features":        ["feature_financial_task", "feature_review_task"],
+    "src.features.run_features":        ["feature_financial_task", "feature_review_task", "feature_product_review_task"],
     "src.database.run_database":        ["setup_database_task", "load_financial_task", "load_products_task",
                                          "load_reviews_task", "generate_and_load_embedding_task"],
     "src.validation.run_validation":    ["validate_raw", "validate_processed", "validate_features",
@@ -203,7 +200,7 @@ def test_check_preprocessing_branch_exists():
 # 5) Feature engineering tasks
 # =============================================================================
 
-@pytest.mark.parametrize("attr", ["feature_financial", "feature_reviews"])
+@pytest.mark.parametrize("attr", ["feature_financial", "feature_product_reviews"])
 def test_feature_task_exists(attr):
     assert hasattr(M, attr)
     assert isinstance(getattr(M, attr), _PythonOperator)
@@ -217,8 +214,7 @@ def test_check_feature_engineering_branch_exists():
 # 6) DB loading tasks
 # =============================================================================
 
-@pytest.mark.parametrize("attr", ["setup_database", "load_financial", "load_product",
-                                   "load_review", "generate_load_embeddings"])
+@pytest.mark.parametrize("attr", ["setup_database", "load_financial", "load_product", "load_review"])
 def test_db_task_exists(attr):
     assert hasattr(M, attr)
     assert isinstance(getattr(M, attr), _PythonOperator)

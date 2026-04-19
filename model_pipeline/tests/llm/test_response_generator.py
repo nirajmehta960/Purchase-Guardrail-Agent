@@ -1,26 +1,65 @@
-"""Tests for the response generator — template-based (mock) and LLM-based."""
+"""Tests for the response generator (template path + LLM-driven path).
+
+The current generator:
+- Calls llm_provider.generate(prompt, temperature=...) to get a 4-section explanation
+- Falls back to `_generate_from_template(ctx)` on empty / short / failed output
+- The template fallback always cites the product name and price, the
+  authoritative color, and the headline financial signals
+"""
+
+from __future__ import annotations
 
 import pytest
 
-from llm.llm_provider import MockProvider
 from llm.response_generator import (
     RecommendationContext,
-    generate_response,
+    _color_key,
     _generate_from_template,
+    generate_response,
 )
 
 
-@pytest.fixture
-def provider():
-    return MockProvider()
+# ---------------------------------------------------------------------------
+# Stub providers (deterministic, configurable)
+# ---------------------------------------------------------------------------
+
+class _FailingLLM:
+    def generate(self, *args, **kwargs):
+        raise RuntimeError("LLM offline")
 
 
-def _make_context(
+class _EchoLLM:
+    """Returns a long, well-formed 4-section response so generate_response
+    keeps the LLM output instead of falling back to the template."""
+
+    def generate(self, prompt: str, temperature: float = 0.35, **_) -> str:
+        return (
+            "**💰 Your Financial Picture**\nLooks great.\n\n"
+            "**🛍️ About This Product**\nSolid track record.\n\n"
+            "**💬 What Buyers Are Saying**\nMostly positive reviews.\n\n"
+            "**✅ Our Analysis**\nGo ahead — within budget."
+        )
+
+
+class _ShortLLM:
+    """Returns text below the 20-char threshold → forces template fallback."""
+
+    def generate(self, *args, **kwargs):
+        return "ok"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _ctx(
     color: str = "GREEN",
+    *,
     product_name: str = "Sony WH-1000XM5",
     product_price: float = 349.99,
-    triggered_rules: list | None = None,
+    triggered_rules=None,
     was_downgraded: bool = False,
+    original_color: str | None = None,
     affordability_score: float = 1650.0,
     savings_to_price_ratio: float = 28.5,
     emergency_fund_months: float = 8.3,
@@ -30,10 +69,9 @@ def _make_context(
         product_name=product_name,
         product_price=product_price,
         recommendation_color=color,
-        original_color=color,
+        original_color=original_color or color,
         was_downgraded=was_downgraded,
         triggered_rules=triggered_rules or [],
-        confidence_scores={color: 0.87},
         affordability_score=affordability_score,
         savings_to_price_ratio=savings_to_price_ratio,
         emergency_fund_months=emergency_fund_months,
@@ -41,101 +79,116 @@ def _make_context(
     )
 
 
-class TestGreenResponse:
-    def test_green_response_contains_product(self, provider):
-        ctx = _make_context("GREEN")
-        response = generate_response(ctx, provider)
-        assert "Sony WH-1000XM5" in response
-
-    def test_green_response_contains_price(self, provider):
-        ctx = _make_context("GREEN")
-        response = generate_response(ctx, provider)
-        assert "$349.99" in response
-
-    def test_green_response_is_encouraging(self, provider):
-        ctx = _make_context("GREEN")
-        response = generate_response(ctx, provider)
-        response_lower = response.lower()
-        encouraging = any(
-            word in response_lower
-            for word in ["great", "comfortably", "sound", "good", "manageable"]
-        )
-        assert encouraging, f"GREEN response should be encouraging: {response}"
-
-
-class TestYellowResponse:
-    def test_yellow_response_contains_product(self, provider):
-        ctx = _make_context("YELLOW", triggered_rules=["YELLOW_2"])
-        response = generate_response(ctx, provider)
-        assert "Sony WH-1000XM5" in response
-
-    def test_yellow_response_is_cautious(self, provider):
-        ctx = _make_context("YELLOW", triggered_rules=["YELLOW_1"])
-        response = generate_response(ctx, provider)
-        response_lower = response.lower()
-        cautious = any(
-            word in response_lower
-            for word in ["think", "consider", "caution", "careful"]
-        )
-        assert cautious, f"YELLOW response should be cautious: {response}"
-
-
-class TestRedResponse:
-    def test_red_response_contains_product(self, provider):
-        ctx = _make_context("RED", triggered_rules=["RED_1"])
-        response = generate_response(ctx, provider)
-        assert "Sony WH-1000XM5" in response
-
-    def test_red_response_recommends_against(self, provider):
-        ctx = _make_context("RED", triggered_rules=["RED_1"])
-        response = generate_response(ctx, provider)
-        response_lower = response.lower()
-        discouraging = any(
-            word in response_lower
-            for word in ["holding off", "recommend", "not the best", "first"]
-        )
-        assert discouraging, f"RED response should discourage: {response}"
-
-
-class TestDowngradeHandling:
-    def test_downgraded_response_mentions_concerns(self, provider):
-        ctx = _make_context(
-            "YELLOW",
-            was_downgraded=True,
-            triggered_rules=["YELLOW_2"],
-        )
-        ctx.original_color = "GREEN"
-        response = generate_response(ctx, provider)
-        # Should mention product quality concerns since it was downgraded
-        response_lower = response.lower()
-        assert any(
-            word in response_lower
-            for word in ["quality", "review", "caution", "concern", "think"]
-        )
-
-
-class TestTemplateGeneration:
-    def test_template_always_returns_string(self):
-        ctx = _make_context("GREEN")
-        response = _generate_from_template(ctx)
-        assert isinstance(response, str)
-        assert len(response) > 0
-
-    def test_unknown_color_defaults_to_yellow(self):
-        ctx = _make_context("PURPLE")
-        response = _generate_from_template(ctx)
-        assert isinstance(response, str)
-        assert len(response) > 0
-
+# ---------------------------------------------------------------------------
+# RecommendationContext dataclass
+# ---------------------------------------------------------------------------
 
 class TestRecommendationContext:
-    def test_default_values(self):
+    def test_required_fields_only(self):
         ctx = RecommendationContext(
             product_name="Test",
             product_price=10.0,
             recommendation_color="GREEN",
+            original_color="GREEN",
+            was_downgraded=False,
         )
         assert ctx.triggered_rules == []
         assert ctx.confidence_scores == {}
         assert ctx.was_downgraded is False
         assert ctx.user_context is None
+        assert ctx.review_snippets == []
+
+
+# ---------------------------------------------------------------------------
+# _color_key normalisation
+# ---------------------------------------------------------------------------
+
+class TestColorKey:
+    @pytest.mark.parametrize("inp,expected", [
+        ("GREEN", "GREEN"),
+        ("yellow", "YELLOW"),
+        ("Red", "RED"),
+        ("PURPLE", "YELLOW"),
+        ("", "YELLOW"),
+        (None, "YELLOW"),
+    ])
+    def test_cases(self, inp, expected):
+        assert _color_key(inp) == expected
+
+
+# ---------------------------------------------------------------------------
+# Template fallback (deterministic, no LLM)
+# ---------------------------------------------------------------------------
+
+class TestTemplateFallback:
+    def test_returns_non_empty_string(self):
+        out = _generate_from_template(_ctx("GREEN"))
+        assert isinstance(out, str)
+        assert len(out) > 0
+
+    def test_includes_product_name(self):
+        out = _generate_from_template(_ctx("GREEN"))
+        assert "Sony WH-1000XM5" in out
+
+    def test_includes_price(self):
+        out = _generate_from_template(_ctx("GREEN"))
+        assert "$349.99" in out
+
+    def test_green_tone_is_encouraging(self):
+        out = _generate_from_template(_ctx("GREEN")).lower()
+        assert any(w in out for w in ("proceed", "go ahead", "comfortably"))
+
+    def test_yellow_tone_is_cautious(self):
+        out = _generate_from_template(_ctx("YELLOW")).lower()
+        assert any(w in out for w in ("consider", "wait", "compare"))
+
+    def test_red_tone_discourages(self):
+        out = _generate_from_template(_ctx("RED")).lower()
+        assert any(w in out for w in ("prioritize", "essentials", "before"))
+
+    def test_unknown_color_defaults_to_yellow(self):
+        out = _generate_from_template(_ctx("PURPLE"))
+        # Falls into the YELLOW branch — check for one of its closing lines.
+        assert "consider" in out.lower() or "compare" in out.lower()
+
+    def test_includes_triggered_rules_when_present(self):
+        out = _generate_from_template(_ctx("YELLOW", triggered_rules=["YELLOW_2", "YELLOW_3"]))
+        assert "Rules considered" in out
+        assert "YELLOW_2" in out
+
+    def test_downgrade_note_appears(self):
+        out = _generate_from_template(_ctx("YELLOW", was_downgraded=True, original_color="GREEN"))
+        assert "downgrade" in out.lower()
+
+    def test_affordability_appears(self):
+        out = _generate_from_template(_ctx("GREEN"))
+        assert "Affordability score" in out
+        assert "1650" in out or "1,650" in out  # value rendered to 2dp
+
+
+# ---------------------------------------------------------------------------
+# generate_response — LLM-driven path with stubs
+# ---------------------------------------------------------------------------
+
+class TestGenerateResponse:
+    def test_uses_llm_when_output_is_long_enough(self):
+        out = generate_response(_ctx("GREEN"), _EchoLLM())
+        assert "Your Financial Picture" in out
+        assert out.startswith("**💰")
+
+    def test_short_llm_output_falls_back_to_template(self):
+        out = generate_response(_ctx("GREEN"), _ShortLLM())
+        # Template includes product name; the ShortLLM 'ok' would not.
+        assert "Sony WH-1000XM5" in out
+
+    def test_llm_failure_falls_back_to_template(self):
+        out = generate_response(_ctx("RED"), _FailingLLM())
+        assert "Sony WH-1000XM5" in out
+        assert "$349.99" in out
+
+    def test_falls_back_template_preserves_color(self):
+        red = generate_response(_ctx("RED"), _FailingLLM()).lower()
+        green = generate_response(_ctx("GREEN"), _FailingLLM()).lower()
+        # RED template ends with 'Prioritize essentials...'; GREEN does not.
+        assert "prioritize" in red
+        assert "prioritize" not in green

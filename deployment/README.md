@@ -41,7 +41,6 @@ The model is deployed exclusively on Google Cloud Platform using the following G
 14. [Phase 9 — Testing](#phase-9--testing)
 15. [Phase 10 — Monitoring Dashboard](#phase-10--monitoring-dashboard)
 16. [Phase 11 — Production Frontend (React/Vite)](#phase-11--production-frontend-reactvite)
-17. [Deliverable Checklist](#deliverable-checklist)
 
 ---
 
@@ -395,8 +394,18 @@ GitHub Actions (.github/workflows/deployment.yml)
         ├── 8. Deploy MLflow → Cloud Run (savvio-ai-mlflow)
         ├── 9. Live /health endpoint check
         ├── 10. Drift detection (Evidently AI + Cloud SQL)
-        └── 11. Deploy Prometheus config to GCE VM
+        │       └── exposes `severity` job output (GREEN/YELLOW/RED)
+        ├── 11. Deploy Prometheus config to GCE VM
+        └── 12. trigger-retraining (only if severity == RED)
+                └── dispatches modelpipeline_ci.yml
+                        └── unit-tests → run-pipeline → validation-gate
+                            → bias-gate → rollback-check
+                            → persist-metrics-baseline
+                            → trigger-deployment (re-fires deployment.yml)
 ```
+
+This closes the **drift → retrain → redeploy** loop required by the
+deployment rubric (PDF §5.3 / §5.4) without any manual intervention.
 
 ### Environment Variables Passed to Cloud Run
 
@@ -430,7 +439,7 @@ Key env vars set by Terraform on the API service:
 | GitHub Actions | CI/CD orchestration |
 | Docker | Build and containerization |
 | Cloud Run | Deployment target |
-| Slack / Email | Failure and success notifications |
+| Email (SMTP) | Failure and success notifications |
 
 ---
 
@@ -448,7 +457,7 @@ Track live system performance after deployment — capturing latency, request vo
   - Green/Yellow/Red prediction distribution over time
   - LLM hallucination flag rate
   - code-level guardrails safety rail trigger volume
-- Set alert thresholds in `deployment/monitoring/alert_config.yaml`:
+- Set alert thresholds in `deployment/monitoring/drift/alert_config.yaml`:
   - Latency breach: response time > 2 seconds (SLA threshold) → alert
   - Prediction distribution shift: Green/Yellow/Red ratio changes significantly → alert
   - Hallucination spike: flag rate exceeds threshold → alert
@@ -474,12 +483,24 @@ Detect data drift (shifts in input feature distributions) and model drift (shift
   - Financial signals: `discretionary_income`, `debt_to_income_ratio`, `monthly_expense_burden_ratio`, `emergency_fund_months`, `saving_to_income_ratio`
   - Product signals: `average_rating`, `rating_number`, `rating_variance`
 - Track output distribution shifts: changes in Green/Yellow/Red recommendation ratio over time
-- Run drift detection on a rolling window (weekly — every Monday 8am UTC via GitHub Actions)
+- Run drift detection on a weekly cadence:
+  - Every Monday 08:00 UTC via the `drift-detection` job in `ops-monitoring.yml`
+  - Plus on-demand via `workflow_dispatch` on the same workflow
 - Configure drift severity thresholds in `deployment/monitoring/drift/alert_config.yaml`:
   - Green: <10% columns drifted → no action
-  - Yellow: 10–50% columns drifted → alert, monitor closely
-  - Red: ≥50% columns drifted → alert, consider retraining
-- Alert and log when any drift threshold is breached
+  - Yellow: 10–50% columns drifted → email alert, monitor closely
+  - Red: ≥50% columns drifted → email alert + **auto-dispatch retraining**
+- The `trigger-retraining` job in `ops-monitoring.yml` reads the latest `drift_summary_*.json`,
+  and on **RED** severity calls `actions/github-script` to dispatch
+  `modelpipeline_ci.yml`. That workflow then runs the validation gate, bias gate,
+  rollback check, persists the new metrics baseline, and re-fires `deployment.yml`
+  to push the new image to Cloud Run — closing the drift → retrain → redeploy loop.
+- Notifications wired in `drift_detector.py` (email-only):
+  - `send_email_alert()` fires on YELLOW + RED via SMTP
+    (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`,
+    `ALERT_EMAIL_FROM`, `ALERT_EMAIL_LIST`)
+  - `send_slack_alert()` retained as inert dead code; disabled via
+    `notification.slack.enabled = false` in `alert_config.yaml`
 - Verified drift detection working — YELLOW alert fired on 2026-04-08 for `average_rating` (score: 0.0694, threshold: 0.05)
 
 ### Drift Severity Levels
@@ -487,8 +508,8 @@ Detect data drift (shifts in input feature distributions) and model drift (shift
 | Level | Condition | Action |
 |---|---|---|
 | Green | <10% columns drifted | No action needed |
-| Yellow | 10–50% columns drifted | Slack alert, monitor closely |
-| Red | ≥50% columns drifted | Slack + email alert, consider retraining |
+| Yellow | 10–50% columns drifted | Email alert, monitor closely |
+| Red | ≥50% columns drifted | Email alert, auto-dispatch retraining |
 
 ### Statistical Method
 Wasserstein distance (earth mover's distance) via Evidently AI.
@@ -500,9 +521,9 @@ Wasserstein distance (earth mover's distance) via Evidently AI.
 | Tool | Purpose |
 |---|---|
 | Evidently AI (v0.7.x) | Data and model drift detection — Wasserstein distance |
-| GitHub Actions | Automated weekly drift runs (Monday 8am UTC) |
+| GitHub Actions | Weekly drift cron (Mon 08:00 UTC) via `ops-monitoring.yml`; auto-dispatch of retraining workflow on RED |
 | GCP Cloud Logging | Drift logs and audit trail |
-| Slack Webhook | Real-time alerts to #group-34 channel |
+| SMTP (Gmail/Workspace) | Email alerts on YELLOW + RED severity |
 
 ### Output
 - HTML report: `deployment/monitoring/reports/drift_report_<timestamp>.html`
@@ -604,34 +625,3 @@ Build a high-performance, premium user interface that surfaces the AI Advocate's
 | Tailwind CSS | Premium styling and layout |
 | TanStack Query | Server-state management and caching |
 | Recharts | Financial health visualizations |
-
----
-
-## Deliverable Checklist
-
-### Professor Requirements
-- [ ] Cloud deployment specified: GCP — Cloud Run for serving, Artifact Registry for container storage
-- [ ] Deployment service documented (Cloud Run — serverless containerized deployment)
-- [ ] Automated deployment scripts included (Terraform + GitHub Actions + Docker)
-- [ ] Scripts pull latest model from registry and deploy automatically
-- [ ] CI/CD pipeline configured to trigger redeployment on new model versions (GitHub Actions)
-- [ ] Step-by-step replication instructions provided
-- [ ] Environment setup and dependency instructions included
-- [ ] Deployment verification steps documented (`curl /health` + `/predict`)
-- [ ] Monitoring for model decay and data shift implemented (Evidently + Cloud Logging)
-- [ ] Drift detection implemented on input feature distributions and output prediction distribution
-- [ ] Predefined thresholds for drift detection configured
-- [ ] Notifications configured for deployment outcomes (Slack/email)
-- [ ] Deployment scripts structured for minimal manual intervention
-- [ ] Logging and monitoring functionality included post-deployment
-- [ ] Video demonstration planned: fresh environment, full deploy walkthrough, endpoint verification
-
-### SavVio-Specific
-- [ ] Deterministic engine preserved and authoritative at inference — ML and LLM cannot override color output
-- [ ] User prompt accepted as natural language input — LLM extracts product information from prompt
-- [ ] Three-layer inference stack connected: LLM extraction → Deterministic Engine → ML Model → LLM explanation
-- [ ] code-level guardrails Guardrails integrated and tested with adversarial prompts
-- [ ] Monitoring dashboard built and deployed
-- [ ] Drift detection covers Green/Yellow/Red output distribution shifts
-- [ ] Production frontend (React/Vite) live and connected to Cloud Run endpoint
-- [ ] CI/CD gate sequence: unit tests → build → smoke test → push → deploy → live check → latency check

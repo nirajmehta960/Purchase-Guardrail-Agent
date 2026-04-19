@@ -6,19 +6,23 @@ on:
     branches: [main]
     paths:
       - 'deployment/terraform/**'
+      - '.github/workflows/terraform.yml'
   push:
     branches: [main]
     paths:
       - 'deployment/terraform/**'
+      - '.github/workflows/terraform.yml'
 
-# Only one Terraform run at a time to prevent state lock conflicts.
-# On PRs, cancel any in-progress plan for the same branch.
-# On main push, queue (don't cancel) so applies don't race.
+# One Terraform run at a time per branch — cancel in-flight PR plans, queue
+# main-push applies so they don't race.
 concurrency:
   group: terraform-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # ===========================================================================
+  # JOB 1 — Terraform (dev)
+  # ===========================================================================
   terraform-dev:
     name: Terraform (dev)
     runs-on: ubuntu-latest
@@ -26,11 +30,16 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      pull-requests: write   # allows posting plan output as a PR comment
+      pull-requests: write
 
     defaults:
       run:
         working-directory: deployment/terraform/environments/dev
+
+    env:
+      TF_VAR_grafana_api_key: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
+      TF_VAR_grafana_cloud_username: ${{ secrets.GRAFANA_CLOUD_USERNAME }}
+      TF_VAR_grafana_remote_write_url: ${{ secrets.GRAFANA_REMOTE_WRITE_URL }}
 
     steps:
       - name: Checkout code
@@ -47,7 +56,7 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.14.7"
+          terraform_version: ${{ vars.TERRAFORM_VERSION || '1.14.7' }}
 
       - name: Terraform Init
         run: terraform init
@@ -55,32 +64,8 @@ jobs:
       - name: Terraform Validate
         run: terraform validate
 
-      - name: Force-unlock stale state lock (if present)
-        if: github.event_name != 'pull_request'
-        run: |
-          # Attempt to unlock any stale lock left by a previously interrupted run.
-          # This is safe because concurrency: cancel-in-progress ensures no other
-          # run is actively holding the lock when this step executes on main.
-          LOCK_ID=$(
-            gcloud storage cat \
-              gs://savvio-purchase-guardrail-tf-state/env/dev/default.tflock \
-              2>/dev/null \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('ID',''))" \
-              2>/dev/null || true
-          )
-          if [ -n "$LOCK_ID" ]; then
-            echo "Stale lock found (ID: $LOCK_ID) — force-unlocking..."
-            terraform force-unlock -force "$LOCK_ID" || true
-          else
-            echo "No stale lock found."
-          fi
-
       - name: Terraform Plan
         id: plan
-        env:
-          TF_VAR_grafana_api_key: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
-          TF_VAR_grafana_cloud_username: ${{ secrets.GRAFANA_CLOUD_USERNAME }}
-          TF_VAR_grafana_remote_write_url: ${{ secrets.GRAFANA_REMOTE_WRITE_URL }}
         run: |
           terraform plan \
             -var="project_id=${{ secrets.GCP_PROJECT_ID }}" \
@@ -106,10 +91,6 @@ jobs:
 
       - name: Terraform Apply
         if: github.event_name != 'pull_request'
-        env:
-          TF_VAR_grafana_api_key: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
-          TF_VAR_grafana_cloud_username: ${{ secrets.GRAFANA_CLOUD_USERNAME }}
-          TF_VAR_grafana_remote_write_url: ${{ secrets.GRAFANA_REMOTE_WRITE_URL }}
         run: |
           terraform apply \
             -var="project_id=${{ secrets.GCP_PROJECT_ID }}" \
@@ -124,5 +105,3 @@ jobs:
           echo "API URL:            $(terraform output -raw api_url)"
           echo "MLflow URL:         $(terraform output -raw mlflow_url)"
           echo "VM IP:              $(terraform output -raw pipeline_vm_ip)"
-          echo ""
-          echo "Next step: grab DB_PASSWORD from GCP Secret Manager → savvio-dev-db-password"

@@ -70,11 +70,16 @@ x-airflow-common:
     # Package root for the data pipeline so "from src.xxx import ..." works
     PYTHONPATH: /opt/airflow/dags
 
-    # SMTP connection for EmailOperator - uses variables from .env file
-    AIRFLOW_CONN_SMTP_DEFAULT: '{"conn_type": "smtp", "host": "smtp.gmail.com", "port": 587, "login": "${SMTP_USER}", "password": "${SMTP_PASSWORD}", "extra": {"from_email": "${SMTP_USER}", "disable_ssl": true, "disable_tls": false}}'
+    # SMTP connection for EmailOperator — fully driven by .env (SMTP_HOST,
+    # SMTP_PORT, SMTP_USER, SMTP_PASSWORD, ALERT_EMAIL_FROM). Defaults match
+    # .env.example so the JSON is still valid if any var is unset.
+    AIRFLOW_CONN_SMTP_DEFAULT: '{"conn_type": "smtp", "host": "${SMTP_HOST:-smtp.gmail.com}", "port": ${SMTP_PORT:-587}, "login": "${SMTP_USER}", "password": "${SMTP_PASSWORD}", "extra": {"from_email": "${ALERT_EMAIL_FROM:-${SMTP_USER}}", "disable_ssl": true, "disable_tls": false}}'
 
-    # Slack Webhook connection for SlackWebhookOperator
-    AIRFLOW_CONN_SLACK_WEBHOOK: "http://:${SLACK_WEBHOOK_URL}@https%3A%2F%2Fhooks.slack.com%2Fservices"
+    # Slack Webhook connection for SlackWebhookOperator (kept for parity with
+    # the commented-out SlackWebhookOperator tasks). Set SLACK_WEBHOOK_URL +
+    # SLACK_WEBHOOK_HOST in .env to enable; defaults match the public Slack
+    # webhook host.
+    AIRFLOW_CONN_SLACK_WEBHOOK: "http://:${SLACK_WEBHOOK_URL}@${SLACK_WEBHOOK_HOST:-https%3A%2F%2Fhooks.slack.com%2Fservices}"
 
     # yamllint disable rule:line-length
     # Use simple http server on scheduler for health checks

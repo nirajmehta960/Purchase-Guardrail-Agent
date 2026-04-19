@@ -5,14 +5,15 @@
 # Drift thresholds — share of monitored columns that must drift to trigger
 # ---------------------------------------------------------------------------
 drift_thresholds:
-  green:  0.10   # < 10% columns drifted — stable, no action
-  yellow: 0.50   # 10–50% columns drifted — monitor closely  (fixed: was 0.25, same as red)
-  red:    0.50   # ≥ 50% columns drifted — alert, consider retraining
+  green:  0.10
+  yellow: 0.25
+  red:    0.50
 
 # ---------------------------------------------------------------------------
-# Per-column Wasserstein distance thresholds
+# Per-column Wasserstein distance thresholds (numeric features only).
 # Rating features use a tighter threshold (0.05) since average_rating
 # already reached 0.069 in initial testing and drives recommendations.
+# Categorical features below use chi-squared (p-value); not configured here.
 # ---------------------------------------------------------------------------
 column_thresholds:
   default: 0.10
@@ -34,20 +35,38 @@ latency_sla_seconds: 2.0
 
 # ---------------------------------------------------------------------------
 # Monitored features
-# NOTE: 'price' removed from product features — not present in baseline CSV.
-# Add it back once baseline is regenerated with price included.
+#
+# Coverage philosophy: monitor every RAW model input (12 numeric + 3 categorical).
+# Computed features (affordability_score, value_density, etc.) are deterministic
+# functions of these raw inputs — drifting them adds noise, not signal.
+#
+# - financial / product → numeric, scored with Wasserstein distance.
+# - categorical         → chi-squared p-value (default p < 0.05 = drifted).
+#
+# NOTE: in training_scenarios.csv the product price column is named
+# 'product_price'. generate_baseline.py renames it to 'price' so the baseline
+# CSV matches the DB column queried by collect_production_data.py.
 # ---------------------------------------------------------------------------
 monitored_features:
   financial:
+    - monthly_income
+    - monthly_expenses
+    - savings_balance
+    - monthly_emi
     - discretionary_income
     - debt_to_income_ratio
     - monthly_expense_burden_ratio
     - emergency_fund_months
     - saving_to_income_ratio
   product:
+    - price
     - average_rating
     - rating_number
     - rating_variance
+  categorical:
+    - employment_status
+    - has_loan
+    - region
 
 # ---------------------------------------------------------------------------
 # Notification routing
@@ -55,13 +74,12 @@ monitored_features:
 # ---------------------------------------------------------------------------
 notification:
   slack:
+    enabled: false
+    webhook_env_var: SLACK_WEBHOOK_URL
+    notify_on: []
+  email:
     enabled: true
-    webhook_env_var: SLACK_WEBHOOK_URL   # set in .env or CI secrets
+    recipients_env_var: ALERT_EMAIL_LIST
     notify_on:
       - YELLOW
       - RED
-  email:
-    enabled: true
-    recipients_env_var: ALERT_EMAIL_LIST  # comma-separated emails in .env
-    notify_on:
-      - RED                               # email only on RED to avoid noise

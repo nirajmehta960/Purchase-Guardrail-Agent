@@ -53,8 +53,8 @@ This document describes the production architecture and gives a step-by-step fir
 
 | Workflow | File | Trigger | What it does |
 |----------|------|---------|--------------|
-| Data Pipeline CI/CD | `datapipeline_ci.yml` | push/PR to `data_pipeline/**` | Unit tests, DAG parse validation, DB connection check. On main: SSH → VM → git pull → reserialize DAGs |
-| Model Pipeline CI/CD | `modelpipeline_ci.yml` | push/PR to `model_pipeline/**` | Unit tests, DB check, run training, quality gates (F1>0.70, ROC-AUC>0.75), bias gate, rollback check, persist baseline to GCS, trigger deployment |
+| Data Pipeline CI/CD | `datapipeline.yml` | push/PR to `data_pipeline/**` | Unit tests + DAG parse validation. On main: build & push image to Artifact Registry → SSH → VM → `docker compose pull && up -d` → trigger DAG |
+| Model Pipeline CI/CD | `modelpipeline.yml` | push/PR to `model_pipeline/**` | Unit tests, run training, quality gates (F1, ROC-AUC, bias, rollback), persist baseline to GCS, then build & push trainer image to Artifact Registry and `gcloud run deploy` to the Cloud Run trainer service |
 | Deployment CI/CD | `deployment.yml` | push to `deployment/**` or `savviocore/**`, weekly cron, workflow_dispatch | API/frontend tests, build Docker images → Artifact Registry, deploy to Cloud Run, health check, drift detection, deploy Prometheus to VM |
 | Terraform | `terraform.yml` | push/PR to `deployment/terraform/**` | PR: plan only + posts plan as comment. Main push: plan + apply |
 
@@ -104,7 +104,8 @@ Add all of these under **Settings → Secrets and variables → Actions** in the
 | `GRAFANA_REMOTE_WRITE_URL` | deployment | Grafana Cloud Prometheus remote-write URL |
 | `GRAFANA_CLOUD_USERNAME` | deployment | Grafana Cloud instance numeric ID |
 | `GRAFANA_CLOUD_API_KEY` | deployment | Grafana Cloud API key |
-| `SLACK_WEBHOOK_URL` | deployment | Slack webhook for drift alerts (optional) |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | deployment | SMTP relay for drift / pipeline email alerts |
+| `ALERT_EMAIL_FROM`, `ALERT_EMAIL_LIST` | deployment | From address and comma-separated recipients for email alerts |
 
 > **Note on `GCE_VM_IP`**: The VM uses an ephemeral public IP. Every time the VM is restarted or recreated, the IP changes. After any VM restart you must get the new IP from `terraform output pipeline_vm_ip` and update this secret — otherwise the datapipeline and deployment CI/CD jobs that SSH into the VM will fail with `i/o timeout`.
 
@@ -279,12 +280,13 @@ DB_PORT=5432
 # GCS
 GCS_DATA_BUCKET=savvio-data-bucket
 
-# SMTP (optional — Airflow email alerts)
+# SMTP (drift + pipeline email alerts — required for alerting)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
 SMTP_USER=<gmail>
 SMTP_PASSWORD=<app password>
-
-# Slack (optional)
-SLACK_WEBHOOK_URL=<url>
+ALERT_EMAIL_FROM=<from-address>
+ALERT_EMAIL_LIST=<comma-separated recipients>
 ```
 
 Build the custom Airflow image and start the stack:
@@ -401,7 +403,7 @@ No manual VM access needed for DAG changes.
 
 ### Retraining the model
 
-Push changes to `model_pipeline/**` or manually trigger `modelpipeline_ci.yml`. Gates must pass before deployment is triggered.
+Push changes to `model_pipeline/**` or manually trigger `modelpipeline.yml`. Gates must pass before the trainer image is built/pushed and deployed to Cloud Run.
 
 ### Infrastructure changes
 

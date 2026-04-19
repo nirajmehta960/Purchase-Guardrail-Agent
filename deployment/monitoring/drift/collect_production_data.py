@@ -35,9 +35,18 @@ sys.path.insert(0, str(_REPO_ROOT / "savviocore" / "src"))
 with open(_CONFIG_PATH) as f:
     _cfg = yaml.safe_load(f)
 
-FINANCIAL_COLS = _cfg["monitored_features"]["financial"]
-PRODUCT_COLS   = _cfg["monitored_features"]["product"]
-MONITOR_COLS   = FINANCIAL_COLS + PRODUCT_COLS
+FINANCIAL_COLS   = _cfg["monitored_features"]["financial"]
+PRODUCT_COLS     = _cfg["monitored_features"]["product"]
+CATEGORICAL_COLS = _cfg["monitored_features"].get("categorical", [])
+
+# Categoricals live on financial_profiles. If we ever add a product-side
+# categorical (e.g. category), split this into _PRODUCT_CAT_COLS.
+_FINANCIAL_CAT_COLS = [
+    c for c in CATEGORICAL_COLS
+    if c in {"employment_status", "has_loan", "region"}
+]
+
+MONITOR_COLS = FINANCIAL_COLS + PRODUCT_COLS + CATEGORICAL_COLS
 
 # ---------------------------------------------------------------------------
 # Collect
@@ -53,8 +62,8 @@ def collect_df(sample_size: int = 10_000) -> pd.DataFrame:
 
     engine = get_engine()
 
-    fin_cols = ", ".join(FINANCIAL_COLS)
-    financial_df = pd.read_sql(f"SELECT {fin_cols} FROM financial_profiles", engine)
+    fin_select = ", ".join(FINANCIAL_COLS + _FINANCIAL_CAT_COLS)
+    financial_df = pd.read_sql(f"SELECT {fin_select} FROM financial_profiles", engine)
 
     prod_cols = ", ".join(PRODUCT_COLS)
     products_df = pd.read_sql(f"SELECT {prod_cols} FROM products", engine)

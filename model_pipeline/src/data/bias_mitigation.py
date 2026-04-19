@@ -37,6 +37,8 @@ from typing import Tuple
 import numpy as np
 import pandas as pd
 
+from config import Config
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -56,8 +58,10 @@ EMI_HARD_DROP_MULTIPLIER = 10.0
 # Per-user review cap: prevents prolific reviewers from dominating.
 MAX_REVIEWS_PER_USER = 50
 
-# Random seed for all sampling operations — must match Config.RANDOM_STATE.
-RANDOM_STATE = 42
+# Random seed for all sampling operations — sourced from Config so a single
+# place (or a single env var override) controls reproducibility for the whole
+# pipeline.
+RANDOM_STATE = Config.RANDOM_STATE
 
 # Near-zero savings: define as savings_balance < $200.
 NEAR_ZERO_SAVINGS_THRESHOLD = 200.0

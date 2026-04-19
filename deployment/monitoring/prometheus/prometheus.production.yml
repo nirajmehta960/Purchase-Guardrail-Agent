@@ -1,22 +1,18 @@
-# =============================================================================
-# Prometheus Scrape Configuration — SavVio Production
-# =============================================================================
-# Runs on the GCE pipeline VM. Scrapes the Cloud Run API's /metrics endpoint
-# and remote-writes to Grafana Cloud.
-#
-# Variables substituted by envsubst in CI/CD before deployment:
+# Prometheus scrape config — production (renders via envsubst in CI/CD).
+# Substituted vars:
 #   ${API_HOST}                 — Cloud Run API hostname (no scheme)
+#   ${PROMETHEUS_PROJECT_LABEL} — value for external_labels.project
+#   ${PROMETHEUS_API_JOB}       — job_name / service label for the API target
 #   ${GRAFANA_REMOTE_WRITE_URL} — Grafana Cloud Prometheus remote-write URL
 #   ${GRAFANA_CLOUD_USERNAME}   — Grafana Cloud instance numeric ID
 #   ${GRAFANA_CLOUD_API_KEY}    — Grafana Cloud API key
-# =============================================================================
 
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
   external_labels:
     environment: "production"
-    project: "savvio"
+    project: "${PROMETHEUS_PROJECT_LABEL}"
 
 # ---------------------------------------------------------------------------
 # Remote Write → Grafana Cloud
@@ -35,14 +31,13 @@ remote_write:
 # Scrape Configs
 # ---------------------------------------------------------------------------
 scrape_configs:
-  # SavVio Cloud Run API — public HTTPS endpoint
-  - job_name: "savvio-api"
+  - job_name: "${PROMETHEUS_API_JOB}"
     metrics_path: /metrics
     scheme: https
     static_configs:
       - targets: ["${API_HOST}"]
         labels:
-          service: "savvio-api"
+          service: "${PROMETHEUS_API_JOB}"
 
   # Prometheus self-monitoring
   - job_name: "prometheus"

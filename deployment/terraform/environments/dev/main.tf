@@ -2,9 +2,9 @@ terraform {
   required_version = ">= 1.14.7"
   required_providers {
     google = { source = "hashicorp/google"
-      version = "~> 7.25.0" }
+    version = "~> 7.25.0" }
     random = { source = "hashicorp/random"
-      version = "~> 3.8.1" }
+    version = "~> 3.8.1" }
   }
 }
 
@@ -24,12 +24,16 @@ removed {
 }
 
 locals {
-  prefix = "savvio-${var.environment}"
+  prefix = "${var.name_prefix}-${var.environment}"
   labels = {
-    project     = "savvio"
+    project     = var.name_prefix
     environment = var.environment
     managed_by  = "terraform"
   }
+
+  api_service_name      = coalesce(var.api_service_name, "${local.prefix}-api")
+  frontend_service_name = coalesce(var.frontend_service_name, "${local.prefix}-frontend")
+  mlflow_service_name   = coalesce(var.mlflow_service_name, "${local.prefix}-mlflow")
 }
 
 # ---- APIs ----
@@ -51,7 +55,7 @@ resource "google_project_service" "apis" {
 # ---- Service Account ----
 resource "google_service_account" "cloud_run" {
   account_id   = "${local.prefix}-run-sa"
-  display_name = "SavVio ${var.environment} Cloud Run SA"
+  display_name = "${var.name_prefix} ${var.environment} Cloud Run SA"
   depends_on   = [google_project_service.apis]
 }
 
@@ -91,9 +95,10 @@ resource "google_storage_bucket_iam_member" "run_dvc_storage" {
   member = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
-# Grant access to the raw/processed data bucket used by the Airflow pipeline
+# Grant access to an externally-managed data bucket (Airflow lake) — skipped if unset.
 resource "google_storage_bucket_iam_member" "run_data_storage" {
-  bucket = "savvio-data-bucket"
+  count  = var.data_bucket_name == "" ? 0 : 1
+  bucket = var.data_bucket_name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.cloud_run.email}"
 }
@@ -164,23 +169,23 @@ module "docker_repo" {
 
 # ---- GCE VM (Airflow + ML Training) ----
 resource "google_compute_instance" "pipeline_vm" {
-  name         = "${local.prefix}-pipeline-vm"
-  machine_type             = "e2-standard-4"  # 4 vCPU / 16GB — required to run all Airflow services + 5G worker limit
-  zone                     = var.zone
-  labels                   = local.labels
-  tags                     = ["ssh-access"]
+  name                      = "${local.prefix}-pipeline-vm"
+  machine_type              = var.pipeline_vm_machine_type
+  zone                      = var.zone
+  labels                    = local.labels
+  tags                      = ["ssh-access"]
   allow_stopping_for_update = true
 
   boot_disk {
     initialize_params {
-      image = "debian-cloud/debian-12"
-      size  = 50
+      image = var.pipeline_vm_disk_image
+      size  = var.pipeline_vm_disk_gb
     }
   }
 
   network_interface {
-    network = "default"
-    access_config {}  # ephemeral public IP for SSH
+    network = var.vpc_network
+    access_config {} # ephemeral public IP for SSH
   }
 
   service_account {
@@ -192,96 +197,74 @@ resource "google_compute_instance" "pipeline_vm" {
     enable-oslogin = "TRUE"
   }
 
-  metadata_startup_script = <<-EOF
-    #!/bin/bash
-    set -e
-    # Install Docker from official repo
-    apt-get update
-    apt-get install -y ca-certificates curl gnupg git
-    install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-    chmod a+r /etc/apt/keyrings/docker.gpg
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
-      > /etc/apt/sources.list.d/docker.list
-    apt-get update
-    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-    systemctl enable docker
-    systemctl start docker
-    # Provision github-actions user for CI/CD SSH access
-    id github-actions &>/dev/null || useradd -m -s /bin/bash github-actions
-    usermod -aG docker github-actions
-    mkdir -p /home/github-actions/.ssh
-    echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGqm1rC02mc0wK/jeU/e8TUR1Thuw9P2cRO6vutMiRhw github-actions@savvio" \
-      > /home/github-actions/.ssh/authorized_keys
-    chmod 700 /home/github-actions/.ssh
-    chmod 600 /home/github-actions/.ssh/authorized_keys
-    chown -R github-actions:github-actions /home/github-actions/.ssh
-  EOF
+  metadata_startup_script = templatefile("${path.module}/templates/pipeline_vm_startup.sh.tftpl", {
+    ci_ssh_user        = var.ci_ssh_user
+    ci_ssh_public_keys = var.ci_ssh_public_keys
+  })
 
   depends_on = [google_project_service.apis]
 }
 
 resource "google_compute_firewall" "allow_ssh" {
   name    = "${local.prefix}-allow-ssh"
-  network = "default"
+  network = var.vpc_network
 
   allow {
     protocol = "tcp"
     ports    = ["22"]
   }
 
-  source_ranges = ["0.0.0.0/0"]
+  source_ranges = var.ssh_source_ranges
   target_tags   = ["ssh-access"]
 }
 
-# Airflow apiserver binds 0.0.0.0:8080 on the pipeline VM; SSH-only firewall blocks the UI without this.
+# Airflow apiserver binds 0.0.0.0:8080 on the pipeline VM.
 resource "google_compute_firewall" "allow_airflow_ui" {
   name    = "${local.prefix}-allow-airflow-ui"
-  network = "default"
+  network = var.vpc_network
 
   allow {
     protocol = "tcp"
     ports    = ["8080"]
   }
 
-  source_ranges = ["0.0.0.0/0"]
+  source_ranges = var.airflow_ui_source_ranges
   target_tags   = ["ssh-access"]
 }
 
-# Allow IAP TCP forwarding for SSH tunneling from GitHub Actions
+# Allow IAP TCP forwarding for SSH tunneling from GitHub Actions.
 resource "google_compute_firewall" "allow_iap_ssh" {
   name    = "${local.prefix}-allow-iap-ssh"
-  network = "default"
+  network = var.vpc_network
 
   allow {
     protocol = "tcp"
     ports    = ["22"]
   }
 
-  # IAP's published IP range for TCP forwarding
-  source_ranges = ["35.235.240.0/20"]
+  source_ranges = [var.iap_source_range]
   target_tags   = ["ssh-access"]
 }
 
 # ---- Cloud Run: API ----
 module "api" {
   source                = "../../modules/cloud_run"
-  service_name          = "savvio-backend-api"
+  service_name          = local.api_service_name
   region                = var.region
   image                 = var.api_image
   port                  = 8080
   service_account_email = google_service_account.cloud_run.email
   cloud_sql_connection  = module.database.connection_name
   public_access         = true
-  min_instances         = 1   # keep one warm instance — eliminates cold start on inference requests
-  max_instances         = 2
-  cpu                   = "1"
-  memory                = "1Gi"
+  min_instances         = var.api_min_instances
+  max_instances         = var.api_max_instances
+  cpu                   = var.api_cpu
+  memory                = var.api_memory
   labels                = local.labels
 
   env_vars = {
     ENVIRONMENT                    = var.environment
-    DB_ENV                         = "prod"
+    DB_ENV                         = var.environment
     DB_USER                        = module.database.user_name
     DB_NAME                        = module.database.database_name
     DB_HOST                        = "/cloudsql/${module.database.connection_name}"
@@ -304,17 +287,17 @@ module "api" {
 # ---- Cloud Run: Frontend ----
 module "frontend" {
   source                = "../../modules/cloud_run"
-  service_name          = "savvio-ai"
+  service_name          = local.frontend_service_name
   region                = var.region
   image                 = var.frontend_image
   port                  = 8080
   service_account_email = google_service_account.cloud_run.email
   cloud_sql_connection  = ""
   public_access         = true
-  min_instances         = 0
-  max_instances         = 2
-  cpu                   = "1"
-  memory                = "512Mi"
+  min_instances         = var.frontend_min_instances
+  max_instances         = var.frontend_max_instances
+  cpu                   = var.frontend_cpu
+  memory                = var.frontend_memory
   labels                = local.labels
 
   env_vars = {
@@ -328,22 +311,22 @@ module "frontend" {
 # ---- Cloud Run: MLflow ----
 module "mlflow" {
   source                = "../../modules/cloud_run"
-  service_name          = "savvio-ai-mlflow"
+  service_name          = local.mlflow_service_name
   region                = var.region
   image                 = var.mlflow_image
   port                  = 5000
   service_account_email = google_service_account.cloud_run.email
   cloud_sql_connection  = module.database.connection_name
   public_access         = true
-  min_instances         = 0
-  max_instances         = 1
-  cpu                   = "1"
-  memory                = "1Gi"
+  min_instances         = var.mlflow_min_instances
+  max_instances         = var.mlflow_max_instances
+  cpu                   = var.mlflow_cpu
+  memory                = var.mlflow_memory
   labels                = local.labels
 
   env_vars = {
     ENVIRONMENT              = var.environment
-    DB_ENV                   = "prod"
+    DB_ENV                   = var.environment
     DB_USER                  = module.database.user_name
     DB_NAME                  = google_sql_database.mlflow.name
     DB_HOST                  = "/cloudsql/${module.database.connection_name}"

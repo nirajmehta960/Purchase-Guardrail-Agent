@@ -7,12 +7,14 @@ populated by the Airflow Data Pipeline, instead of relying on CSV exports.
 Leverages the same connection pattern as data_pipeline/dags/src/database/db_connection.py
 so both pipelines talk to the same DB with the same env vars.
 
-Environment variables (same as data_pipeline):
+Environment variables (same as data_pipeline — defaults come from
+``savviocore.database.db_connection``):
     DB_USER      (default: postgres)
     DB_PASSWORD  (default: postgres)
-    DB_HOST      (default: host.docker.internal — reaches Mac-local PG from Docker)
+    DB_HOST      (default: localhost; set to host.docker.internal when running
+                  inside Docker against a host Postgres)
     DB_PORT      (default: 5432)
-    DB_NAME      (default: savvio_dev)
+    DB_NAME      (default: savvio)
     APP_ENV      (default: dev — set to "prod" for Cloud SQL)
 
 Usage:

@@ -30,4 +30,5 @@ ENV API_PORT="8080"
 # MODEL_ARTIFACT_DIR defaults to /app/model_pipeline/models/model via config.py — no override needed.
 
 EXPOSE 8080
-CMD ["uvicorn", "deployment.api.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Shell form so $PORT (Cloud Run) and $API_PORT are honoured at runtime.
+CMD exec uvicorn deployment.api.main:app --host "${API_HOST:-0.0.0.0}" --port "${PORT:-${API_PORT:-8080}}"

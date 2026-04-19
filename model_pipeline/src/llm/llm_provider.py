@@ -169,8 +169,13 @@ class VertexAIProvider(BaseLLMProvider):
     """
 
     provider_name = "vertex"
-    _DEFAULT_MODEL = "gemini-2.5-flash"
-    _DEFAULT_LOCATION = "us-east1"
+    # Defaults can be overridden via env vars so the same image deploys to any
+    # GCP region/model without code changes.
+    _DEFAULT_MODEL = os.environ.get("VERTEX_DEFAULT_MODEL", "gemini-2.5-flash")
+    _DEFAULT_LOCATION = os.environ.get(
+        "VERTEX_DEFAULT_LOCATION",
+        os.environ.get("GCP_REGION", "us-east1"),
+    )
 
     def __init__(
         self,

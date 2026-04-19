@@ -19,6 +19,23 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+# DuckDB tunables — env-driven so they can be scaled with the worker container's
+# mem_limit (currently 5G in docker-compose.yaml). Preprocessing runs 3 DuckDB
+# tasks in parallel, so 3 × DUCKDB_MEMORY_LIMIT must stay well below the
+# container limit. Defaults preserve the original safe values.
+DUCKDB_MEMORY_LIMIT = os.getenv("DUCKDB_MEMORY_LIMIT", "1000MB")
+DUCKDB_THREADS = int(os.getenv("DUCKDB_THREADS", "2"))
+DUCKDB_TEMP_DIRECTORY = os.getenv("DUCKDB_TEMP_DIRECTORY", "/tmp")
+JSONL_MAX_OBJECT_SIZE = int(os.getenv("JSONL_MAX_OBJECT_SIZE", str(33_554_432)))
+
+
+def _configure_duckdb(con: "duckdb.DuckDBPyConnection") -> None:
+    """Apply shared DuckDB pragmas (memory limit, threads, temp dir)."""
+    con.execute(f"PRAGMA temp_directory='{DUCKDB_TEMP_DIRECTORY}';")
+    con.execute(f"PRAGMA memory_limit='{DUCKDB_MEMORY_LIMIT}';")
+    con.execute("PRAGMA preserve_insertion_order=false;")
+    con.execute(f"PRAGMA threads={DUCKDB_THREADS};")
+
 
 # ---------------------------------------------------------------------------
 # File checksum
@@ -71,21 +88,13 @@ def merge_csv(
     partition_clause = ", ".join(key_cols)
     temp_out = existing_path + ".duckdb.tmp"
 
-    # Set DuckDB configuration
-    # Memory limit - must stay well below the worker container's mem_limit (currently 5G in docker-compose.yaml).
-    #   The preprocessing stage runs 3 DuckDB tasks in parallel, so: 3 × memory_limit must be < 5G.
-    #   1000MB × 3 = 3.0GB — safe headroom within the 5G worker limit (leaves ~2GB for Python/Celery overhead).
-    #   DuckDB spills anything beyond 1000MB to temp_directory on disk.
-    #   If you increase the container's mem_limit, scale this proportionally (new_limit / 3 - 500MB buffer).
-    # Threads - 2 threads per connection keeps parallel memory pressure low (4 threads doubles working set size).
-    #   Increase only if fewer DuckDB tasks run concurrently or container mem_limit is raised.
-    # preserve_insertion_order=false - order of records is not preserved - needs less memory
-    # temp_directory='/tmp' - duckdb spills working data to /tmp when memory_limit is reached
+    # DuckDB pragmas (memory limit, threads, temp dir, ordering) are applied via
+    # _configure_duckdb() so the same env-driven defaults are used everywhere.
+    # See the DUCKDB_* env vars at the top of this module for tuning guidance —
+    # 3 × DUCKDB_MEMORY_LIMIT must stay below the worker container's mem_limit
+    # because preprocessing runs 3 DuckDB tasks in parallel.
     with duckdb.connect() as con:
-        con.execute("PRAGMA temp_directory='/tmp';")
-        con.execute("PRAGMA memory_limit='1000MB';")
-        con.execute("PRAGMA preserve_insertion_order=false;")
-        con.execute("PRAGMA threads=2;")
+        _configure_duckdb(con)
 
         query = f"""
         COPY (
@@ -156,18 +165,15 @@ def merge_jsonl(
     temp_out = existing_path + ".duckdb.tmp"
 
     with duckdb.connect() as con:
-        con.execute("PRAGMA temp_directory='/tmp';")
-        con.execute("PRAGMA memory_limit='1000MB';")
-        con.execute("PRAGMA preserve_insertion_order=false;")
-        con.execute("PRAGMA threads=2;")
+        _configure_duckdb(con)
 
         query = f"""
         COPY (
             WITH new_data AS (
-                SELECT *, 1 AS __source_priority FROM read_json_auto('{new_path}', maximum_object_size=33554432)
+                SELECT *, 1 AS __source_priority FROM read_json_auto('{new_path}', maximum_object_size={JSONL_MAX_OBJECT_SIZE})
             ),
             existing_data AS (
-                SELECT *, 2 AS __source_priority FROM read_json_auto('{existing_path}', maximum_object_size=33554432)
+                SELECT *, 2 AS __source_priority FROM read_json_auto('{existing_path}', maximum_object_size={JSONL_MAX_OBJECT_SIZE})
             ),
             combined AS (
                 SELECT * FROM new_data

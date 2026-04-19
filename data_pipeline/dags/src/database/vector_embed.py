@@ -24,17 +24,23 @@ from savviocore.database.db_schema import create_tables
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Config
+# Config — env-driven so retrieval quality / throughput can be tuned without
+# code changes. Defaults match the previously hardcoded values.
 # ---------------------------------------------------------------------------
 '''
 If retrieval quality is lacking, swap EMBEDDING_MODEL to "all-mpnet-base-v2" (768-dim) 
 for better semantic understanding at the cost of larger storage and slightly slower embedding time. 
-(just change the model name string) or an API-based option without changing the rest of the pipeline.
+(just change the model name string in .env) or an API-based option without changing the rest of the pipeline.
+EMBEDDING_DIM must match the chosen model — pgvector enforces a fixed column width.
 '''
 
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-EMBEDDING_DIM = 384
-BATCH_SIZE = 64
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "384"))
+BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "64"))
+# Chunk size for streaming embed-and-store loops (rows per DB write batch).
+EMBED_STORE_CHUNK_SIZE = int(os.getenv("EMBED_STORE_CHUNK_SIZE", "5000"))
+# Per-INSERT batch size for upserting embeddings into pgvector.
+EMBED_INSERT_BATCH_SIZE = int(os.getenv("EMBED_INSERT_BATCH_SIZE", "500"))
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +189,7 @@ def store_product_embeddings(engine, product_ids: list[str], embeddings: np.ndar
         {"pid": str(pid), "emb": str(emb.tolist())}
         for pid, emb in zip(product_ids, embeddings)
     ]
-    insert_size = 500
+    insert_size = EMBED_INSERT_BATCH_SIZE
     with engine.begin() as conn:
         for start in range(0, len(records), insert_size):
             conn.execute(sql, records[start : start + insert_size])
@@ -202,7 +208,7 @@ def store_review_embeddings(engine, product_ids: list[str], user_ids: list[str],
         {"pid": str(pid), "uid": str(uid), "emb": str(emb.tolist())}
         for pid, uid, emb in zip(product_ids, user_ids, embeddings)
     ]
-    insert_size = 500
+    insert_size = EMBED_INSERT_BATCH_SIZE
     with engine.begin() as conn:
         for start in range(0, len(records), insert_size):
             conn.execute(sql, records[start : start + insert_size])
@@ -235,17 +241,16 @@ def embed_products(engine, products_path: str, model):
     texts = df["_embed_text"].tolist()
     product_ids = df["product_id"].tolist()
     total = len(texts)
-    
-    # Process and store in chunks to provide explicit progress logs
-    chunk_size = 5000
+
+    chunk_size = EMBED_STORE_CHUNK_SIZE
     for i in range(0, total, chunk_size):
         chunk_texts = texts[i : i + chunk_size]
         chunk_pids = product_ids[i : i + chunk_size]
-        
+
         logger.info("Generating embeddings for products %d to %d (out of %d)...", i, i + len(chunk_texts), total)
         embeddings = generate_embeddings(chunk_texts, model)
         store_product_embeddings(engine, chunk_pids, embeddings)
-        
+
     return len(df)
 
 
@@ -279,14 +284,13 @@ def embed_reviews(engine, reviews_path: str, model):
     product_ids = df["product_id"].tolist()
     user_ids = df["user_id"].tolist()
     total = len(texts)
-    
-    # Process and store in chunks to provide explicit progress logs
-    chunk_size = 5000
+
+    chunk_size = EMBED_STORE_CHUNK_SIZE
     for i in range(0, total, chunk_size):
         chunk_texts = texts[i : i + chunk_size]
         chunk_pids = product_ids[i : i + chunk_size]
         chunk_uids = user_ids[i : i + chunk_size]
-        
+
         logger.info("Generating embeddings for reviews %d to %d (out of %d)...", i, i + len(chunk_texts), total)
         embeddings = generate_embeddings(chunk_texts, model)
         store_review_embeddings(engine, chunk_pids, chunk_uids, embeddings)
@@ -298,13 +302,19 @@ def embed_reviews(engine, reviews_path: str, model):
 # File reader helper
 # ---------------------------------------------------------------------------
 
+_JSONL_READ_CHUNKSIZE = int(os.getenv("JSONL_STREAM_CHUNKSIZE", "100000"))
+_JSONL_LARGE_FILE_MB = float(os.getenv("JSONL_LARGE_FILE_MB", "300"))
+
+
 def _read_file(path: str) -> pd.DataFrame:
     """Read CSV or JSONL based on file extension."""
     if path.endswith(".jsonl"):
-        # return pd.read_json(path, lines=True)
         file_size_mb = os.path.getsize(path) / (1024 * 1024)
-        if file_size_mb > 300:
-            return pd.concat(pd.read_json(path, lines=True, chunksize=100_000), ignore_index=True)
+        if file_size_mb > _JSONL_LARGE_FILE_MB:
+            return pd.concat(
+                pd.read_json(path, lines=True, chunksize=_JSONL_READ_CHUNKSIZE),
+                ignore_index=True,
+            )
         return pd.read_json(path, lines=True)
     return pd.read_csv(path)
 

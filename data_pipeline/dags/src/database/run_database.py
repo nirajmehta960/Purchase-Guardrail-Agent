@@ -26,11 +26,18 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _setup():
-    """Create engine, return (data_dir, engine)."""
-    # __file__ = .../dags/src/database/run_database.py
-    # We need 3 dirname() calls to reach .../dags/
-    base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    data_dir = os.path.join(base, "data")
+    """Create engine, return (data_dir, engine).
+
+    `data_dir` is sourced from the central ingestion config (DATA_DIR env var
+    with sensible defaults) so all stages — ingestion, preprocessing, features,
+    bias, DB load — read/write from the same location. Falls back to the
+    DATA_DIR env var when the full ingestion config is unavailable (tests).
+    """
+    try:
+        from src.ingestion.config import DATA_DIR
+        data_dir = str(DATA_DIR)
+    except (ImportError, AttributeError):
+        data_dir = os.environ.get("DATA_DIR", "data")
     engine = get_engine()
     return data_dir, engine
 

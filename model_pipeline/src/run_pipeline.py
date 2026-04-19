@@ -30,13 +30,21 @@ from core_models.train import train_model, log_model_to_mlflow
 from core_models.evaluate import evaluate_model
 from core_models.optuna_tuner import tune_best_candidate
 from core_models.sensitivity_analysis import analyze_optuna_sensitivity
+from core_models.feature_importance import explain_with_shap
 from llm.prompt_engine import apply_llm_guardrails
 from llm.config import LLMConfig
 
 logger = logging.getLogger(__name__)
 
 
-def write_evaluation_summary_md(candidates, best, final_metrics, output_path, sensitivity_summary=None):
+def write_evaluation_summary_md(
+    candidates,
+    best,
+    final_metrics,
+    output_path,
+    sensitivity_summary=None,
+    explainability_summary=None,
+):
     """Write a simple markdown summary for 3 baseline models + champion."""
     baseline_names = {"xgboost", "lightgbm", "xgb_linear"}
     baseline_rows = [c for c in candidates if c.get("name") in baseline_names]
@@ -98,6 +106,29 @@ def write_evaluation_summary_md(candidates, best, final_metrics, output_path, se
         if sensitivity_summary.get("artifacts"):
             lines.append("- artifact_paths:")
             for artifact_path in sensitivity_summary["artifacts"]:
+                lines.append(f"  - {artifact_path}")
+
+    lines.extend([
+        "",
+        "## Feature Importance — SHAP (Champion Model)",
+        "",
+    ])
+
+    if not explainability_summary:
+        lines.append("SHAP feature-importance analysis was not executed.")
+    elif explainability_summary.get("status") != "ok":
+        lines.append(
+            f"SHAP analysis skipped: {explainability_summary.get('reason', 'unknown_reason')}"
+        )
+    else:
+        lines.append(f"- sample_size: {explainability_summary.get('sample_size', 0)}")
+        lines.append(f"- feature_count: {explainability_summary.get('feature_count', 0)}")
+        lines.append("- top_features (mean |SHAP|):")
+        for item in explainability_summary.get("top_features", []):
+            lines.append(f"  - {item['feature']}: {item['mean_abs_shap']:.6f}")
+        if explainability_summary.get("artifacts"):
+            lines.append("- artifact_paths:")
+            for artifact_path in explainability_summary["artifacts"]:
                 lines.append(f"  - {artifact_path}")
 
     with open(output_path, "w", encoding="utf-8") as f:
@@ -262,9 +293,8 @@ def train_candidates(
         List of dicts, each with: name, model, run_id, metrics, bias_passed.
     """
     models_to_train = [
-        {"name": "xgboost",     "params": {"max_depth": 3, "learning_rate": 0.1, "n_estimators": 100}},
-        {"name": "lightgbm",    "params": {"max_depth": 3, "learning_rate": 0.1, "n_estimators": 100}},
-        {"name": "xgb_linear",  "params": {"learning_rate": 0.1, "n_estimators": 100}},
+        {"name": name, "params": dict(params)}
+        for name, params in Config.BASELINE_MODEL_PARAMS.items()
     ]
 
     candidates = []
@@ -434,6 +464,48 @@ def tune_candidate(candidates, data):
     return candidates, tuning_context
 
 
+def run_explainability_analysis(best, data, final_run_id=None):
+    """
+    Run SHAP feature-importance analysis on the champion model and log artifacts
+    to the FINAL evaluation MLflow run (so they sit alongside test metrics).
+
+    Returns a summary dict consumed by ``write_evaluation_summary_md``.
+    """
+    if best is None:
+        return {"status": "skipped", "reason": "no_champion", "artifacts": []}
+
+    if not getattr(Config, "EXPLAINABILITY_ENABLED", True):
+        return {"status": "skipped", "reason": "disabled_in_config", "artifacts": []}
+
+    output_dir = os.path.join(Config.REPORTS_DIR, "explainability")
+    feature_names = (
+        list(data["X_test"].columns) if hasattr(data["X_test"], "columns") else None
+    )
+    class_names = list(data["label_encoder"].classes_)
+
+    def _run() -> dict:
+        return explain_with_shap(
+            model=best["model"],
+            X=data["X_test"],
+            feature_names=feature_names,
+            model_name=best["name"],
+            class_names=class_names,
+            output_dir=output_dir,
+            max_samples=Config.EXPLAINABILITY_MAX_SAMPLES,
+            top_k_features=Config.EXPLAINABILITY_TOP_K_FEATURES,
+            log_to_mlflow=True,
+        )
+
+    try:
+        if final_run_id:
+            with mlflow.start_run(run_id=final_run_id):
+                return _run()
+        return _run()
+    except Exception as exc:
+        logger.warning("SHAP explainability failed: %s", exc, exc_info=True)
+        return {"status": "skipped", "reason": "runtime_error", "artifacts": []}
+
+
 def run_sensitivity_analysis(best, tuning_context):
     """Run Optuna-based sensitivity analysis for the tuned champion only."""
     if best is None:
@@ -459,7 +531,7 @@ def run_sensitivity_analysis(best, tuning_context):
             "trial_count": 0,
         }
 
-    output_dir = os.path.join(Config.BASE_DIR, "reports", "sensitivity")
+    output_dir = os.path.join(Config.REPORTS_DIR, "sensitivity")
     try:
         return analyze_optuna_sensitivity(
             study=tuning_context["study"],
@@ -660,13 +732,21 @@ def validate_llm_layer(best, data):
 # ---------------------------------------------------------------------------
 
 def write_ci_metrics_files(final_metrics, best_candidate):
-    """Write metrics.txt and bias_metrics.txt for CI gate jobs."""
-    # metrics.txt — validation thresholds gate reads f1_score and roc_auc
-    with open("metrics.txt", "w") as f:
+    """Write metrics.txt and bias_metrics.txt for CI gate jobs.
+
+    Files are written under ``Config.CI_METRICS_DIR`` (defaults to BASE_DIR
+    so local runs land them next to the pipeline; CI overrides via the
+    ``CI_METRICS_DIR`` env var when GitHub Actions reads them from the
+    repo root).
+    """
+    os.makedirs(Config.CI_METRICS_DIR, exist_ok=True)
+
+    metrics_path = os.path.join(Config.CI_METRICS_DIR, "metrics.txt")
+    with open(metrics_path, "w") as f:
         for key in ("f1_score", "roc_auc", "accuracy", "pr_auc"):
             if key in (final_metrics or {}):
                 f.write(f"{key}={final_metrics[key]}\n")
-    logger.info("Wrote metrics.txt")
+    logger.info("Wrote %s", metrics_path)
 
     # bias_metrics.txt — CI gate reads bias_gate_passed (0 or 1).
     # We use the bias_passed bool that detect_and_mitigate() already computed
@@ -674,9 +754,10 @@ def write_ci_metrics_files(final_metrics, best_candidate):
     # product DPD threshold is 0.30, etc.). Writing raw DPD/EOD values and applying
     # a flat threshold in CI would incorrectly block on expected financial disparities.
     bias_passed = int((best_candidate or {}).get("bias_passed", True))
-    with open("bias_metrics.txt", "w") as f:
+    bias_path = os.path.join(Config.CI_METRICS_DIR, "bias_metrics.txt")
+    with open(bias_path, "w") as f:
         f.write(f"bias_gate_passed={bias_passed}\n")
-    logger.info("Wrote bias_metrics.txt (bias_gate_passed=%d)", bias_passed)
+    logger.info("Wrote %s (bias_gate_passed=%d)", bias_path, bias_passed)
 
 
 def main():
@@ -739,6 +820,16 @@ def main():
 
     sensitivity_summary = run_sensitivity_analysis(best, tuning_context)
 
+    # SHAP feature-importance analysis on the held-out test set.
+    print("[6c] Running SHAP feature-importance analysis...")
+    explainability_summary = run_explainability_analysis(best, data, final_run_id=final_run_id)
+    if explainability_summary.get("status") == "ok":
+        top = explainability_summary.get("top_features", [])
+        top_str = ", ".join(f"{item['feature']}({item['mean_abs_shap']:.3f})" for item in top[:5])
+        print(f"[6c] SHAP complete. Top features: {top_str}")
+    else:
+        print(f"[6c] SHAP skipped — {explainability_summary.get('reason', 'unknown')}")
+
     # Write CI gate metric files (metrics.txt, bias_metrics.txt).
     best_candidate = next((c for c in candidates if best and c["name"] == best["name"]), None)
     write_ci_metrics_files(final_metrics, best_candidate)
@@ -755,13 +846,14 @@ def main():
     summary_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     summary_run_id = final_run_id or (best["run_id"] if best else "no_run_id")
     report_filename = f"evaluation_summary_{summary_timestamp}_{summary_run_id}.md"
-    report_path = os.path.join(Config.BASE_DIR, "reports", report_filename)
+    report_path = os.path.join(Config.REPORTS_DIR, report_filename)
     write_evaluation_summary_md(
         candidates,
         best,
         final_metrics,
         report_path,
         sensitivity_summary=sensitivity_summary,
+        explainability_summary=explainability_summary,
     )
 
     if final_run_id and os.path.exists(report_path):
@@ -787,7 +879,7 @@ def main():
                         best_candidate.get("mitigation_successful", False)
                     ),
                     final_metrics=final_metrics,
-                    output_dir=os.path.join(Config.BASE_DIR, "reports"),
+                    output_dir=Config.REPORTS_DIR,
                 )
     except Exception as e:
         logger.warning("Bias report generation failed: %s", e)

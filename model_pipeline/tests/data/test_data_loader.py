@@ -16,19 +16,28 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 # Stub external dependencies
 # ---------------------------------------------------------------------------
 def _stub_modules():
-    # savviocore
-    savviocore = types.ModuleType("savviocore")
-    savviocore.database = types.ModuleType("savviocore.database")
-    savviocore.database.db_connection = types.ModuleType("savviocore.database.db_connection")
-    savviocore.database.db_connection.get_engine = MagicMock(return_value=MagicMock())
-    sys.modules.setdefault("savviocore", savviocore)
-    sys.modules.setdefault("savviocore.database", savviocore.database)
-    sys.modules.setdefault("savviocore.database.db_connection", savviocore.database.db_connection)
+    # savviocore — internal package, not installed in test env, always stub.
+    if "savviocore" not in sys.modules:
+        savviocore = types.ModuleType("savviocore")
+        savviocore.database = types.ModuleType("savviocore.database")
+        savviocore.database.db_connection = types.ModuleType("savviocore.database.db_connection")
+        savviocore.database.db_connection.get_engine = MagicMock(return_value=MagicMock())
+        sys.modules["savviocore"] = savviocore
+        sys.modules["savviocore.database"] = savviocore.database
+        sys.modules["savviocore.database.db_connection"] = savviocore.database.db_connection
 
-    # sqlalchemy
-    sqlalchemy = types.ModuleType("sqlalchemy")
-    sqlalchemy.text = lambda q: q
-    sys.modules.setdefault("sqlalchemy", sqlalchemy)
+    # sqlalchemy — installed in the test env. Only stub if the real package
+    # is missing AND nothing else has imported it yet. Inserting a fake
+    # ModuleType here would shadow the real package and break any later
+    # `from sqlalchemy.sql import ...` in the same test session (MLflow's
+    # sqlalchemy_store does this).
+    try:
+        import sqlalchemy  # noqa: F401  # ensure the real package is loaded
+    except ImportError:
+        if "sqlalchemy" not in sys.modules:
+            sqlalchemy = types.ModuleType("sqlalchemy")
+            sqlalchemy.text = lambda q: q
+            sys.modules["sqlalchemy"] = sqlalchemy
 
 _stub_modules()
 

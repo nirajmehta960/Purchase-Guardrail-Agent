@@ -2,4 +2,5 @@
     remote = gcs
 ['remote "gcs"']
     url = gs://savvio-data-bucket/dvcstore
-    credentialpath = /Users/nirajmehta/Documents/Purchase-Guardrail-Agent/data-pipeline/config/savvio-gcp-key.json
+    # No `credentialpath` here — DVC will use the GOOGLE_APPLICATION_CREDENTIALS
+  

@@ -361,7 +361,7 @@ def main() -> None:
     """Entry point for streaming product preprocessing."""
     setup_logging()
     input_path = get_raw_path(INPUT_FILENAME)
-    output_path = get_processed_path(OUTPUT_FILENAME, base_dir="data/processed")
+    output_path = get_processed_path(OUTPUT_FILENAME)
     preprocess_product_data(input_path=input_path, output_path=output_path)
 
 

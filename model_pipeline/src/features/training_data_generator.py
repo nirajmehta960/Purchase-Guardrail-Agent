@@ -41,14 +41,15 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Bracket definitions
+# Bracket definitions — sourced from Config so docker / CI / local runs
+# all stratify on identical buckets.
 # ---------------------------------------------------------------------------
 
-INCOME_BINS: List[float] = [0, 3_000, 7_000, float("inf")]
-INCOME_LABELS: List[str] = ["low", "mid", "high"]
+INCOME_BINS: List[float] = list(Config.INCOME_BINS)
+INCOME_LABELS: List[str] = list(Config.INCOME_LABELS)
 
-PRICE_BINS: List[float] = [100, 500, 1_500, float("inf")]
-PRICE_LABELS: List[str] = ["budget", "mid", "premium"]
+PRICE_BINS: List[float] = list(Config.PRICE_BINS)
+PRICE_LABELS: List[str] = list(Config.PRICE_LABELS)
 
 # ---------------------------------------------------------------------------
 # Stratified sampling (single strategy)
@@ -176,8 +177,8 @@ from data.bias_mitigation import apply_all_mitigations
 def generate_scenarios(
     financial_profiles: pd.DataFrame,
     products: pd.DataFrame,
-    n_scenarios: int = 10_000,
-    random_state: int = 42,
+    n_scenarios: Optional[int] = None,
+    random_state: Optional[int] = None,
     reviews_df: Optional[pd.DataFrame] = None,
     apply_mitigations: bool = False,
 ) -> pd.DataFrame:
@@ -198,6 +199,10 @@ def generate_scenarios(
         raw user columns and product columns.  No computed features
         or labels are included.
     """
+    if n_scenarios is None:
+        n_scenarios = Config.N_SCENARIOS
+    if random_state is None:
+        random_state = Config.RANDOM_STATE
     rng = np.random.default_rng(random_state)
 
     if apply_mitigations:

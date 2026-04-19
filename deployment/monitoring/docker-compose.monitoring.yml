@@ -1,25 +1,7 @@
-# =============================================================================
-# SavVio Monitoring Stack — Local Development
-# =============================================================================
-# Spins up Prometheus + Grafana for local dashboard development and testing.
-#
-# Usage:
-#   cd deployment/monitoring
-#   docker-compose -f docker-compose.monitoring.yml up -d
-#
-# Access:
-#   Prometheus:  http://localhost:9090
-#   Grafana:     http://localhost:3001  (admin / savvio)
-#
-# Prerequisites:
-#   The SavVio API must be running locally on port 3500:
-#     uvicorn deployment.api.main:app --host 0.0.0.0 --port 3500
-# =============================================================================
+# Local Prometheus + Grafana. Requires the API running on host:3500
+# and GF_SECURITY_ADMIN_PASSWORD set in deployment/.env.
 
 services:
-  # -----------------------------------------------------------------------
-  # Prometheus — metrics collection & storage
-  # -----------------------------------------------------------------------
   prometheus:
     image: prom/prometheus:v2.53.0
     container_name: savvio-prometheus
@@ -36,17 +18,16 @@ services:
     networks:
       - monitoring
 
-  # -----------------------------------------------------------------------
-  # Grafana — dashboards & visualization
-  # -----------------------------------------------------------------------
   grafana:
     image: grafana/grafana:11.1.0
     container_name: savvio-grafana
     ports:
       - "3001:3000"
+    env_file:
+      - ../.env
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=savvio
+      - GF_SECURITY_ADMIN_USER=${GF_SECURITY_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:?GF_SECURITY_ADMIN_PASSWORD must be set in deployment/.env}
       - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
       - grafana-data:/var/lib/grafana

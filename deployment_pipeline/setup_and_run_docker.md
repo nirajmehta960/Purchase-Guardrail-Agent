@@ -11,6 +11,9 @@ How to build, run, and deploy the SavVio API and frontend using Docker.
 | Docker | 20.10+ | `docker --version` |
 | Docker Compose | v2+ (bundled with Docker Desktop) | `docker compose version` |
 | Git | Any | `git --version` |
+| Postgres | <15 | `postgres --version` |
+
+localhost:5432 (user: `savvio`, password: `savvio_local`, db: `savvio_dev`) |
 
 For GCP deployment only:
 | Requirement | Version | Check |
@@ -37,7 +40,6 @@ docker compose up --build
 | Frontend | http://localhost:8501 |
 | API | http://localhost:8080 |
 | API docs (Swagger) | http://localhost:8080/docs |
-| Postgres | localhost:5432 (user: `savvio`, password: `savvio_local`, db: `savvio_dev`) |
 
 ### Verify
 
@@ -45,13 +47,6 @@ docker compose up --build
 # API health check
 curl -s http://localhost:8080/health | python3 -m json.tool
 
-# Expected (DB connected, model loaded, no LLM key = mock):
-# {
-#     "status": "healthy",
-#     "model_loaded": true,
-#     "db_connected": true,
-#     "llm_provider": "mock"
-# }
 ```
 
 ### Stop and clean up
@@ -66,60 +61,15 @@ docker compose down -v
 
 ### Optional: enable LLM explanations
 
-Pass your API key as an environment variable:
+Pass your LLM Model API key as an environment variable:
 
 ```bash
-GROQ_API_KEY=your-key-here docker compose up --build
-```
-
-Or add it to the `api.environment` section in `docker-compose.yml`:
-```yaml
-environment:
-  GROQ_API_KEY: "your-key-here"
+<LLM>_API_KEY=your-key-here docker compose up --build
 ```
 
 ---
 
-## Option 2: Standalone API Image
-
-Build and run just the API (no frontend, no Postgres).
-
-```bash
-# Build (from repo root — build context needs savviocore/, model_pipeline/)
-docker build -f deployment_pipeline/api/Dockerfile -t savvio-api:test .
-
-# Run
-docker run --rm -p 8080:8080 savvio-api:test
-
-# Verify
-curl -s http://localhost:8080/health | python3 -m json.tool
-# → model_loaded: true, db_connected: false (no Postgres — expected)
-```
-
----
-
-## Option 3: Standalone Frontend Image
-
-Build and run just the frontend.
-
-```bash
-# Build (from deployment_pipeline/frontend/ — self-contained build context)
-docker build -f deployment_pipeline/frontend/Dockerfile \
-  --build-arg VITE_API_BASE=http://localhost:8080 \
-  -t savvio-frontend:test \
-  deployment_pipeline/frontend/
-
-# Run
-docker run --rm -p 8501:8501 savvio-frontend:test
-
-# Open http://localhost:8501
-```
-
-The `VITE_API_BASE` build arg sets where the frontend sends API requests. Change it to your Cloud Run API URL for production builds.
-
----
-
-## Option 4: Deploy to GCP via CI/CD
+## Option 2: Deploy to GCP via CI/CD
 
 ### One-time setup
 
@@ -176,7 +126,7 @@ curl -s https://savvio-dev-api-xxx.run.app/health | python3 -m json.tool
 
 ### Model loading
 
-The ML model is **bundled into the API Docker image** at build time. It is a self-contained MLflow pyfunc artifact at `model_pipeline/models/model/` containing the classifier, feature pipeline, and label encoder. The API loads it from disk on startup — **no MLflow server is needed at runtime**.
+The ML model is **bundled into the API Docker image** at build time. It is a self-contained MLflow pyfunc artifact at `model_pipeline/models/model/` For Local and For Production, it is stored in GCP **Artifact Registry** containing the classifier, feature pipeline, and label encoder.
 
 When the model is retrained, rebuild the API image to pick up the new artifacts.
 
@@ -187,14 +137,6 @@ Vite compiles the React app into static HTML/JS/CSS. The `VITE_API_BASE` environ
 - For GCP: set to the Cloud Run API URL via the `API_URL_DEV` GitHub secret
 
 The static files are served by nginx in the production container.
-
-### Ports
-
-| Service | Local | Production (Cloud Run) |
-|---------|-------|----------------------|
-| API | 8080 | 8080 |
-| Frontend | 8501 | 8501 |
-| Postgres | 5432 | Cloud SQL (unix socket) |
 
 ---
 

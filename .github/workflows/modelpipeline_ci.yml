@@ -2,7 +2,7 @@ name: Model Pipeline CI/CD
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
     paths:
       - 'model_pipeline/**'
       - 'savviocore/**'
@@ -29,6 +29,11 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+  actions: write
 
 env:
   ENVIRONMENT: dev
@@ -166,6 +171,9 @@ jobs:
     name: Run Model Pipeline
     runs-on: ubuntu-latest
     needs: [unit-tests, db-connection-check]
+    # Heavy job: pulls Cloud SQL data, retrains model, writes to GCS.
+    # Skip on PRs to keep validation cheap; main-push and workflow_dispatch only.
+    if: github.event_name != 'pull_request'
 
     steps:
       - name: Checkout code
@@ -472,7 +480,7 @@ jobs:
       actions: write
 
     steps:
-      - name: Trigger deployment_ci.yml
+      - name: Trigger deployment.yml
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -483,40 +491,98 @@ jobs:
               workflow_id: 'deployment.yml',
               ref: 'main',
             });
-            console.log('deployment_ci.yml triggered successfully');
+            console.log('deployment.yml triggered successfully');
 
   # ===========================================================================
   # JOB 9 — Notify on Failure
-  # Covers all jobs including persist-metrics and trigger-deployment.
+  # Sends an email via SMTP to ALERT_EMAIL_LIST.
+  # if: always() ensures this runs even when upstream jobs are skipped
+  # (e.g. run-pipeline skipped on PRs, persist-metrics skipped off main).
   # ===========================================================================
   notify-on-failure:
     name: Notify on Failure
     runs-on: ubuntu-latest
     needs: [unit-tests, db-connection-check, run-pipeline, validation-gate, bias-gate, rollback-check, persist-metrics-baseline, trigger-deployment]
-    if: failure()
+    if: always() && contains(needs.*.result, 'failure')
 
     steps:
-      - name: Send failure notification
+      - name: Log failure summary
         run: |
           echo "Model Pipeline CI/CD FAILED"
           echo "Branch:       ${{ github.ref_name }}"
           echo "Commit:       ${{ github.sha }}"
           echo "Triggered by: ${{ github.actor }}"
+          echo "Run URL:      ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Send failure email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          from: SavVio CI <${{ secrets.ALERT_EMAIL_FROM }}>
+          to: ${{ secrets.ALERT_EMAIL_LIST }}
+          subject: "[SavVio][FAILED] Model Pipeline CI/CD — ${{ github.ref_name }} @ ${{ github.sha }}"
+          body: |
+            Model Pipeline CI/CD FAILED
+
+            Branch:       ${{ github.ref_name }}
+            Commit:       ${{ github.sha }}
+            Triggered by: ${{ github.actor }}
+            Event:        ${{ github.event_name }}
+
+            Per-job results:
+              unit-tests:               ${{ needs.unit-tests.result }}
+              db-connection-check:      ${{ needs.db-connection-check.result }}
+              run-pipeline:             ${{ needs.run-pipeline.result }}
+              validation-gate:          ${{ needs.validation-gate.result }}
+              bias-gate:                ${{ needs.bias-gate.result }}
+              rollback-check:           ${{ needs.rollback-check.result }}
+              persist-metrics-baseline: ${{ needs.persist-metrics-baseline.result }}
+              trigger-deployment:       ${{ needs.trigger-deployment.result }}
+
+            Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
   # ===========================================================================
   # JOB 10 — Notify on Success
-  # Covers all jobs including persist-metrics and trigger-deployment.
+  # Runs only when no upstream job failed or was cancelled.
   # ===========================================================================
   notify-on-success:
     name: Notify on Success
     runs-on: ubuntu-latest
     needs: [unit-tests, db-connection-check, run-pipeline, validation-gate, bias-gate, rollback-check, persist-metrics-baseline, trigger-deployment]
-    if: success()
+    if: always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
 
     steps:
-      - name: Send success notification
+      - name: Log success summary
         run: |
           echo "Model Pipeline CI/CD PASSED"
           echo "Branch:       ${{ github.ref_name }}"
           echo "Commit:       ${{ github.sha }}"
           echo "Triggered by: ${{ github.actor }}"
+          echo "Run URL:      ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Send success email
+        # Only send success emails on push to main, not on every PR — keeps inbox sane.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          from: SavVio CI <${{ secrets.ALERT_EMAIL_FROM }}>
+          to: ${{ secrets.ALERT_EMAIL_LIST }}
+          subject: "[SavVio][OK] Model Pipeline CI/CD — ${{ github.ref_name }} @ ${{ github.sha }}"
+          body: |
+            Model Pipeline CI/CD PASSED
+
+            Branch:       ${{ github.ref_name }}
+            Commit:       ${{ github.sha }}
+            Triggered by: ${{ github.actor }}
+
+            Validation gate, bias gate, and rollback check all passed.
+            New metrics baseline persisted; deployment.yml dispatched.
+
+            Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

@@ -1,0 +1,329 @@
+name: Ops Monitoring & Drift Detection
+
+# Split out from deployment.yml so:
+#   - drift detection runs on a schedule (and on demand) instead of on every
+#     app deploy, which was wasteful and slowed down deploys by ~5 min.
+#   - the Prometheus/Grafana monitoring stack is redeployed only when its
+#     own config changes, not on every push to deployment/api/**.
+#
+# Triggers:
+#   - schedule: weekly Monday 08:00 UTC drift run.
+#   - workflow_dispatch: manual drift run; optional flag to also redeploy
+#     the monitoring stack.
+#   - push to main when monitoring config (Prometheus/compose/etc.) changes:
+#     redeploys the stack only.
+on:
+  schedule:
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+    inputs:
+      run_monitoring_sync:
+        description: "Also redeploy monitoring stack to GCE VM"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+  push:
+    branches: [main]
+    paths:
+      - "deployment/monitoring/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+  actions: write   # for trigger-retraining workflow dispatch
+
+env:
+  ENVIRONMENT: dev
+  REGION: us-east1
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  CLOUD_SQL_PROXY_URL: https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.1/cloud-sql-proxy.linux.amd64
+
+jobs:
+  # ===========================================================================
+  # Drift Detection
+  # Runs on schedule and manual dispatch only — skipped on monitoring config
+  # pushes (those only need to redeploy the stack, not re-run detection).
+  # ===========================================================================
+  drift-detection:
+    name: Drift Detection
+    runs-on: ubuntu-latest
+    if: github.event_name != 'push'
+    outputs:
+      severity: ${{ steps.drift-severity.outputs.severity }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-drift-evidently-0.7.20
+          restore-keys: |
+            ${{ runner.os }}-pip-drift-
+
+      - name: Install dependencies
+        run: |
+          pip install evidently==0.7.20 pandas numpy scikit-learn pyyaml python-dotenv requests
+          pip install sqlalchemy psycopg2-binary
+          pip install -e savviocore
+
+      - name: Cache Cloud SQL Auth Proxy
+        id: cache-proxy
+        uses: actions/cache@v4
+        with:
+          path: cloud-sql-proxy
+          key: cloud-sql-proxy-v2.14.1-linux-amd64
+
+      - name: Download Cloud SQL Auth Proxy
+        if: steps.cache-proxy.outputs.cache-hit != 'true'
+        run: |
+          curl -so cloud-sql-proxy ${{ env.CLOUD_SQL_PROXY_URL }}
+          chmod +x cloud-sql-proxy
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Start Cloud SQL Auth Proxy
+        run: |
+          chmod +x cloud-sql-proxy
+          ./cloud-sql-proxy "${{ secrets.DB_INSTANCE_CONNECTION_NAME }}" --port 5432 &
+          sleep 3
+
+      - name: Run drift detector
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
+          ALERT_EMAIL_LIST: ${{ secrets.ALERT_EMAIL_LIST }}
+          PYTHONPATH: "${{ github.workspace }}/deployment/monitoring/drift:${{ github.workspace }}/savviocore/src:${{ github.workspace }}"
+        run: |
+          python deployment/monitoring/drift/drift_detector.py
+
+      - name: Upload drift report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-report-${{ github.run_id }}
+          path: deployment/monitoring/reports/
+          retention-days: 30
+
+      - name: Evaluate drift severity for retraining trigger
+        id: drift-severity
+        run: |
+          LATEST=$(ls -t deployment/monitoring/reports/drift_summary_*.json 2>/dev/null | head -1 || echo "")
+          if [ -z "$LATEST" ]; then
+            echo "severity=NONE" >> $GITHUB_OUTPUT
+            echo "No drift summary produced — skipping retraining trigger."
+            exit 0
+          fi
+          SEV=$(python3 -c "import json,sys; print(json.load(open('$LATEST'))['severity'])")
+          echo "Drift severity: $SEV"
+          echo "severity=$SEV" >> $GITHUB_OUTPUT
+
+  # ===========================================================================
+  # Auto-trigger retraining on RED drift severity (PDF §5.3, §5.4)
+  # ===========================================================================
+  trigger-retraining:
+    name: Trigger Retraining (on RED drift)
+    runs-on: ubuntu-latest
+    needs: drift-detection
+    if: needs.drift-detection.outputs.severity == 'RED'
+
+    steps:
+      - name: Dispatch modelpipeline_ci.yml
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'modelpipeline_ci.yml',
+              ref: 'main',
+            });
+            console.log('RED drift detected — modelpipeline_ci.yml dispatched for retraining.');
+
+  # ===========================================================================
+  # Deploy Prometheus + Grafana stack to GCE VM
+  # Runs on:
+  #   - push to main when deployment/monitoring/** changes
+  #   - manual dispatch with run_monitoring_sync=true
+  # ===========================================================================
+  deploy-monitoring:
+    name: Deploy Monitoring
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.run_monitoring_sync == 'true')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Get API host for Prometheus scrape target
+        id: api
+        run: |
+          API_URL=$(gcloud run services describe savvio-backend-api \
+            --region ${{ env.REGION }} --format='value(status.url)' 2>/dev/null || echo "")
+          if [ -z "$API_URL" ]; then
+            echo "savvio-backend-api Cloud Run service not found — has terraform.yml + deployment.yml run yet?"
+            exit 1
+          fi
+          echo "host=$(echo $API_URL | sed 's|https://||')" >> $GITHUB_OUTPUT
+
+      - name: Render Prometheus production config
+        env:
+          API_HOST: ${{ steps.api.outputs.host }}
+          GRAFANA_REMOTE_WRITE_URL: ${{ secrets.GRAFANA_REMOTE_WRITE_URL }}
+          GRAFANA_CLOUD_USERNAME: ${{ secrets.GRAFANA_CLOUD_USERNAME }}
+          GRAFANA_CLOUD_API_KEY: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
+        run: |
+          mkdir -p monitoring
+          envsubst < deployment/monitoring/prometheus/prometheus.production.yml \
+            > monitoring/prometheus.yml
+
+      - name: Copy Prometheus config to VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.GCE_VM_IP }}
+          username: github-actions
+          key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
+          source: "monitoring/prometheus.yml"
+          target: "/home/github-actions/savvio-monitoring/prometheus/"
+          strip_components: 1
+
+      - name: Copy docker-compose to VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.GCE_VM_IP }}
+          username: github-actions
+          key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
+          source: "deployment/monitoring/docker-compose.production.yml"
+          target: "/home/github-actions/savvio-monitoring/"
+          strip_components: 2
+
+      - name: Deploy Prometheus on VM
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.GCE_VM_IP }}
+          username: github-actions
+          key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
+          timeout: 60s
+          command_timeout: 10m
+          script: |
+            cd /home/github-actions/savvio-monitoring
+            docker compose -f docker-compose.production.yml pull
+            docker compose -f docker-compose.production.yml up -d --remove-orphans
+
+  # ---------------------------------------------------------------------------
+  # Notifications (covers all jobs) — sent via SMTP to ALERT_EMAIL_LIST.
+  # NOTE: drift severity alerts (YELLOW/RED) are sent separately by
+  # drift_detector.py's send_email_alert(). These workflow-level emails cover
+  # CI failures themselves (e.g. proxy crashed, monitoring deploy SSH timeout).
+  # ---------------------------------------------------------------------------
+  notify-on-failure:
+    name: Notify Failure
+    runs-on: ubuntu-latest
+    needs: [drift-detection, trigger-retraining, deploy-monitoring]
+    if: always() && contains(needs.*.result, 'failure')
+    steps:
+      - name: Log failure summary
+        run: |
+          echo "Ops Monitoring FAILED — ${{ env.ENVIRONMENT }} — ${{ github.sha }}"
+          echo "Event:        ${{ github.event_name }}"
+          echo "Branch:       ${{ github.ref_name }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "Run URL:      ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Send failure email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          from: SavVio CI <${{ secrets.ALERT_EMAIL_FROM }}>
+          to: ${{ secrets.ALERT_EMAIL_LIST }}
+          subject: "[SavVio][FAILED] Ops Monitoring — ${{ env.ENVIRONMENT }} — ${{ github.sha }}"
+          body: |
+            Ops Monitoring FAILED
+
+            Environment:  ${{ env.ENVIRONMENT }}
+            Event:        ${{ github.event_name }}
+            Branch:       ${{ github.ref_name }}
+            Commit:       ${{ github.sha }}
+            Triggered by: ${{ github.actor }}
+
+            Per-job results:
+              drift-detection:    ${{ needs.drift-detection.result }}
+              trigger-retraining: ${{ needs.trigger-retraining.result }}
+              deploy-monitoring:  ${{ needs.deploy-monitoring.result }}
+
+            Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+  notify-on-success:
+    name: Notify Success
+    runs-on: ubuntu-latest
+    needs: [drift-detection, trigger-retraining, deploy-monitoring]
+    if: always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    steps:
+      - name: Log success summary
+        run: |
+          echo "Ops Monitoring PASSED — ${{ env.ENVIRONMENT }} — ${{ github.sha }}"
+          echo "Event:        ${{ github.event_name }}"
+          echo "Branch:       ${{ github.ref_name }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "Run URL:      ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Send success email
+        # Only on the weekly cron and monitoring-deploy pushes — not on every
+        # manual workflow_dispatch (operator already sees the run output).
+        if: github.event_name != 'workflow_dispatch'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          from: SavVio CI <${{ secrets.ALERT_EMAIL_FROM }}>
+          to: ${{ secrets.ALERT_EMAIL_LIST }}
+          subject: "[SavVio][OK] Ops Monitoring — ${{ env.ENVIRONMENT }} — ${{ github.event_name }}"
+          body: |
+            Ops Monitoring PASSED
+
+            Environment:  ${{ env.ENVIRONMENT }}
+            Event:        ${{ github.event_name }}
+            Branch:       ${{ github.ref_name }}
+            Triggered by: ${{ github.actor }}
+
+            (Drift severity alerts, if any, were sent separately by
+            drift_detector.py via send_email_alert.)
+
+            Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

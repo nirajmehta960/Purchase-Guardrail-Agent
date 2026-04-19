@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 class Severity(IntEnum):
     """Pipeline action depends on severity of validation failures."""
     INFO = 0       # Log only — minor issues
-    WARNING = 1    # Email/Slack alert — notable but non-blocking
+    WARNING = 1    # Email alert — notable but non-blocking
     CRITICAL = 2   # Halt pipeline — data integrity at risk
 
 

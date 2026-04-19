@@ -2,7 +2,7 @@ name: Data Pipeline CI/CD
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
     paths:
       - 'data_pipeline/**'
       - 'savviocore/**'
@@ -12,6 +12,10 @@ on:
       - 'data_pipeline/**'
       - 'savviocore/**'
   workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -200,34 +204,86 @@ jobs:
 
   # ===========================================================================
   # JOB 4 — Notify on Failure (covers all jobs)
+  # Sends an email via SMTP to ALERT_EMAIL_LIST.
+  # if: always() ensures this runs even when upstream jobs are skipped
+  # (e.g. deploy-dags is skipped on PRs / non-main branches).
   # ===========================================================================
   notify-on-failure:
     name: Notify on Failure
     runs-on: ubuntu-latest
     needs: [unit-tests, db-connection-check, deploy-dags]
-    if: failure()
+    if: always() && contains(needs.*.result, 'failure')
 
     steps:
-      - name: Send failure notification
+      - name: Log failure summary
         run: |
           echo "Data Pipeline CI/CD FAILED"
           echo "Branch:       ${{ github.ref_name }}"
           echo "Commit:       ${{ github.sha }}"
           echo "Triggered by: ${{ github.actor }}"
+          echo "Run URL:      ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Send failure email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          from: SavVio CI <${{ secrets.ALERT_EMAIL_FROM }}>
+          to: ${{ secrets.ALERT_EMAIL_LIST }}
+          subject: "[SavVio][FAILED] Data Pipeline CI/CD — ${{ github.ref_name }} @ ${{ github.sha }}"
+          body: |
+            Data Pipeline CI/CD FAILED
+
+            Branch:       ${{ github.ref_name }}
+            Commit:       ${{ github.sha }}
+            Triggered by: ${{ github.actor }}
+            Event:        ${{ github.event_name }}
+
+            Per-job results:
+              unit-tests:           ${{ needs.unit-tests.result }}
+              db-connection-check:  ${{ needs.db-connection-check.result }}
+              deploy-dags:          ${{ needs.deploy-dags.result }}
+
+            Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
   # ===========================================================================
   # JOB 5 — Notify on Success (covers all jobs)
+  # Runs only when no upstream job failed or was cancelled.
   # ===========================================================================
   notify-on-success:
     name: Notify on Success
     runs-on: ubuntu-latest
     needs: [unit-tests, db-connection-check, deploy-dags]
-    if: success()
+    if: always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
 
     steps:
-      - name: Send success notification
+      - name: Log success summary
         run: |
           echo "Data Pipeline CI/CD PASSED"
           echo "Branch:       ${{ github.ref_name }}"
           echo "Commit:       ${{ github.sha }}"
           echo "Triggered by: ${{ github.actor }}"
+          echo "Run URL:      ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Send success email
+        # Only send success emails on push to main, not on every PR — keeps inbox sane.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          from: SavVio CI <${{ secrets.ALERT_EMAIL_FROM }}>
+          to: ${{ secrets.ALERT_EMAIL_LIST }}
+          subject: "[SavVio][OK] Data Pipeline CI/CD — ${{ github.ref_name }} @ ${{ github.sha }}"
+          body: |
+            Data Pipeline CI/CD PASSED
+
+            Branch:       ${{ github.ref_name }}
+            Commit:       ${{ github.sha }}
+            Triggered by: ${{ github.actor }}
+
+            Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

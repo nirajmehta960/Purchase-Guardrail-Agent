@@ -5,7 +5,7 @@ from pathlib import Path
 from src.ingestion.run_ingestion import ingest_financial_task, ingest_product_task, ingest_review_task
 from src.preprocess.run_preprocessing import preprocess_financial_task, preprocess_product_task, preprocess_review_task
 from src.features.run_features import feature_financial_task, feature_product_review_task
-from src.database.run_database import setup_database_task, load_financial_task, load_products_task, load_reviews_task
+from src.database.run_database import setup_database_task, load_financial_task, load_products_task, load_reviews_task, generate_and_load_embedding_task
 from src.validation.run_validation import validate_raw, validate_processed, validate_features, validate_raw_anomalies
 from src.bias.run_bias import bias_financial_task, bias_product_task, bias_review_task
 
@@ -267,38 +267,38 @@ email_pipeline_success = EmailOperator(
     cc="nirajmehta960@gmail.com",
     subject="SavVio Data Pipeline — Run Completed Successfully",
     html_content="""
-<html>
-<body style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; padding: 24px;">
-  <h2 style="color: #2e7d32;">SavVio Data Pipeline Completed Successfully</h2>
-  <p>The daily data pipeline has finished all stages without errors.</p>
+            <html>
+            <body style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; padding: 24px;">
+            <h2 style="color: #2e7d32;">SavVio Data Pipeline Completed Successfully</h2>
+            <p>The daily data pipeline has finished all stages without errors.</p>
 
-  <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
-    <thead>
-      <tr style="background-color: #f5f5f5;">
-        <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid #ddd;">Stage</th>
-        <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid #ddd;">Status</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Data Ingestion</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Raw Data Validation</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Data Preprocessing</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Processed Data Validation</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Feature Engineering</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Featured Data Validation</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Database Loading</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
-      <tr><td style="padding: 8px 12px;">Bias Analysis</td><td style="padding: 8px 12px; color: #2e7d32;">[SUCCESS] Success</td></tr>
-    </tbody>
-  </table>
+            <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+                <thead>
+                <tr style="background-color: #f5f5f5;">
+                    <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid #ddd;">Stage</th>
+                    <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid #ddd;">Status</th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Data Ingestion</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+                <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Raw Data Validation</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+                <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Data Preprocessing</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+                <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Processed Data Validation</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+                <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Feature Engineering</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+                <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Featured Data Validation</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+                <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Database Loading</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+                <tr><td style="padding: 8px 12px;">Bias Analysis</td><td style="padding: 8px 12px; color: #2e7d32;">[SUCCESS] Success</td></tr>
+                </tbody>
+            </table>
 
-  <p style="margin-top: 20px;">All financial profiles, products, and reviews have been ingested, validated, processed, featured, and loaded into the PostgreSQL database.</p>
+            <p style="margin-top: 20px;">All financial profiles, products, and reviews have been ingested, validated, processed, featured, and loaded into the PostgreSQL database.</p>
 
-  <p style="color: #888; font-size: 12px; margin-top: 32px; border-top: 1px solid #eee; padding-top: 12px;">
-    SavVio Data Pipeline &nbsp;|&nbsp; Airflow Scheduler &nbsp;|&nbsp; This is an automated notification.
-  </p>
-</body>
-</html>
-""",
+            <p style="color: #888; font-size: 12px; margin-top: 32px; border-top: 1px solid #eee; padding-top: 12px;">
+                SavVio Data Pipeline &nbsp;|&nbsp; Airflow Scheduler &nbsp;|&nbsp; This is an automated notification.
+            </p>
+            </body>
+            </html>
+            """,
     dag=dag,
 )
 
@@ -553,11 +553,11 @@ load_review = PythonOperator(
     dag=dag,
 )
 
-# generate_load_embeddings = PythonOperator(
-#     task_id='generate_load_embeddings',
-#     python_callable=generate_and_load_embedding_task,
-#     dag=dag,
-# )
+generate_load_embeddings = PythonOperator(
+    task_id='generate_load_embeddings',
+    python_callable=generate_and_load_embedding_task,
+    dag=dag,
+)
 
 check_featured_validation >> setup_database
 setup_database >> [load_financial, load_product] >> load_review

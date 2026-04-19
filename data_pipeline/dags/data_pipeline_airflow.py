@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from src.ingestion.run_ingestion import ingest_financial_task, ingest_product_task, ingest_review_task
 from src.preprocess.run_preprocessing import preprocess_financial_task, preprocess_product_task, preprocess_review_task
@@ -15,10 +14,10 @@ from airflow.exceptions import AirflowException
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.python import PythonOperator, BranchPythonOperator
 from airflow.providers.smtp.operators.smtp import EmailOperator
-# from airflow.providers.slack.operators.slack_webhook import SlackWebhookOperator  # TODO: uncomment when Slack is configured
+# from airflow.providers.slack.operators.slack_webhook import SlackWebhookOperator  # commented because Prof disabled it
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.utils.trigger_rule import TriggerRule
-# from airflow.task.trigger_rule import TriggerRule new one, need to verify
+from airflow.sdk.execution_time.task_runner import RuntimeTaskInstance
 
 
 # ==================== BRANCHING HELPER ====================
@@ -43,7 +42,6 @@ def make_branch_check(upstream_ids, success_ids, failure_ids):
     """
     def _check(**context):
         import logging
-        from airflow.sdk.execution_time.task_runner import RuntimeTaskInstance
 
         logger = logging.getLogger(__name__)
         dag_run = context["dag_run"]
@@ -369,7 +367,7 @@ validate_raw_anomaly = PythonOperator(
 
 check_ingestion >> [validate_raw_data, validate_raw_anomaly]
 
-# --- BRANCH: raw validation succeeded? ---
+# BRANCH: raw validation succeeded?
 check_raw_validation = BranchPythonOperator(
     task_id='check_raw_validation',
     python_callable=make_branch_check(
@@ -411,7 +409,7 @@ preprocess_reviews = PythonOperator(
 
 check_raw_validation >> [preprocess_financial, preprocess_products, preprocess_reviews]
 
-# --- BRANCH: all preprocessing succeeded? ---
+# BRANCH: all preprocessing succeeded?
 check_preprocessing = BranchPythonOperator(
     task_id='check_preprocessing',
     python_callable=make_branch_check(
@@ -441,7 +439,7 @@ validate_processed_data = PythonOperator(
 
 check_preprocessing >> validate_processed_data
 
-# --- BRANCH: processed validation succeeded? ---
+# BRANCH: processed validation succeeded?
 check_processed_validation = BranchPythonOperator(
     task_id='check_processed_validation',
     python_callable=make_branch_check(
@@ -477,7 +475,7 @@ feature_product_reviews = PythonOperator(
 
 check_processed_validation >> [feature_financial, feature_product_reviews]
 
-# --- BRANCH: all feature engineering succeeded? ---
+# BRANCH: all feature engineering succeeded?
 check_feature_engineering = BranchPythonOperator(
     task_id='check_feature_engineering',
     python_callable=make_branch_check(
@@ -507,7 +505,7 @@ validate_featured_data = PythonOperator(
 
 check_feature_engineering >> validate_featured_data
 
-# --- BRANCH: featured validation succeeded? ---
+# BRANCH: featured validation succeeded?
 check_featured_validation = BranchPythonOperator(
     task_id='check_featured_validation',
     python_callable=make_branch_check(
@@ -562,7 +560,7 @@ generate_load_embeddings = PythonOperator(
 check_featured_validation >> setup_database
 setup_database >> [load_financial, load_product] >> load_review
 
-# --- BRANCH: all DB loading succeeded? ---
+# BRANCH: all DB loading succeeded?
 check_db_loading = BranchPythonOperator(
     task_id='check_db_loading',
     python_callable=make_branch_check(
@@ -587,8 +585,6 @@ check_db_loading >> email_pipeline_success
 def _check_pipeline_complete(**context):
     """Fail the DAG run if the success email was not sent (i.e. pipeline didn't fully complete)."""
     import logging
-    from airflow.sdk.execution_time.task_runner import RuntimeTaskInstance
-
     logger = logging.getLogger(__name__)
     dag_run = context['dag_run']
 

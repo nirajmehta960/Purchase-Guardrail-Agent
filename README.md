@@ -35,50 +35,56 @@ The data pipeline is managed by Apache Airflow running on GCE. It handles:
 
 ### 2. Model Development & Training
 The platform uses a sophisticated ML pipeline:
-- **XGBoost Classifier**: Trained on historic financial outcomes to predict purchase viability.
-- **Optuna Optimization**: Automated hyperparameter tuning to ensure peak model performance.
-- **Bias Detection**: Integrated metrics to detect and mitigate bias across demographic slices.
-- **Experiment Tracking**: Full lineage and performance logging via MLflow.
+- **Baseline + Champion**: Trains XGBoost, LightGBM, and XGB-Linear baselines, then promotes the best candidate to a tuned champion.
+- **Optuna Optimization**: Automated hyperparameter tuning with sensitivity analysis on the tuned champion.
+- **Bias Detection & Mitigation**: Fairlearn-based metrics across demographic slices, with `ThresholdOptimizer` mitigation when bias gates fail.
+- **Explainability**: SHAP `TreeExplainer` produces global / per-class feature importance artifacts logged to MLflow.
+- **Experiment Tracking**: Full lineage, metrics, and artifacts logged via MLflow (Cloud Run + GCS backend in prod).
 
 ### 3. Inference & Decision Logic
 The system employs a three-layer decision engine to ensure fiduciary responsibility:
 - **Deterministic Layer**: Authoritative financial rules that enforce strict budget and emergency fund guardrails.
 - **ML Layer**: Probabilistic scoring that identifies risk patterns in consumer behavior.
-- **Generative Layer**: OpenRouter LLM (default: Gemini 2.0 Flash) for conversational explanations, validated by code-level guardrails.
+- **Generative Layer**: Vertex AI (default `gemini-2.5-flash`, GCP-native via ADC — no API key) for conversational explanations, with OpenRouter as an optional paid fallback. All LLM output is validated by code-level guardrails.
 
 ### 4. Monitoring & Observability
 Continuous monitoring ensures the system remains reliable and accurate:
-- **System Metrics**: Real-time tracking of API latency and throughput via Prometheus and Grafana.
-- **Model Drift**: Drift detection using Evidently AI to identify performance decay.
-- **Data Quality**: Schema and anomaly monitoring via Great Expectations.
+- **System Metrics**: Real-time tracking of API latency and throughput via Prometheus and Grafana Cloud.
+- **Model Drift**: Evidently AI-based drift detection runs weekly via the `ops-monitoring.yml` workflow; RED severity auto-dispatches `modelpipeline_ci.yml` to retrain and redeploy.
+- **Data Quality**: Schema and anomaly monitoring via Great Expectations (during data pipeline ingestion).
+- **Alerting**: Email-only via SMTP — Airflow DAG failures, drift severity (YELLOW + RED), and CI workflow status all flow to `ALERT_EMAIL_LIST`.
 
 ## Project Structure
 
 ```
 SavVio/
-├── data_pipeline/              # Data ingestion and preprocessing
-├── model_pipeline/             # ML model training and evaluation
-├── deployment/                 # Inference API, Frontend, and Monitoring
-│   ├── api/                    # FastAPI service
-│   ├── frontend/               # React web application
-│   ├── monitoring/             # Prometheus and Grafana configuration
-├── infrastructure/             # Terraform and GCP configuration
-└── .github/workflows/          # CI/CD pipeline definitions
+├── data_pipeline/              # Airflow DAGs, ingestion, validation, feature engineering
+├── model_pipeline/             # ML training, tuning, bias mitigation, SHAP, MLflow
+├── deployment/
+│   ├── api/                    # FastAPI inference service
+│   ├── frontend/               # React + Vite + Tailwind web app
+│   ├── monitoring/             # Prometheus, Grafana Cloud, drift detector
+│   └── terraform/              # GCP infrastructure (Cloud Run, Cloud SQL, GCS, Artifact Registry)
+├── savviocore/                 # Shared library: validation, DB schema/connection
+└── .github/workflows/          # datapipeline_ci, modelpipeline_ci, deployment, ops-monitoring
 ```
 
 ## Technology Stack
 
 | Category | Tools Used |
 |----------|-----------|
-| Cloud Platform | Google Cloud Platform (GCP) |
-| Infrastructure | Terraform, Docker |
+| Cloud Platform | Google Cloud Platform (Cloud Run, Cloud SQL, GCS, Artifact Registry, Vertex AI) |
+| Infrastructure | Terraform, Docker, GitHub Actions |
 | Backend | FastAPI (Python) |
 | Frontend | React, Vite, Tailwind CSS |
-| Orchestration | Apache Airflow |
-| ML Frameworks | XGBoost, Scikit-learn, Optuna |
-| Observability | Prometheus, Grafana, Evidently AI |
-| Database | PostgreSQL (Cloud SQL) |
-| Versioning | Git, DVC |
+| Orchestration | Apache Airflow (on GCE) |
+| ML Frameworks | XGBoost, LightGBM, Scikit-learn, Optuna, SHAP, Fairlearn |
+| Experiment Tracking | MLflow (Cloud Run + GCS artifacts) |
+| LLM | Vertex AI (`gemini-2.5-flash`) with OpenRouter fallback |
+| Observability | Prometheus, Grafana Cloud, Evidently AI (drift), Great Expectations (data quality) |
+| Alerting | SMTP email (Airflow + drift detector + CI workflows) |
+| Database | PostgreSQL (Cloud SQL in prod, local Postgres in dev) |
+| Data / Model Versioning | Git, DVC (GCS-backed) |
 
 ## Local Setup
 
@@ -91,7 +97,7 @@ cd SavVio
 ### 2. Full Stack via Docker Compose (Recommended)
 Starts Postgres + API + Frontend together:
 ```bash
-cp .env.example .env        # fill in DB_*; for Vertex AI set VERTEX_PROJECT (see deployment/api/README.md)
+cp .env.example .env        # fill in DB_*, SMTP_*, VERTEX_PROJECT (see comments in template)
 docker compose up --build
 # Frontend: http://localhost:8501
 # API:      http://localhost:8080
@@ -103,7 +109,7 @@ docker compose up --build
 python -m venv .venv && source .venv/bin/activate
 pip install -e savviocore
 pip install -r deployment/requirements.txt
-cp .env.example .env        # fill in DB_*; for Vertex AI set VERTEX_PROJECT + `gcloud auth application-default login`
+cp .env.example .env        # fill in DB_*; set VERTEX_PROJECT and run `gcloud auth application-default login`
 export $(grep -v '^#' .env | xargs)
 ./deployment/api/run_api.sh
 ```

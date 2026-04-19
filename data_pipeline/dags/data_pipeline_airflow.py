@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from src.ingestion.run_ingestion import ingest_financial_task, ingest_product_task, ingest_review_task
 from src.preprocess.run_preprocessing import preprocess_financial_task, preprocess_product_task, preprocess_review_task
 from src.features.run_features import feature_financial_task, feature_product_review_task
-from src.database.run_database import setup_database_task, load_financial_task, load_products_task, load_reviews_task
+from src.database.run_database import setup_database_task, load_financial_task, load_products_task, load_reviews_task, generate_and_load_embedding_task
 from src.validation.run_validation import validate_raw, validate_processed, validate_features, validate_raw_anomalies
 from src.bias.run_bias import bias_financial_task, bias_product_task, bias_review_task
 
@@ -15,9 +14,10 @@ from airflow.exceptions import AirflowException
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.python import PythonOperator, BranchPythonOperator
 from airflow.providers.smtp.operators.smtp import EmailOperator
-# from airflow.providers.slack.operators.slack_webhook import SlackWebhookOperator  # TODO: uncomment when Slack is configured
+# from airflow.providers.slack.operators.slack_webhook import SlackWebhookOperator  # commented because Prof disabled it
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.utils.trigger_rule import TriggerRule
+from airflow.sdk.execution_time.task_runner import RuntimeTaskInstance
 
 
 # ==================== BRANCHING HELPER ====================
@@ -42,7 +42,6 @@ def make_branch_check(upstream_ids, success_ids, failure_ids):
     """
     def _check(**context):
         import logging
-        from airflow.sdk.execution_time.task_runner import RuntimeTaskInstance
 
         logger = logging.getLogger(__name__)
         dag_run = context["dag_run"]
@@ -253,38 +252,38 @@ email_pipeline_success = EmailOperator(
     cc="nirajmehta960@gmail.com",
     subject="SavVio Data Pipeline — Run Completed Successfully",
     html_content="""
-<html>
-<body style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; padding: 24px;">
-  <h2 style="color: #2e7d32;">SavVio Data Pipeline Completed Successfully</h2>
-  <p>The daily data pipeline has finished all stages without errors.</p>
+            <html>
+            <body style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; padding: 24px;">
+            <h2 style="color: #2e7d32;">SavVio Data Pipeline Completed Successfully</h2>
+            <p>The daily data pipeline has finished all stages without errors.</p>
 
-  <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
-    <thead>
-      <tr style="background-color: #f5f5f5;">
-        <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid #ddd;">Stage</th>
-        <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid #ddd;">Status</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Data Ingestion</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Raw Data Validation</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Data Preprocessing</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Processed Data Validation</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Feature Engineering</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Featured Data Validation</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
-      <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Database Loading</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
-      <tr><td style="padding: 8px 12px;">Bias Analysis</td><td style="padding: 8px 12px; color: #2e7d32;">[SUCCESS] Success</td></tr>
-    </tbody>
-  </table>
+            <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+                <thead>
+                <tr style="background-color: #f5f5f5;">
+                    <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid #ddd;">Stage</th>
+                    <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid #ddd;">Status</th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Data Ingestion</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+                <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Raw Data Validation</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+                <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Data Preprocessing</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+                <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Processed Data Validation</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+                <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Feature Engineering</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+                <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Featured Data Validation</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+                <tr><td style="padding: 8px 12px; border-bottom: 1px solid #eee;">Database Loading</td><td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #2e7d32;">[SUCCESS] Success</td></tr>
+                <tr><td style="padding: 8px 12px;">Bias Analysis</td><td style="padding: 8px 12px; color: #2e7d32;">[SUCCESS] Success</td></tr>
+                </tbody>
+            </table>
 
-  <p style="margin-top: 20px;">All financial profiles, products, and reviews have been ingested, validated, processed, featured, and loaded into the PostgreSQL database.</p>
+            <p style="margin-top: 20px;">All financial profiles, products, and reviews have been ingested, validated, processed, featured, and loaded into the PostgreSQL database.</p>
 
-  <p style="color: #888; font-size: 12px; margin-top: 32px; border-top: 1px solid #eee; padding-top: 12px;">
-    SavVio Data Pipeline &nbsp;|&nbsp; Airflow Scheduler &nbsp;|&nbsp; This is an automated notification.
-  </p>
-</body>
-</html>
-""",
+            <p style="color: #888; font-size: 12px; margin-top: 32px; border-top: 1px solid #eee; padding-top: 12px;">
+                SavVio Data Pipeline &nbsp;|&nbsp; Airflow Scheduler &nbsp;|&nbsp; This is an automated notification.
+            </p>
+            </body>
+            </html>
+            """,
     dag=dag,
 )
 
@@ -355,7 +354,7 @@ validate_raw_anomaly = PythonOperator(
 
 check_ingestion >> [validate_raw_data, validate_raw_anomaly]
 
-# --- BRANCH: raw validation succeeded? ---
+# BRANCH: raw validation succeeded?
 check_raw_validation = BranchPythonOperator(
     task_id='check_raw_validation',
     python_callable=make_branch_check(
@@ -397,7 +396,7 @@ preprocess_reviews = PythonOperator(
 
 check_raw_validation >> [preprocess_financial, preprocess_products, preprocess_reviews]
 
-# --- BRANCH: all preprocessing succeeded? ---
+# BRANCH: all preprocessing succeeded?
 check_preprocessing = BranchPythonOperator(
     task_id='check_preprocessing',
     python_callable=make_branch_check(
@@ -427,7 +426,7 @@ validate_processed_data = PythonOperator(
 
 check_preprocessing >> validate_processed_data
 
-# --- BRANCH: processed validation succeeded? ---
+# BRANCH: processed validation succeeded?
 check_processed_validation = BranchPythonOperator(
     task_id='check_processed_validation',
     python_callable=make_branch_check(
@@ -463,7 +462,7 @@ feature_product_reviews = PythonOperator(
 
 check_processed_validation >> [feature_financial, feature_product_reviews]
 
-# --- BRANCH: all feature engineering succeeded? ---
+# BRANCH: all feature engineering succeeded?
 check_feature_engineering = BranchPythonOperator(
     task_id='check_feature_engineering',
     python_callable=make_branch_check(
@@ -493,7 +492,7 @@ validate_featured_data = PythonOperator(
 
 check_feature_engineering >> validate_featured_data
 
-# --- BRANCH: featured validation succeeded? ---
+# BRANCH: featured validation succeeded?
 check_featured_validation = BranchPythonOperator(
     task_id='check_featured_validation',
     python_callable=make_branch_check(
@@ -539,16 +538,16 @@ load_review = PythonOperator(
     dag=dag,
 )
 
-# generate_load_embeddings = PythonOperator(
-#     task_id='generate_load_embeddings',
-#     python_callable=generate_and_load_embedding_task,
-#     dag=dag,
-# )
+generate_load_embeddings = PythonOperator(
+    task_id='generate_load_embeddings',
+    python_callable=generate_and_load_embedding_task,
+    dag=dag,
+)
 
 check_featured_validation >> setup_database
 setup_database >> [load_financial, load_product] >> load_review
 
-# --- BRANCH: all DB loading succeeded? ---
+# BRANCH: all DB loading succeeded?
 check_db_loading = BranchPythonOperator(
     task_id='check_db_loading',
     python_callable=make_branch_check(
@@ -573,8 +572,6 @@ check_db_loading >> email_pipeline_success
 def _check_pipeline_complete(**context):
     """Fail the DAG run if the success email was not sent (i.e. pipeline didn't fully complete)."""
     import logging
-    from airflow.sdk.execution_time.task_runner import RuntimeTaskInstance
-
     logger = logging.getLogger(__name__)
     dag_run = context['dag_run']
 

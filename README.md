@@ -1,14 +1,14 @@
 # SavVio
 
-An AI-driven financial advocacy tool designed to bridge the gap between e-commerce and personal finance. SavVio serves as a "Financial Fiduciary" that evaluates whether a user should make a purchase based on their real-time financial health and the product's actual utility.
+An AI-driven financial advocacy tool designed to bridge the gap between e-commerce and personal finance. SavVio serves as a "Financial Fiduciary" that evaluates whether a user should make a purchase based on their real-time financial health and the product's quality and utility.
 
 ## Project Overview
 
 SavVio is a comprehensive MLOps project that integrates real-time product data with sensitive financial streams to provide responsible, conversational shopping guidance. Unlike traditional shopping assistants that focus on maximizing conversion, SavVio evaluates purchases based on:
 
 - **Financial Health**: User's income, expenses, savings, and debt obligations.
-- **Product Utility**: Analysis of product specifications and real-world usefulness.
-- **Affordability Metrics**: Calculated discretionary budget and residual utility scores.
+- **Product Utility**: Analysis of product specifications, quality and real-world usefulness.
+- **Decision Engine**: Generates final recommondation based on user's financial health and the product's utility.
 
 The system provides Green/Yellow/Red light recommendations before users complete their purchase.
 
@@ -29,28 +29,30 @@ The system provides Green/Yellow/Red light recommendations before users complete
 ### 1. Data Pipeline Orchestration
 The data pipeline is managed by Apache Airflow running on GCE. It handles:
 - Automated ingestion of financial and product datasets.
-- Data cleaning and normalization using Spark and Pandas.
+- Data cleaning and normalization using Pandas.
 - Feature engineering for financial ratios and sentiment analysis of reviews.
+- Generated vector embeddings for products using HF Hub.
 - Data versioning with DVC and storage in Google Cloud SQL and GCS.
 
 ### 2. Model Development & Training
 The platform uses a sophisticated ML pipeline:
-- **Baseline + Champion**: Trains XGBoost, LightGBM, and XGB-Linear baselines, then promotes the best candidate to a tuned champion.
+- **Baseline + Champion**: Trains XGBoost, LightGBM, and XGB-Linear baselines, then promotes the best candidate to a tuned champion (Bayesian optimization via Optuna).
 - **Optuna Optimization**: Automated hyperparameter tuning with sensitivity analysis on the tuned champion.
-- **Bias Detection & Mitigation**: Fairlearn-based metrics across demographic slices, with `ThresholdOptimizer` mitigation when bias gates fail.
+- **Bias Detection & Mitigation**: Fairlearn-based metrics across demographic slices (pre and post training), with `ThresholdOptimizer` mitigation when bias gates fail.
 - **Explainability**: SHAP `TreeExplainer` produces global / per-class feature importance artifacts logged to MLflow.
 - **Experiment Tracking**: Full lineage, metrics, and artifacts logged via MLflow (Cloud Run + GCS backend in prod).
+- **Model Selection & Serve**: Champion model is selected on validation metrics and pushed to GCP Artifact Registry for serving.
 
 ### 3. Inference & Decision Logic
 The system employs a three-layer decision engine to ensure fiduciary responsibility:
-- **Deterministic Layer**: Authoritative financial rules that enforce strict budget and emergency fund guardrails.
+- **Deterministic Layer**: Authoritative financial rules that enforce strict financial-health and product-quality guardrails.
 - **ML Layer**: Probabilistic scoring that identifies risk patterns in consumer behavior.
 - **Generative Layer**: Vertex AI (default `gemini-2.5-flash`, GCP-native via ADC — no API key) for conversational explanations, with OpenRouter as an optional paid fallback. All LLM output is validated by code-level guardrails.
 
 ### 4. Monitoring & Observability
 Continuous monitoring ensures the system remains reliable and accurate:
 - **System Metrics**: Real-time tracking of API latency and throughput via Prometheus and Grafana Cloud.
-- **Model Drift**: Evidently AI-based drift detection runs weekly via the `ops-monitoring.yml` workflow; RED severity auto-dispatches `modelpipeline_ci.yml` to retrain and redeploy.
+- **Drift Detection**: Evidently AI-based drift detection runs weekly via the `ops-monitoring.yml` workflow; RED severity auto-dispatches `modelpipeline_ci.yml` to retrain and redeploy.
 - **Data Quality**: Schema and anomaly monitoring via Great Expectations (during data pipeline ingestion).
 - **Alerting**: Email-only via SMTP — Airflow DAG failures, drift severity (YELLOW + RED), and CI workflow status all flow to `ALERT_EMAIL_LIST`.
 
@@ -85,6 +87,11 @@ SavVio/
 | Alerting | SMTP email (Airflow + drift detector + CI workflows) |
 | Database | PostgreSQL (Cloud SQL in prod, local Postgres in dev) |
 | Data / Model Versioning | Git, DVC (GCS-backed) |
+
+---
+## SavVIO Architecture
+
+![alt text](savvio_architecture.png "SavVio Architecture")
 
 ## Local Setup
 

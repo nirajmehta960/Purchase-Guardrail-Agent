@@ -1,6 +1,7 @@
 name: Data Pipeline CI/CD
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
@@ -11,7 +12,6 @@ on:
     paths:
       - 'data_pipeline/**'
       - 'savviocore/**'
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

@@ -23,7 +23,6 @@ _PREFIX = APIConfig.METRICS_PREFIX
 # Custom Business Metrics
 # ---------------------------------------------------------------------------
 
-# Full inference pipeline latency (not just HTTP round-trip)
 INFERENCE_DURATION = Histogram(
     f"{_PREFIX}_inference_duration_seconds",
     "End-to-end inference pipeline latency in seconds",
@@ -31,40 +30,34 @@ INFERENCE_DURATION = Histogram(
     buckets=(0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
 )
 
-# Inference request counter by recommendation color and evaluation mode
 INFERENCE_TOTAL = Counter(
     f"{_PREFIX}_inference_total",
     "Total inference requests by recommendation color and evaluation mode",
     labelnames=["recommendation", "evaluation_mode"],
 )
 
-# Guardrail failure counter
 GUARDRAIL_FAILURES = Counter(
     f"{_PREFIX}_guardrail_failures_total",
     "Total LLM responses that failed guardrail checks",
 )
 
-# Layer 2 downgrade counter
 LAYER2_DOWNGRADES = Counter(
     f"{_PREFIX}_layer2_downgrades_total",
     "Total Layer 2 downgrades (product/review quality signals)",
     labelnames=["from_color", "to_color"],
 )
 
-# ML model confidence distribution
 ML_CONFIDENCE = Histogram(
     f"{_PREFIX}_ml_confidence",
     "ML model confidence score distribution",
     buckets=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0),
 )
 
-# In-flight request gauge
 ACTIVE_REQUESTS = Gauge(
     f"{_PREFIX}_active_requests",
     "Number of currently in-flight requests",
 )
 
-# LLM provider latency
 LLM_LATENCY = Histogram(
     f"{_PREFIX}_llm_latency_seconds",
     "LLM provider response time in seconds",

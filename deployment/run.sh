@@ -1,18 +1,9 @@
 #!/usr/bin/env bash
-# ─────────────────────────────────────────────────────────────
-# SavVio — Start the backend API and frontend dev server.
-#
-# Usage:
-#   ./deployment/run.sh            # start both (default)
-#   ./deployment/run.sh api        # backend only
-#   ./deployment/run.sh frontend   # frontend only
-# -------------------------------------------------------------
+# Local dev runner: ./deployment/run.sh [api|frontend|both]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-
-# -- Helpers --------------------------------------------------
 
 red()   { printf '\033[0;31m%s\033[0m\n' "$*"; }
 green() { printf '\033[0;32m%s\033[0m\n' "$*"; }
@@ -20,13 +11,10 @@ info()  { printf '\033[0;36m[info]\033[0m %s\n' "$*"; }
 
 cleanup() {
     info "Shutting down..."
-    # Kill background jobs (API server, frontend dev server)
     jobs -p 2>/dev/null | xargs -r kill 2>/dev/null || true
     wait 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
-
-# ── Backend API ──────────────────────────────────────────────
 
 start_api() {
     info "Starting backend API on http://localhost:3500"
@@ -47,8 +35,6 @@ start_api() {
         "$@"
 }
 
-# ── Frontend Dev Server ──────────────────────────────────────
-
 start_frontend() {
     info "Starting frontend dev server on http://localhost:3000"
 
@@ -61,8 +47,6 @@ start_frontend() {
 
     npx vite --host 0.0.0.0 --port 3000
 }
-
-# ── Entrypoint ───────────────────────────────────────────────
 
 MODE="${1:-both}"
 
@@ -77,7 +61,6 @@ case "$MODE" in
     both|"")
         start_api &
         API_PID=$!
-        # Give the API a moment to bind the port
         sleep 2
         start_frontend &
         FE_PID=$!

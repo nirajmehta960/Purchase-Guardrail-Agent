@@ -1,11 +1,7 @@
 """
-Inference Orchestrator — Synchronous prediction pipeline stages:
-1. DB Profile Loading
-2. Intent Parsing / Product Matching
-3. Product Metadata & Review Retrieval
-4. ML Scoring (Layer 1)
-5. Quality Downgrade Engine (Layer 2)
-6. Response Generation & Guardrails
+Inference orchestrator. Runs the synchronous prediction pipeline:
+profile loading → intent/product matching → ML scoring (Layer 1) →
+quality downgrades (Layer 2) → response generation with guardrails.
 """
 
 from __future__ import annotations
@@ -75,7 +71,6 @@ class MLScore:
     confidence: float | None = None
     predicted_label: str | None = None
     unavailable_reason: str | None = None
-    # Financial features returned by model for API response / LLM
     affordability_score: float = 0.0
     affordability_unreliable: bool = False
     savings_to_price_ratio: float = 0.0
@@ -215,7 +210,6 @@ def _load_product_data(product: ProductResolution, manager) -> tuple[dict, list]
     if not product.product_id or not manager.db_engine:
         return empty, []
 
-    # Load product row
     try:
         with manager.db_engine.connect() as conn:
             row = conn.execute(text(
@@ -232,7 +226,6 @@ def _load_product_data(product: ProductResolution, manager) -> tuple[dict, list]
     cols = ["product_id", "product_name", "price", "average_rating", "rating_number", "rating_variance", "category"]
     product_row = pd.Series(dict(zip(cols, row)))
 
-    # Load reviews
     try:
         with manager.db_engine.connect() as conn:
             review_rows = conn.execute(text(
@@ -246,7 +239,6 @@ def _load_product_data(product: ProductResolution, manager) -> tuple[dict, list]
     review_cols = ["user_id", "product_id", "rating", "review_title", "review_text", "verified_purchase", "helpful_vote"]
     reviews_df = pd.DataFrame(review_rows, columns=review_cols) if review_rows else pd.DataFrame()
 
-    # Compute product + review features
     with manager.db_engine.connect() as _conn:
         _result = _conn.execute(text("SELECT product_id, price, average_rating, rating_number, rating_variance, category FROM products"))
         products_df = pd.DataFrame(_result.fetchall(), columns=_result.keys())
@@ -443,7 +435,6 @@ def run_inference(request: PredictRequest, manager) -> PredictResponse:
 
     ml = _score_ml_model(user_profile, resolution, product_data, manager)
 
-    # Layer 2 Quality Check (Down-ranking for problematic catalog items)
     downgrade_result = None
     if ml.predicted_label and resolution.product_id:
         try:

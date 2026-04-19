@@ -1,10 +1,14 @@
 # Drift Detection — SavVio
 
 ## What this does
-Monitors 8 production features weekly against the training baseline.
-Detects when real-world data starts looking different from what the model was trained on.
-Sends email alerts on YELLOW (10–50% columns drifted) or RED (50%+),
-and auto-triggers retraining on RED.
+Monitors all 16 raw production inputs (12 numeric + 3 categorical) weekly
+against the training baseline. Computed features are intentionally **not**
+monitored — they are deterministic functions of these raw inputs, so any
+drift in them must originate from a raw input that's already covered here.
+
+Detects when real-world data starts looking different from what the model
+was trained on. Sends email alerts on YELLOW (10–50% columns drifted) or
+RED (50%+), and auto-triggers retraining on RED.
 
 ## Files
 | File | Purpose |
@@ -31,18 +35,30 @@ open $(ls -t deployment/monitoring/reports/*.html | head -1)
 cat $(ls -t deployment/monitoring/reports/*.json | head -1)
 ```
 
-## Monitored features (8 total)
+## Monitored features (16 total)
+
+### Numeric — Wasserstein distance
 **Financial (threshold: 0.10)**
+- `monthly_income`
+- `monthly_expenses`
+- `savings_balance`
+- `monthly_emi`
 - `discretionary_income`
 - `debt_to_income_ratio`
 - `monthly_expense_burden_ratio`
 - `emergency_fund_months`
 - `saving_to_income_ratio`
 
-**Product ratings (threshold: 0.05 — tighter because they directly affect recommendations)**
-- `average_rating`
-- `rating_number`
-- `rating_variance`
+**Product (threshold: 0.10 default; ratings tightened to 0.05 — they directly drive recommendations)**
+- `price`
+- `average_rating`         (threshold 0.05)
+- `rating_number`          (threshold 0.05)
+- `rating_variance`        (threshold 0.05)
+
+### Categorical — chi-squared p-value (default p < 0.05 = drifted)
+- `employment_status`
+- `has_loan`
+- `region`
 
 ## Severity levels
 | Severity | Condition | Action |
@@ -53,7 +69,7 @@ cat $(ls -t deployment/monitoring/reports/*.json | head -1)
 
 ## Alerts
 - YELLOW → email alert (via SMTP) to `ALERT_EMAIL_LIST`
-- RED → email alert **+ auto-dispatch of `modelpipeline_ci.yml` retraining workflow**
+- RED → email alert **+ auto-dispatch of `modelpipeline.yml` retraining workflow**
 
 ## Automated schedule
 Runs every Monday 08:00 UTC via GitHub Actions (`ops-monitoring.yml`).
@@ -65,8 +81,8 @@ No manual intervention needed for the regular cadence.
    `deployment/monitoring/reports/drift_summary_*.json`.
 2. The job exposes `severity` as an output.
 3. `ops-monitoring.yml :: trigger-retraining` runs only when severity is `RED`
-   and dispatches `modelpipeline_ci.yml` via the GitHub API.
-4. `modelpipeline_ci.yml` retrains, runs the validation/bias/rollback gates,
+   and dispatches `modelpipeline.yml` via the GitHub API.
+4. `modelpipeline.yml` retrains, runs the validation/bias/rollback gates,
    persists the new metrics baseline, and dispatches `deployment.yml` to push
    the new image to Cloud Run.
 

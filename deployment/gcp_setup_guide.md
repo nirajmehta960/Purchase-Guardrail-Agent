@@ -743,8 +743,8 @@ Make a small harmless change to test each pipeline:
 
 | Pipeline | Test change | Expected trigger |
 |----------|-------------|-----------------|
-| Data Pipeline | Edit a comment in `data_pipeline/dags/` | Push to `main` → datapipeline_ci.yml |
-| Model Pipeline | Edit a comment in `model_pipeline/src/` | Push to `main` → modelpipeline_ci.yml |
+| Data Pipeline | Edit a comment in `data_pipeline/dags/` | Push to `main` → datapipeline.yml |
+| Model Pipeline | Edit a comment in `model_pipeline/src/` | Push to `main` → modelpipeline.yml |
 | Deployment | Edit a comment in `deployment/api/` | Push to `main` → deployment.yml |
 | Terraform | Edit a comment in `deployment/terraform/` | Open PR → plan comment on PR; merge → apply |
 

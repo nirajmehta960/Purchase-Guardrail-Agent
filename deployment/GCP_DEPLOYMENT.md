@@ -53,8 +53,8 @@ This document describes the production architecture and gives a step-by-step fir
 
 | Workflow | File | Trigger | What it does |
 |----------|------|---------|--------------|
-| Data Pipeline CI/CD | `datapipeline_ci.yml` | push/PR to `data_pipeline/**` | Unit tests, DAG parse validation, DB connection check. On main: SSH → VM → git pull → reserialize DAGs |
-| Model Pipeline CI/CD | `modelpipeline_ci.yml` | push/PR to `model_pipeline/**` | Unit tests, DB check, run training, quality gates (F1>0.70, ROC-AUC>0.75), bias gate, rollback check, persist baseline to GCS, trigger deployment |
+| Data Pipeline CI/CD | `datapipeline.yml` | push/PR to `data_pipeline/**` | Unit tests + DAG parse validation. On main: build & push image to Artifact Registry → SSH → VM → `docker compose pull && up -d` → trigger DAG |
+| Model Pipeline CI/CD | `modelpipeline.yml` | push/PR to `model_pipeline/**` | Unit tests, run training, quality gates (F1, ROC-AUC, bias, rollback), persist baseline to GCS, then build & push trainer image to Artifact Registry and `gcloud run deploy` to the Cloud Run trainer service |
 | Deployment CI/CD | `deployment.yml` | push to `deployment/**` or `savviocore/**`, weekly cron, workflow_dispatch | API/frontend tests, build Docker images → Artifact Registry, deploy to Cloud Run, health check, drift detection, deploy Prometheus to VM |
 | Terraform | `terraform.yml` | push/PR to `deployment/terraform/**` | PR: plan only + posts plan as comment. Main push: plan + apply |
 
@@ -403,7 +403,7 @@ No manual VM access needed for DAG changes.
 
 ### Retraining the model
 
-Push changes to `model_pipeline/**` or manually trigger `modelpipeline_ci.yml`. Gates must pass before deployment is triggered.
+Push changes to `model_pipeline/**` or manually trigger `modelpipeline.yml`. Gates must pass before the trainer image is built/pushed and deployed to Cloud Run.
 
 ### Infrastructure changes
 

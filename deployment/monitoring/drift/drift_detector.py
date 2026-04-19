@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 import pandas as pd
 import requests
 import yaml
-from evidently import Report
+from evidently import DataDefinition, Dataset, Report
 from evidently.presets import DataDriftPreset
 
 # Suppress logging on library import
@@ -30,11 +30,10 @@ logger = logging.getLogger(__name__)
 # Load environment variables and config
 # ---------------------------------------------------------------------------
 
-# Load .env from monitoring/ (one level up — shared with the monitoring stack)
+# Shared with the rest of the monitoring stack.
 _ENV_PATH = Path(__file__).parent.parent / ".env"
 load_dotenv(_ENV_PATH)
 
-# Load alert_config.yaml from the same directory as this file
 _CONFIG_PATH = Path(__file__).parent / "alert_config.yaml"
 with open(_CONFIG_PATH) as f:
     _CONFIG = yaml.safe_load(f)
@@ -43,10 +42,12 @@ with open(_CONFIG_PATH) as f:
 # Configuration — loaded from alert_config.yaml
 # ---------------------------------------------------------------------------
 
-MONITOR_COLS = (
+NUMERIC_MONITOR_COLS = (
     _CONFIG["monitored_features"]["financial"]
     + _CONFIG["monitored_features"]["product"]
 )
+CATEGORICAL_MONITOR_COLS = _CONFIG["monitored_features"].get("categorical", [])
+MONITOR_COLS = NUMERIC_MONITOR_COLS + CATEGORICAL_MONITOR_COLS
 
 COLUMN_THRESHOLDS: Dict[str, float] = _CONFIG["column_thresholds"]["overrides"]
 DEFAULT_STATTEST_THRESHOLD: float = _CONFIG["column_thresholds"]["default"]
@@ -54,7 +55,6 @@ DEFAULT_STATTEST_THRESHOLD: float = _CONFIG["column_thresholds"]["default"]
 DRIFT_THRESHOLDS = _CONFIG["drift_thresholds"]
 OUTPUT_SHIFT_THRESHOLD: float = _CONFIG["output_shift_threshold"]
 
-# Notification config
 _SLACK_CFG = _CONFIG["notification"]["slack"]
 _EMAIL_CFG = _CONFIG["notification"]["email"]
 
@@ -77,7 +77,6 @@ def send_slack_alert(summary: Dict) -> None:
         logger.warning("Slack webhook URL not set — skipping Slack alert.")
         return
 
-    # Build severity indicator and color based on severity
     emoji = {"GREEN": "[OK]", "YELLOW": "[WARNING]", "RED": "[CRITICAL]"}.get(severity, "[INFO]")
 
     drifted = summary.get("drifted_columns", {})
@@ -158,7 +157,7 @@ def send_email_alert(summary: Dict) -> None:
         f"Time:             {summary['timestamp']}\n\n"
         f"Drifted columns:\n{drifted_lines}\n\n"
         f"This is an automated notification from the SavVio monitoring pipeline.\n"
-        f"On RED severity the modelpipeline_ci.yml workflow is auto-dispatched "
+        f"On RED severity the modelpipeline.yml workflow is auto-dispatched "
         f"to retrain and redeploy the model."
     )
 
@@ -192,7 +191,6 @@ def run_drift_detection(
     baseline = pd.read_csv(baseline_path)
     current  = current_data if isinstance(current_data, pd.DataFrame) else pd.read_csv(current_data)
 
-    # Only monitor columns present in both datasets; warn about any missing ones.
     cols = [c for c in MONITOR_COLS if c in baseline.columns and c in current.columns]
     missing = set(MONITOR_COLS) - set(cols)
     if missing:
@@ -205,18 +203,41 @@ def run_drift_detection(
     baseline = baseline[cols]
     current  = current[cols]
 
-    logger.info("Running Evidently drift report on %d columns...", len(cols))
+    numeric_cols     = [c for c in cols if c in NUMERIC_MONITOR_COLS]
+    categorical_cols = [c for c in cols if c in CATEGORICAL_MONITOR_COLS]
 
+    # Evidently treats integer-typed categorical columns (e.g. has_loan = 0/1)
+    # as numeric by default, which would push them through Wasserstein. Cast to
+    # string so chi-squared is applied to the actual category frequencies.
+    for c in categorical_cols:
+        baseline[c] = baseline[c].astype(str)
+        current[c]  = current[c].astype(str)
+
+    logger.info(
+        "Running Evidently drift report on %d columns (numeric=%d, categorical=%d)...",
+        len(cols), len(numeric_cols), len(categorical_cols),
+    )
+
+    # Numeric thresholds only apply to wasserstein. chi-squared on categoricals
+    # uses Evidently's default p-value cutoff (0.05).
     per_column_threshold = {
         col: COLUMN_THRESHOLDS.get(col, DEFAULT_STATTEST_THRESHOLD)
-        for col in cols
+        for col in numeric_cols
     }
 
-    report   = Report(metrics=[DataDriftPreset(
+    data_definition = DataDefinition(
+        numerical_columns=numeric_cols,
+        categorical_columns=categorical_cols,
+    )
+    baseline_ds = Dataset.from_pandas(baseline, data_definition=data_definition)
+    current_ds  = Dataset.from_pandas(current,  data_definition=data_definition)
+
+    report = Report(metrics=[DataDriftPreset(
         num_method="wasserstein",
+        cat_method="chisquare",
         per_column_threshold=per_column_threshold,
     )])
-    snapshot = report.run(reference_data=baseline, current_data=current)
+    snapshot = report.run(reference_data=baseline_ds, current_data=current_ds)
 
     # Extract summary counts from metric_results (Evidently 0.7.x API).
     share_drifted = 0.0
@@ -230,15 +251,25 @@ def run_drift_detection(
         elif vtype == "SingleValue" and "Value drift for" in val.display_name:
             col_name = val.display_name.replace("Value drift for ", "")
             params   = val.metric_value_location.metric.params
+            method   = params.get("method", "wasserstein")
+            score    = float(val.value)
+            threshold = params.get("threshold", DEFAULT_STATTEST_THRESHOLD)
+            # For distance metrics (wasserstein, ks, psi, jensenshannon) higher
+            # score = more drift, so we drift if score >= threshold.
+            # For chi-squared the score is a p-value, so we drift if p <= threshold.
+            if method in {"chisquare", "g_test"}:
+                drift_detected = score <= threshold
+            else:
+                drift_detected = score >= threshold
             drifted_cols[col_name] = {
-                "drift_score":    round(float(val.value), 4),
-                "drift_detected": float(val.value) >= params.get("threshold", DEFAULT_STATTEST_THRESHOLD),
-                "method":         params.get("method", "wasserstein"),
+                "drift_score":    round(score, 6),
+                "drift_detected": drift_detected,
+                "method":         method,
+                "threshold":      threshold,
             }
 
     n_total = len(cols)
 
-    # Determine severity.
     if share_drifted < DRIFT_THRESHOLDS["green"]:
         severity = "GREEN"
         action   = "No action needed — distributions stable."
@@ -259,7 +290,6 @@ def run_drift_detection(
         "drifted_columns": drifted_cols,
     }
 
-    # Persist outputs.
     os.makedirs(output_dir, exist_ok=True)
     timestamp    = datetime.now().strftime("%Y%m%d_%H%M%S")
     report_path  = os.path.join(output_dir, f"drift_report_{timestamp}.html")
@@ -279,11 +309,7 @@ def run_drift_detection(
             n_drifted, n_total, share_drifted * 100, action,
         )
 
-    # Send notifications — email-only (Slack disabled in alert_config.yaml).
-    # The send_slack_alert() function is retained but inert: it short-circuits
-    # at the top because notification.slack.enabled = false. The call below is
-    # commented out so we don't pay the function-call overhead on every run.
-    # send_slack_alert(summary)
+    # Email-only; flip notification.slack.enabled in alert_config.yaml to use Slack.
     send_email_alert(summary)
 
     return summary
@@ -349,9 +375,12 @@ if __name__ == "__main__":
 
     _sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "savviocore" / "src"))
 
-    _GCS_BASELINE = "gs://savvio-dev-mlflow-artifacts/monitoring/baseline_data.csv"
+    _GCS_BASELINE = os.getenv("DRIFT_BASELINE_GCS_URI")
+    if not _GCS_BASELINE:
+        print("DRIFT_BASELINE_GCS_URI is not set — skipping drift detection.")
+        print("(Set it to the gs:// URI of baseline_data.csv produced by generate_baseline.py.)")
+        raise SystemExit(0)
 
-    # Download baseline from GCS into a temp file.
     logger.info("Downloading baseline from GCS: %s", _GCS_BASELINE)
     _tmp_baseline = _tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
     _tmp_baseline.close()
@@ -365,7 +394,6 @@ if __name__ == "__main__":
         print(f"Details: {_dl.stderr.strip()}")
         raise SystemExit(0)
 
-    # Always pull current data live from the DB.
     logger.info("Collecting current production data from DB...")
     try:
         from collect_production_data import collect_df
@@ -385,6 +413,3 @@ if __name__ == "__main__":
     print(f"Severity:        {summary['severity']}")
     print(f"Action:          {summary['action']}")
     print(f"Columns drifted: {summary['n_drifted_cols']}/{summary['n_total_cols']}")
-
-    # for label, info in output_results.items():
-    #     print(f"  {label}: shift={info['shift']:.3f}, drifted={info['drifted']}")

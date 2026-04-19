@@ -1,10 +1,4 @@
-# =============================================================================
-# Grafana Auto-Provisioned Data Sources
-# =============================================================================
-# Automatically configures local Prometheus as the default data source
-# when Grafana container starts.
-# =============================================================================
-
+# Default Prometheus datasource for the local stack.
 apiVersion: 1
 
 datasources:

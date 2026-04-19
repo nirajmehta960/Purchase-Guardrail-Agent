@@ -2,9 +2,9 @@ terraform {
   required_version = ">= 1.14.7"
   required_providers {
     google = { source = "hashicorp/google"
-      version = "~> 7.25.0" }
+    version = "~> 7.25.0" }
     random = { source = "hashicorp/random"
-      version = "~> 3.8.1" }
+    version = "~> 3.8.1" }
   }
 }
 
@@ -16,12 +16,16 @@ provider "google" {
 data "google_project" "this" {}
 
 locals {
-  prefix = "savvio-${var.environment}"
+  prefix = "${var.name_prefix}-${var.environment}"
   labels = {
-    project     = "savvio"
+    project     = var.name_prefix
     environment = var.environment
     managed_by  = "terraform"
   }
+
+  api_service_name      = coalesce(var.api_service_name, "${local.prefix}-api")
+  frontend_service_name = coalesce(var.frontend_service_name, "${local.prefix}-frontend")
+  mlflow_service_name   = coalesce(var.mlflow_service_name, "${local.prefix}-mlflow")
 }
 
 # ---- APIs ----
@@ -42,7 +46,7 @@ resource "google_project_service" "apis" {
 # ---- Service Account ----
 resource "google_service_account" "cloud_run" {
   account_id   = "${local.prefix}-run-sa"
-  display_name = "SavVio ${var.environment} Cloud Run SA"
+  display_name = "${var.name_prefix} ${var.environment} Cloud Run SA"
   depends_on   = [google_project_service.apis]
 }
 
@@ -78,7 +82,7 @@ module "database" {
   tier                = var.db_tier
   database_name       = "${local.prefix}-db"
   user_name           = "${var.environment}-db-admin"
-  deletion_protection = true   # PROD: protect
+  deletion_protection = true
   labels              = local.labels
   depends_on          = [google_project_service.apis]
 }
@@ -105,7 +109,7 @@ module "dvc_bucket" {
   source        = "../../modules/storage"
   bucket_name   = "${local.prefix}-dvc-data"
   location      = var.region
-  force_destroy = false   # PROD: protect data
+  force_destroy = false
   labels        = local.labels
 }
 
@@ -129,21 +133,21 @@ module "docker_repo" {
 # ---- GCE VM (Airflow + ML Training) ----
 resource "google_compute_instance" "pipeline_vm" {
   name         = "${local.prefix}-pipeline-vm"
-  machine_type = "e2-standard-4"  # prod: more CPU for faster training
+  machine_type = var.pipeline_vm_machine_type
   zone         = var.zone
   labels       = local.labels
   tags         = ["ssh-access"]
 
   boot_disk {
     initialize_params {
-      image = "debian-cloud/debian-12"
-      size  = 100
+      image = var.pipeline_vm_disk_image
+      size  = var.pipeline_vm_disk_gb
     }
   }
 
   network_interface {
-    network = "default"
-    access_config {}  # ephemeral public IP for SSH
+    network = var.vpc_network
+    access_config {} # ephemeral public IP for SSH
   }
 
   service_account {
@@ -156,7 +160,7 @@ resource "google_compute_instance" "pipeline_vm" {
     apt-get update && apt-get install -y docker.io docker-compose-plugin git
     systemctl enable docker
     systemctl start docker
-    usermod -aG docker github-actions 2>/dev/null || true
+    usermod -aG docker ${var.ci_ssh_user} 2>/dev/null || true
   EOF
 
   depends_on = [google_project_service.apis]
@@ -164,50 +168,50 @@ resource "google_compute_instance" "pipeline_vm" {
 
 resource "google_compute_firewall" "allow_ssh" {
   name    = "${local.prefix}-allow-ssh"
-  network = "default"
+  network = var.vpc_network
 
   allow {
     protocol = "tcp"
     ports    = ["22"]
   }
 
-  source_ranges = ["0.0.0.0/0"]
+  source_ranges = var.ssh_source_ranges
   target_tags   = ["ssh-access"]
 }
 
 # Airflow apiserver on pipeline VM (port 8080).
 resource "google_compute_firewall" "allow_airflow_ui" {
   name    = "${local.prefix}-allow-airflow-ui"
-  network = "default"
+  network = var.vpc_network
 
   allow {
     protocol = "tcp"
     ports    = ["8080"]
   }
 
-  source_ranges = ["0.0.0.0/0"]
+  source_ranges = var.airflow_ui_source_ranges
   target_tags   = ["ssh-access"]
 }
 
 # ---- Cloud Run: API ----
 module "api" {
   source                = "../../modules/cloud_run"
-  service_name          = "${local.prefix}-api"
+  service_name          = local.api_service_name
   region                = var.region
   image                 = var.api_image
   port                  = 8080
   service_account_email = google_service_account.cloud_run.email
   cloud_sql_connection  = module.database.connection_name
-  public_access         = false   # PROD: require IAM auth
-  min_instances         = 1       # PROD: no cold starts
-  max_instances         = 5
-  cpu                   = "2"
-  memory                = "2Gi"
+  public_access         = var.api_public_access
+  min_instances         = var.api_min_instances
+  max_instances         = var.api_max_instances
+  cpu                   = var.api_cpu
+  memory                = var.api_memory
   labels                = local.labels
 
   env_vars = {
     ENVIRONMENT                    = var.environment
-    DB_ENV                         = "prod"
+    DB_ENV                         = var.environment
     DB_USER                        = module.database.user_name
     DB_NAME                        = module.database.database_name
     DB_HOST                        = "/cloudsql/${module.database.connection_name}"
@@ -230,17 +234,17 @@ module "api" {
 # ---- Cloud Run: Frontend ----
 module "frontend" {
   source                = "../../modules/cloud_run"
-  service_name          = "${local.prefix}-frontend"
+  service_name          = local.frontend_service_name
   region                = var.region
   image                 = var.frontend_image
-  port                  = 8501
+  port                  = var.frontend_port
   service_account_email = google_service_account.cloud_run.email
   cloud_sql_connection  = ""
-  public_access         = true    # PROD: user-facing
-  min_instances         = 1
-  max_instances         = 3
-  cpu                   = "1"
-  memory                = "512Mi"
+  public_access         = true
+  min_instances         = var.frontend_min_instances
+  max_instances         = var.frontend_max_instances
+  cpu                   = var.frontend_cpu
+  memory                = var.frontend_memory
   labels                = local.labels
 
   env_vars = {
@@ -254,17 +258,17 @@ module "frontend" {
 # ---- Cloud Run: MLflow ----
 module "mlflow" {
   source                = "../../modules/cloud_run"
-  service_name          = "${local.prefix}-mlflow"
+  service_name          = local.mlflow_service_name
   region                = var.region
   image                 = var.mlflow_image
   port                  = 5000
   service_account_email = google_service_account.cloud_run.email
   cloud_sql_connection  = module.database.connection_name
-  public_access         = false   # PROD: internal only
-  min_instances         = 1
-  max_instances         = 2
-  cpu                   = "1"
-  memory                = "1Gi"
+  public_access         = var.mlflow_public_access
+  min_instances         = var.mlflow_min_instances
+  max_instances         = var.mlflow_max_instances
+  cpu                   = var.mlflow_cpu
+  memory                = var.mlflow_memory
   labels                = local.labels
 
   env_vars = {

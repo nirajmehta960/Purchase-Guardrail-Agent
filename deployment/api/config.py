@@ -12,11 +12,9 @@ from dotenv import load_dotenv
 # Path Resolution
 # ---------------------------------------------------------------------------
 
-# deployment/api/config.py → deployment/ → SavVio/
 _DEPLOYMENT_DIR = Path(__file__).resolve().parent.parent
 _PROJECT_ROOT = _DEPLOYMENT_DIR.parent
 
-# Load environment variables from project and pipeline dirs
 load_dotenv(_PROJECT_ROOT / ".env")
 load_dotenv(_PROJECT_ROOT / "model_pipeline" / ".env")
 
@@ -46,7 +44,8 @@ class APIConfig:
     # Server
     # ---------------------------------------------------------------------------
     API_HOST = os.getenv("API_HOST", "0.0.0.0")
-    API_PORT = int(os.getenv("API_PORT", "3500"))
+    # Cloud Run injects PORT — prefer it if set, otherwise fall back to API_PORT.
+    API_PORT = int(os.getenv("PORT", os.getenv("API_PORT", "3500")))
 
     # CORS — Vite dev server (3000), Streamlit, etc.
     CORS_ORIGINS = os.getenv(

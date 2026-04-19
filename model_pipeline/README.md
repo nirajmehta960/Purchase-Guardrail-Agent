@@ -22,7 +22,8 @@ SavVio/
     │   ├── push_to_registry.py         # GCP Artifact Registry push script
     │   ├── data/
     │   │   ├── db_loader.py            # Reads from PostgreSQL
-    │   │   └── validate_data.py        # Schema validation
+    │   │   ├── validate_data.py        # Schema validation
+    │   │   └── bias_mitigation.py      # Pre-training rebalancing + synthetic cohort generation
     │   ├── features/
     │   │   ├── feature_engineering.py   # Orchestrator: build_training_data()
     │   │   ├── affordability.py         # 6 computed financial features (shared)
@@ -39,20 +40,24 @@ SavVio/
     │   │   ├── train.py                 # XGBoost, LightGBM, XGB-Linear
     │   │   ├── evaluate.py              # Metrics, visualizations, MLflow logging
     │   │   ├── optuna_tuner.py          # Bayesian hyperparameter optimization
-    │   │   └── sensitivity_analysis.py  # Optuna-based param importance analysis
+    │   │   ├── sensitivity_analysis.py  # Optuna-based hyperparameter importance analysis
+    │   │   ├── feature_importance.py    # SHAP TreeExplainer feature importance for the champion
+    │   │   └── savvio_model_wrapper.py  # MLflow PythonModel wrapper that bundles model + pipeline
     │   ├── guards/
-    │   │   └── bias_detection.py        # Fairlearn demographic parity + equalized odds
+    │   │   ├── bias_detection.py        # Fairlearn DPD/EOD + ThresholdOptimizer mitigation gate
+    │   │   └── bias_report.py           # Markdown bias-report generator
     │   └── llm/
     │       ├── __init__.py              # Package exports
-    │       ├── config.py               # LLM configuration (provider, keys, thresholds)
-    │       ├── llm_provider.py         # Provider abstraction (Mock / OpenAI / Gemini / Claude)
-    │       ├── intent_parser.py        # Role 1: NLU — intent detection + product extraction
-    │       ├── product_resolver.py     # pgvector similarity search for product resolution
-    │       ├── response_generator.py   # Role 2: conversational recommendation generation
-    │       ├── guardrails.py           # Output safety verification (6 code-level checks)
-    │       ├── prompt_engine.py         # Legacy interface (backward compatible facade)
+    │       ├── config.py                # LLM configuration (provider label, thresholds, prompt versions)
+    │       ├── llm_provider.py          # Provider abstraction (Mock / Vertex AI / OpenRouter)
+    │       ├── intent_parser.py         # Role 1: NLU — intent detection + product extraction (LLM + heuristic)
+    │       ├── product_resolver.py      # Postgres ILIKE + name-overlap + price-alignment scoring
+    │       ├── response_generator.py    # Role 2: conversational recommendation + template fallback
+    │       ├── guardrails.py            # Output safety check (G1 color contradiction; NeMo-ready)
+    │       ├── prompt_engine.py         # Legacy facade (backwards compatibility)
+    │       ├── inference_pipeline.py    # End-to-end LLM inference wiring used by the API
     │       └── prompts/
-    │           ├── system_prompt.py     # SavVio persona + critical response rules (v1.0)
+    │           ├── system_prompt.py     # SavVio persona + response rules (v1.0)
     │           ├── intent_prompt.py     # Intent extraction prompt template (v1.0)
     │           └── response_templates.py # GREEN/YELLOW/RED templates + rule explanations
     └── tests/
@@ -73,11 +78,11 @@ SavVio/
 | Bias Detection | Fairlearn | AIF360, TFMA | Block on severe disparity |
 | Bias Mitigation | Fairlearn, imbalanced-learn | scikit-learn threshold | Re-evaluate until gates pass |
 | Model Selection | MLflow UI | Custom dashboards | Bias mitigation gate must pass |
-| Sensitivity & Explainability | Optuna importance, Matplotlib | SHAP, LIME (planned) | Stability report required |
+| Sensitivity & Explainability | Optuna importance, SHAP TreeExplainer, Matplotlib | LIME (planned) | Stability report required |
 | Experiment Tracking | MLflow | Weights & Biases | Run metadata completeness |
 | Model Registry Push | GCP Artifact Registry, Vertex AI | MLflow Registry | Push only on all gates pass |
 | CI/CD Automation | GitHub Actions, Docker | Cloud Build, Jenkins | src ↔ test ↔ DB ↔ ML pipeline |
-| LLM Integration | OpenRouter (Gemini 2.0), sentence-transformers, pgvector | OpenAI, Claude | Guardrail checks (G1-G6) must pass |
+| LLM Integration | Vertex AI (`gemini-2.5-flash`), Postgres ILIKE resolver | OpenRouter (paid fallback) | G1 color-contradiction guardrail must pass |
 | Monitoring & Dashboard | Evidently, Arize | WhyLabs, GCP Monitoring | Drift + latency alerts |
 
 ---
@@ -135,7 +140,6 @@ SavVio/
 17. [Phase 17 — Operational Risks & Guardrails](#phase-17--operational-risks--guardrails)
 18. [Phase 18 — Dockerize Model Development](#phase-18--dockerize-model-development)
 19. [Model Candidates — Selection Rationale](#model-candidates--selection-rationale)
-20. [Deliverable Checklist](#deliverable-checklist)
 
 ---
 
@@ -568,8 +572,19 @@ Layer 2 takes the Layer 1 financial label and can **only downgrade** it by at mo
 - Configurable via `Config.SENSITIVITY_ANALYSIS_ENABLED`, `Config.SENSITIVITY_MIN_COMPLETED_TRIALS`, `Config.SENSITIVITY_TOP_K_PARAMS`
 - Requires minimum completed trials (default: 10) to produce meaningful analysis
 
-**Not Yet Implemented:**
-- SHAP global summary and local force plots
+**Implemented — SHAP Feature Importance (`feature_importance.py`):**
+- `shap.TreeExplainer` runs on the champion model (XGBoost / LightGBM, including
+  models wrapped by Fairlearn `ThresholdOptimizer`) using the held-out test set
+- Subsamples to `Config.EXPLAINABILITY_MAX_SAMPLES` rows (default 1000) to bound runtime
+- Produces global mean(|SHAP|) ranking, global bar chart, beeswarm summary, and
+  per-class importance JSON for multi-class targets (GREEN / YELLOW / RED)
+- Artifacts written to `reports/explainability/` and logged to the FINAL evaluation
+  MLflow run under the `explainability/` artifact path
+- Top features are also surfaced in the run's `evaluation_summary_*.md`
+- Configurable via `Config.EXPLAINABILITY_ENABLED`, `Config.EXPLAINABILITY_MAX_SAMPLES`,
+  `Config.EXPLAINABILITY_TOP_K_FEATURES`
+
+**Not Yet Implemented (optional follow-ups):**
 - LIME local explanations per class
 - Feature-level instability analysis across slices
 
@@ -578,8 +593,8 @@ Layer 2 takes the Layer 1 financial label and can **only downgrade** it by at mo
 | Tool | Purpose |
 |------|---------|
 | Optuna importance | Hyperparameter sensitivity ranking |
-| Matplotlib | Importance bar plots + scatter plots |
-| SHAP (planned) | Global and local feature contribution explanations |
+| SHAP TreeExplainer | Global + per-class feature importance for the champion model |
+| Matplotlib | Importance bar plots, scatter plots, SHAP beeswarm |
 | LIME (planned) | Local interpretable explanations |
 
 ---
@@ -684,7 +699,7 @@ GitHub Actions / Cloud Build  [Dockerized]
         ├── 7. Rollback check
         │       └── worse than previous? → BLOCK + alert
         ├── 8. Registry push (only if all gates pass)
-        └── 9. Slack / email notification
+        └── 9. Email notification
 ```
 
 **Gate Thresholds (configurable):**
@@ -698,11 +713,11 @@ GitHub Actions / Cloud Build  [Dockerized]
 
 **Tasks:**
 - Write Dockerfile to containerize full training and validation environment
-- Configure GitHub Actions workflow (`.github/workflows/model_ci.yml`)
+- Configure GitHub Actions workflow (`.github/workflows/modelpipeline_ci.yml`)
 - Implement automated validation gate
 - Implement automated bias gate
 - Implement rollback mechanism
-- Set up Slack/email notifications
+- Set up email notifications
 - Test full end-to-end pipeline in CI environment
 
 **Tools:**
@@ -712,13 +727,13 @@ GitHub Actions / Cloud Build  [Dockerized]
 | GitHub Actions | CI orchestration |
 | Docker | Full pipeline containerization |
 | Cloud Build | GCP-native CI/CD alternative |
-| Slack / Email | Failure and completion notifications |
+| Email (SMTP) | Failure and completion notifications |
 
 ---
 
 ### Phase 14 — LLM Integration
 
-**Objective:** Integrate an LLM into SavVio for two roles: (1) understanding natural language user queries and extracting product references, and (2) generating conversational purchase recommendations grounded in the deterministic engine's authoritative output.
+**Objective:** Integrate an LLM for two roles: (1) understanding natural-language purchase queries and extracting a product reference, and (2) generating a conversational, fiduciary-grounded recommendation that respects the deterministic engine's authoritative GREEN/YELLOW/RED verdict.
 
 **Architecture:**
 
@@ -729,34 +744,31 @@ User Query ("Should I buy this $1,500 laptop?")
          │
          ▼
 ┌─── LLM Role 1: Intent Parser ───┐
-│  Parse intent → purchase_query   │  Hybrid LLM + Regex Logic
+│  Parse intent → purchase_query   │  LLM (JSON) + heuristic fallback
 │  Extract product → "laptop"      │
 └──────────────┬───────────────────┘
                │
                ▼
 ┌─── Product Resolver ────────────┐
-│  Embed query (pgvector)         │  Cosine similarity search
-│  Match → product_id: 8214        │  against products catalog
+│  Postgres ILIKE on products     │  Name-overlap + price-alignment
+│  Best fuzzy match → product_id  │  scoring; rejects far-off prices
 └──────────────┬──────────────────┘
                │
                ▼
     [API Layer runs Engines + ML]
-    (Financial rules + XGBoost Score)
+    (Financial rules + ML confidence)
                │
                ▼
 ┌─── LLM Role 2: Response Gen ───┐
 │  Combine Engine + ML + Context  │  Fiduciary-grounded
-│  → Conversational recommend     │  conversational advice
+│  → Conversational recommend     │  4-section response
 └──────────────┬─────────────────┘
                │
                ▼
-┌─── Fiduciary Guardrails ───────┐
-│  G1: Color contradiction        │  Ensures LLM never
-│  G2: Hallucinated figures        │  violates the authoritative
-│  G3: Out-of-scope advice         │  deterministic core.
-│  G4: Internal leakage            │
-│  G5: Tone mismatch               │
-│  G6: Length check                │
+┌─── Output Guardrails ──────────┐
+│  G1 — Color contradiction       │  Heuristic check that the LLM
+│       (deterministic verdict    │  text does not contradict the
+│        is never overridden)     │  authoritative color.
 └────────────────────────────────┘
                │
                ▼
@@ -764,76 +776,73 @@ User Query ("Should I buy this $1,500 laptop?")
 ```
 
 **Source Files:**
-- `llm/README.md` — Detailed LLM sub-package documentation
-- `llm/llm_provider.py` — Strategy-pattern abstraction: `OpenRouterProvider` (Hub), `GeminiProvider`, `MockProvider`
-- `llm/intent_parser.py` — Hybrid intent detection + extraction (LLM + Regex fallbacks)
-- `llm/product_resolver.py` — pgvector cosine similarity search against `products` catalog
-- `llm/response_generator.py` — Multi-stage conversational generation grounded in financial context
-- `llm/guardrails.py` — 6 code-level safety checks ensuring fiduciary compliance
+- `llm/README.md` — Detailed sub-package documentation
+- `llm/config.py` — `LLMConfig`: provider label, embedding model, guardrail thresholds, prompt versions
+- `llm/llm_provider.py` — Provider abstraction: `BaseLLMProvider`, `MockProvider`, `OpenRouterProvider`, `VertexAIProvider`
+- `llm/intent_parser.py` — `parse_user_input` (LLM JSON + regex/heuristic fallback), `extract_price_hint`, `clean_product_reference`
+- `llm/product_resolver.py` — `resolve_product` (Postgres ILIKE + name-overlap + price-alignment scoring) and `resolve_product_by_id`
+- `llm/response_generator.py` — `generate_response` (LLM 4-section explanation) and `_generate_from_template` (deterministic fallback)
+- `llm/guardrails.py` — `check_response` (G1 color-contradiction heuristic; NeMo-ready interface)
+- `llm/prompt_engine.py` — Backwards-compatible facade for older callers
+- `llm/inference_pipeline.py` — End-to-end LLM inference orchestration used by the API
+- `llm/prompts/` — Versioned prompt templates (`system_prompt.py`, `intent_prompt.py`, `response_templates.py`, all v1.0)
 
-**Provider Configuration:**
+**Active Provider — Vertex AI (GCP-native):**
 
-| Provider | Env Var | Package | Model Default |
-|----------|---------|---------|---------------|
-| Mock (default) | `LLM_PROVIDER=mock` | None | Template-based |
-| Google Gemini | `LLM_PROVIDER=gemini` | `google-genai` | `gemini-2.5-flash` |
-| OpenAI | `LLM_PROVIDER=openai` | `openai` | `gpt-4.1` |
-| Anthropic Claude | `LLM_PROVIDER=claude` | `anthropic` | `claude-4.5-sonnet` |
+`llm.llm_provider.get_provider()` is environment-driven:
+
+| Condition | Provider returned | Notes |
+|-----------|-------------------|-------|
+| `VERTEX_PROJECT` / `GCP_PROJECT_ID` / `GOOGLE_CLOUD_PROJECT` set | `VertexAIProvider` | Default model: `gemini-2.5-flash`, default region: `us-east1`. Auth via Application Default Credentials. No API key needed (IAM via `roles/aiplatform.user`). |
+| Otherwise | `MockProvider` | Deterministic template stub for tests / no-key environments. |
+
+`OpenRouterProvider` (using `google/gemini-2.5-flash`) is preserved in the module as a paid fallback if `OPEN_ROUTER_API_KEY` is set and `get_provider()` is overridden.
 
 **Product Resolution:**
-- Uses the same embedding model (`all-MiniLM-L6-v2`, 384-dim) as the data pipeline's `vector_embed.py`
-- Searches `product_embeddings` table via pgvector cosine similarity
-- Configurable similarity threshold (default: 0.3) and top-k results (default: 5)
 
-**Guardrail Checks (6):**
+The current resolver does **not** depend on pgvector or sentence-transformer embeddings — it uses Postgres `ILIKE` with a combined name-overlap + price-alignment score:
+
+- ILIKE on `product_name` (top-8 by `rating_number`) plus token-by-token retries for low-recall queries
+- Per-candidate score = `0.55 · name_overlap + 0.45 · price_score` when a price hint is present, else pure name overlap
+- Returns `None` when the best candidate's price is more than ±38% away from the user's stated price, so the caller can fall back to a hypothetical evaluation
+- `resolve_product_by_id` provides exact lookup by `product_id`
+
+**Output Guardrails (current):**
 
 | Check | What It Catches |
 |-------|-----------------|
-| **G1 — Color contradiction** | Responses that encourage a purchase when the engine labeled it RED. |
-| **G2 — Hallucinated figures** | Any price or income figures mentioned that don't match the input profile. |
-| **G3 — Out-of-scope advice** | Refuses to give investment, tax, or legal advice. |
-| **G4 — Internal leakage** | Filters out mentions of internal rules (e.g., `RED 1`) or technical terms (`pgvector`). |
-| **G5 — Tone mismatch** | Ensures empathy for RED/YELLOW and objective support for GREEN. |
-| **G6 — Length check** | Strict word count limits to keep conversation concise and mobile-friendly. |
+| **G1 — Color contradiction** | Flags LLM text that contradicts the authoritative color: e.g. "do not buy / don't buy / cannot afford / avoid this purchase" on a GREEN, or "go ahead and buy / safe to buy / definitely buy" on a RED. YELLOW is flagged only when the text contains both extremes at once. |
 
-**Provider Hub:**
-SavVio uses **OpenRouter** as its primary production hub, providing access to `gemini-2.0-flash` with high reliability and zero-SDK dependency. Direct SDK providers (`google-genai`, `openai`, `anthropic`) are maintained as high-performance fallbacks.
+The `LLMConfig.GUARDRAILS_PROVIDER = "code"` switch leaves a NeMo-ready interface in place; integrating the full NVIDIA NeMo Guardrails stack and additional checks (hallucinated figures, out-of-scope advice, internal leakage, length cap) is deferred to the deployment phase.
 
 **Tasks:**
-- [x] Design provider-agnostic LLM abstraction (strategy pattern)
-- [x] Implement MockProvider with template-based responses
-- [x] Implement GeminiProvider using `google-genai` SDK (v1.69+)
-- [x] Implement OpenAI and Claude provider stubs
-- [x] Build intent parser with regex (mock) and LLM-based extraction
-- [x] Build product resolver using pgvector similarity search
-- [x] Build response generator with template fallbacks
-- [x] Implement 6 code-level guardrail checks
-- [x] Design system prompt with 5 critical rules
-- [x] Design intent extraction prompt template
-- [x] Create GREEN/YELLOW/RED response templates with rule explanations
-- [x] Version-control all prompt templates (v1.0)
-- [x] Preserve backward compatibility via `prompt_engine.py` facade
-- [x] Verify with Gemini API (12/12 checks passed)
-- [x] Write unit tests (77 tests, all passing)
-- [ ] Integrate NeMo Guardrails (deferred to deployment phase)
+- [x] Provider-agnostic abstraction (`BaseLLMProvider` strategy pattern)
+- [x] `MockProvider` deterministic stub for tests / no-key environments
+- [x] `VertexAIProvider` (GCP-native, ADC auth, `gemini-2.5-flash`) as the active production provider
+- [x] `OpenRouterProvider` retained as a paid fallback path
+- [x] Intent parser combining structured LLM JSON output with regex/heuristic fallbacks
+- [x] Product resolver: Postgres ILIKE + price-alignment scoring + by-ID lookup
+- [x] Response generator: prompt-driven 4-section explanation with deterministic template fallback on LLM failure / short output
+- [x] G1 color-contradiction guardrail (NeMo-ready interface)
+- [x] System prompt + intent prompt + response templates, all versioned (v1.0)
+- [x] Backwards-compat facade preserved in `prompt_engine.py`
+- [x] Unit tests (`tests/llm/` — 100 tests, all passing)
+- [ ] Integrate NeMo Guardrails + additional output checks (deployment phase)
 
 **Verification:**
-```bash
-# Run unit tests (no API calls, mock provider)
-PYTHONPATH=src python -m pytest tests/llm/ -v
 
-# Run live Gemini verification (requires GEMINI_API_KEY in .env)
-python verify_llm.py
+```bash
+PYTHONPATH=src python -m pytest tests/llm/ -v
 ```
 
 **Tools:**
 
 | Tool | Purpose |
 |------|---------|
-| Google Gemini (`google-genai`) | Primary LLM provider for intent parsing and response generation |
-| sentence-transformers | Product text embedding for pgvector search |
-| pgvector | Vector similarity search for product resolution |
-| Code-level guardrails | 6 safety checks (NeMo-ready interface for future integration) |
+| Vertex AI (`gemini-2.5-flash`) | Primary LLM for intent parsing and response generation (GCP-native, no API key) |
+| OpenRouter (`google/gemini-2.5-flash`) | Optional paid fallback path |
+| Postgres `ILIKE` + custom scorer | Product resolution by fuzzy name + price alignment |
+| Code-level guardrail (G1) | Color-contradiction safety check (NeMo-ready interface) |
 
 ---
 
@@ -870,24 +879,33 @@ python verify_llm.py
 pytest model_pipeline/tests
 ```
 
+Current status: **307 passed, 10 skipped** across the test tree (LLM suite included).
+
 **Test coverage:**
 
 | Test File | What It Tests |
 |-----------|--------------|
-| `data/test_data_loader.py` | Data loading from PostgreSQL |
+| `data/test_data_loader.py` | Data loading from PostgreSQL (`load_financial_profiles`, `load_products`, `load_reviews`, `load_all`) |
 | `data/test_validate_data.py` | Schema and data validation checks |
 | `features/test_feature_engineering.py` | End-to-end feature engineering orchestration |
 | `features/test_financial_features.py` | 6 financial feature computation |
 | `features/test_product_features.py` | 7 product feature computation |
 | `features/test_review_features.py` | 6 review feature computation |
-| `features/test_feature_preprocessing.py` | FeaturePipeline: imputation, encoding, scaling |
-| `features/test_affordability_preprocessing_consistency.py` | Cross-module consistency checks |
-| `deterministic_engine/test_financial_engine.py` | Layer 1: all 4 RED rules, all 5 YELLOW rules, GREEN default, edge cases |
+| `features/test_feature_preprocessing.py` | `FeaturePipeline` — imputation, encoding, scaling, dropping |
+| `features/test_affordability_preprocessing_consistency.py` | Cross-module consistency between training-time and inference-time affordability |
+| `deterministic_engine/test_financial_engine.py` | Layer 1: 4 RED rules, 5 YELLOW rules, GREEN default, edge cases |
 | `deterministic_engine/test_downgrade_engine.py` | Layer 2: product rules PR1–PR3, review rules RR1–RR3, downgrade logic |
 | `deterministic_engine/test_labeling_pipeline.py` | Layer 1 + Layer 2 orchestration |
 | `core_models/test_evaluate.py` | Metric computation, multi-class AUC, visualization generation |
 | `core_models/test_optuna_tuner.py` | Study creation, objective functions, timeout, unsupported model error |
-| `guards/test_bias_detection.py` | Fairlearn bias metrics (demographic parity, equalized odds) |
+| `guards/test_bias_detection.py` | Fairlearn bias metrics — demographic parity, equalized odds, mitigation gating |
+| `test_bias_mitigation.py` | Pre-training rebalancing + synthetic-cohort generation |
+| `test_sensitivity_analysis.py` | Optuna-based hyperparameter sensitivity reporting |
+| `llm/test_llm_provider.py` | `BaseLLMProvider`, `MockProvider`, env-driven `get_provider()`, `VertexAIProvider` construction |
+| `llm/test_intent_parser.py` | Heuristic patterns + LLM-driven path with stub providers; `extract_price_hint` / `clean_product_reference` |
+| `llm/test_product_resolver.py` | ILIKE-based `resolve_product` + scoring helpers + `resolve_product_by_id` (mocked engine) |
+| `llm/test_response_generator.py` | Template fallback, color-tone branches, LLM-driven path with stub providers |
+| `llm/test_guardrails.py` | G1 color-contradiction checks for GREEN / RED / YELLOW |
 
 ---
 
@@ -936,43 +954,3 @@ Two additional algorithms were evaluated during planning but excluded:
 - **Startup Sequencing & Healthchecks:** Implement strict `depends_on` conditions with robust healthchecks to ensure services like RustFS and PostgreSQL are fully ready before the database logic or MLflow tracking API initiates.
 - **Environment & Port Management:** Distribute dozens of environment variables across containers and carefully map ports (e.g., binding Postgres to port 5433 to prevent conflicts with the separate data pipeline's database).
 - **Volume Mounting for Local Dev:** Set up pervasive volume mounts (`src`, `models`, `data`, `savviocore`, `reports`) for the `ml-trainer` container to sync local code and artifacts while maintaining connectivity to isolated tracking and storage APIs.
-
-
-### Deliverable Checklist
-
-### Professor Guidelines
-
-- [x] Data loaded from versioned pipeline outputs (GCS via DVC)
-- [x] Baseline models trained and compared
-- [x] Hyperparameter tuning documented (Optuna — Bayesian optimization)
-- [x] Validation metrics computed on hold-out set
-- [x] Visualizations produced: confusion matrix, ROC curve, PR curve, calibration curve
-- [x] Experiments tracked in MLflow with full artifact logging
-- [x] Sensitivity analysis completed (Optuna-based hyperparameter importance)
-- [ ] SHAP / LIME explainability analysis
-- [x] Post-training slice-based bias analysis completed (Fairlearn)
-- [x] Bias mitigation steps documented where disparities found
-- [x] Model selection performed after bias checking
-- [x] Best model pushed to MLflow Registry and GCP Artifact Registry
-- [x] CI/CD pipeline: trigger → train → validate → bias → push
-- [x] Automated validation gate implemented
-- [x] Automated bias detection gate implemented
-- [x] Notifications and alerts configured
-- [x] Rollback mechanism implemented
-- [x] Full pipeline containerized in Docker
-
-### SavVio-Specific
-
-- [x] Data source confirmed: PostgreSQL via data pipeline
-- [x] Deterministic engine implemented for Green/Yellow/Red logic (compound AND rules, correlation groups)
-- [x] ML model confirmed as confidence layer only — does not override engine
-- [x] Optuna configured for hyperparameter search (Bayesian + pruning)
-- [x] Bias detection confirmed as post-training (on validation set)
-- [x] MLflow experiment tracking fully implemented
-- [x] CI/CD connects src ↔ test ↔ DB ↔ ML (Dockerized)
-- [x] LLM integration implemented (dual-role: intent parsing + response generation)
-- [x] Prompt templates version-controlled (system_prompt v1.0, intent_prompt v1.0, response_templates v1.0)
-- [x] Gemini provider verified (12/12 live API checks passed)
-- [x] 6 code-level guardrails implemented and tested (77 unit tests passing)
-- [x] NeMo-ready Guardrails abstraction (deferred full NeMo to production config)
-- [ ] Monitoring and dashboard deployed

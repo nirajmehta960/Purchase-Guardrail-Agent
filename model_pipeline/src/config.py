@@ -118,6 +118,15 @@ class Config:
     SENSITIVITY_TOP_K_PARAMS = 5
 
     # ---------------------------------------------------------------------------
+    # Feature Importance / Explainability (SHAP)
+    # ---------------------------------------------------------------------------
+    # SHAP is run only on the held-out test set (or a subsample) to bound runtime.
+    # TreeExplainer handles XGBoost / LightGBM natively and is exact + fast.
+    EXPLAINABILITY_ENABLED = True
+    EXPLAINABILITY_MAX_SAMPLES = 1000        # cap rows passed to SHAP
+    EXPLAINABILITY_TOP_K_FEATURES = 15       # bars shown in summary plot
+
+    # ---------------------------------------------------------------------------
     # Model Registry
     # ---------------------------------------------------------------------------
     REGISTERED_MODEL_NAME = "SavVio_Predictor"

@@ -8,7 +8,17 @@ Covers:
 """
 import sys
 from unittest.mock import MagicMock
-sys.modules['sqlalchemy'] = MagicMock()
+
+# Only stub sqlalchemy if the real package is not installed in this env.
+# Unconditionally overwriting sys.modules['sqlalchemy'] with a MagicMock
+# breaks any test that runs after this file in the same session, because
+# downstream imports like `from sqlalchemy.future import ...` will fail
+# ('sqlalchemy is not a package').
+try:
+    import sqlalchemy  # noqa: F401
+except ImportError:
+    sys.modules['sqlalchemy'] = MagicMock()
+
 import os
 import types
 

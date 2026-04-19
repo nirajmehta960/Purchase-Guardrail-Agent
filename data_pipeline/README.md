@@ -93,7 +93,7 @@
 | Bias Detection       | Fairlearn                     | Custom Pandas slicing, AIF360           | PythonOperator                 |
 | Orchestration        | Apache Airflow                | —                                       | Native                         |
 | Testing              | pytest                        | unittest                                | —                              |
-| Monitoring           | Python logging, Airflow UI    | GCP Cloud Logging, Grafana              | Native                         |
+| Monitoring           | Python logging, Airflow UI    | GCP Cloud Logging, Grafana              | Native + EmailOperator         |
 | Optimization         | Airflow Gantt                 | cProfile                                | Native                         |
 
 ---
@@ -140,20 +140,26 @@ Establish the foundational project structure, dependencies, and development envi
    │   ├── requirements.txt       # Python dependencies (or use repo root requirements.txt)
    │   ├── config/                # Configuration (Airflow, Token, GCP)
    │   ├── logs/                  # Pipeline execution logs
+   │   ├── docker-compose.yaml    # Airflow + Postgres + Redis stack
+   │   ├── Dockerfile             # Custom Airflow image (apache/airflow:3.1.7)
    │   ├── tests/                 # Unit tests (pytest)
+   │   │   ├── conftest.py
+   │   │   ├── test_requirements.txt
+   │   │   ├── test_data_pipeline_airflow.py
+   │   │   ├── test_incremental.py
    │   │   ├── ingestion/
    │   │   ├── preprocess/
    │   │   ├── features/
    │   │   ├── validation/
    │   │   ├── database/
-   │   │   ├── bias/
-   │   │   └── test_data_pipeline_airflow.py
+   │   │   └── bias/
    │   └── dags/                  # Airflow DAG and pipeline code
    │       ├── data_pipeline_airflow.py   # Main DAG definition
    │       ├── data/
-   │       │   ├── raw/           # Raw data (financial(csv), product(jsonl), review(jsonl))
-   │       │   ├── processed/     # Preprocessed outputs
-   │       │   ├── features/      # Feature-engineered outputs
+   │       │   ├── raw/           # Raw data (financial_data.csv, product_data.jsonl, review_data.jsonl)
+   │       │   ├── processed/     # Preprocessed outputs (*_preprocessed.{csv|jsonl})
+   │       │   ├── features/      # Feature-engineered outputs (*_featured.{csv|jsonl})
+   │       │   ├── quarantine/    # Quarantined anomalies (auto-created at runtime)
    │       │   ├── raw.dvc        # DVC pointer for raw (versioned in Git)
    │       │   ├── processed.dvc  # DVC pointer for processed
    │       │   └── features.dvc   # DVC pointer for features
@@ -177,26 +183,22 @@ Establish the foundational project structure, dependencies, and development envi
    │           │   ├── product_review_features.py
    │           │   ├── run_features.py
    │           │   └── utils.py
-   │           ├── validation/   # Schema, stats, anomaly checks (Great Expectations)
+   │           ├── validation/    # Schema, stats, anomaly checks (Great Expectations)
    │           │   ├── __init__.py
-   │           │   ├── anomaly/
-   │           │   │   ├── __init__.py
-   │           │   │   ├── anomaly_validator.py
-   │           │   │   └── detectors.py
    │           │   ├── run_validation.py
    │           │   ├── validate/
    │           │   │   ├── __init__.py
-   │           │   │   ├── feature_validator.py
-   │           │   │   ├── processed_validator.py
-   │           │   │   └── raw_validator.py
-   │           │   └── validation_config.py
+   │           │   │   ├── raw_validator.py
+   │           │   │   └── processed_validator.py
+   │           │   └── anomaly/
+   │           │       ├── __init__.py
+   │           │       ├── anomaly_validator.py
+   │           │       └── detectors.py
    │           ├── database/      # PostgreSQL and pgvector load
    │           │   ├── __init__.py
-   │           │   ├── db_connection.py
-   │           │   ├── db_schema.py
    │           │   ├── run_database.py
-   │           │   ├── upload_to_db.py
-   │           │   └── vector_embed.py
+   │           │   ├── upload_to_db.py     # SQLAlchemy bulk loaders
+   │           │   └── vector_embed.py     # SentenceTransformer + pgvector inserts
    │           └── bias/          # Bias detection (data slicing)
    │               ├── __init__.py
    │               ├── financial_bias.py
@@ -206,6 +208,8 @@ Establish the foundational project structure, dependencies, and development envi
    │               └── utils.py
    ```
 
+   > **Note:** Database connection helpers (`db_connection.py`, `db_schema.py`) and the validation expectation suites (`validation_config.py`, `feature_validator.py`) live in the shared `savviocore/` package at the repo root, not under `data_pipeline/dags/src/`. Both packages are mounted into the Airflow image via `docker-compose.yaml`.
+
 2. **Configure Docker environment for Airflow**
    - Use official Apache Airflow Docker Compose setup 
    - Follow SETUP_AND_RUN
@@ -214,7 +218,8 @@ Establish the foundational project structure, dependencies, and development envi
    - Git repository setup
    - Create `.gitignore` (exclude data files, logs, credentials, `__pycache__`)
    - Initialize DVC: `dvc init`
-   - Configure DVC remote: `dvc remote add -d gcs gs://savvio-data-bucket`
+   - Configure DVC remote: `dvc remote add -d gcs gs://savvio-data-bucket/dvcstore`
+   - Authenticate DVC against GCS via the standard `GOOGLE_APPLICATION_CREDENTIALS` env var (see Phase 4 for details). `.dvc/config` intentionally does **not** hard-code a `credentialpath`, so the repo is portable across machines and CI.
 
 4. **Configure ENV and database connections**
    - Copy `.env.example` to `.env`
@@ -328,12 +333,13 @@ Download data from external sources and load it into the pipeline system in a co
    - Fetches and stores raw data.
 
 4. **Store raw data in original format**
-   - Save to `data/raw/financial.csv`
-   - Save to `data/raw/products.jsonl`
-   - Save to `data/raw/reviews.jsonl`
+   - Save to `data/raw/financial_data.csv`
+   - Save to `data/raw/product_data.jsonl`
+   - Save to `data/raw/review_data.jsonl`
 
 5. **Log ingestion metadata**
-   - Timestamp, record counts, checksums, errors.
+   - Timestamp, record counts, columns, errors (logged via `src/utils.py` shared logger).
+   - Last verified end-to-end run: **32,424 financial / 94,327 products / 2,128,605 reviews** loaded from GCS in ~20 s.
 
 ---
 
@@ -345,7 +351,20 @@ Version control the raw ingested data to ensure reproducibility and enable rollb
 
 ### Steps
 
-1. **Add raw data to DVC tracking** (run from `data_pipeline/dags/data`)
+1. **Authenticate to the GCS DVC remote** (one-time per machine)
+
+   `.dvc/config` no longer hard-codes a `credentialpath` (that path was a stale, machine-specific absolute path). DVC reads Google credentials from the standard `GOOGLE_APPLICATION_CREDENTIALS` env var, so the config is portable across machines and CI.
+
+   ```bash
+   export GOOGLE_APPLICATION_CREDENTIALS="$(pwd)/data_pipeline/config/savvio-gcp-key.json"
+   ```
+
+   Per-machine override (without polluting the shared config):
+   ```bash
+   dvc remote modify --local gcs credentialpath /abs/path/to/key.json
+   ```
+
+2. **Add raw data to DVC tracking** (run from `data_pipeline/dags/data`)
 
    ```bash
    cd data_pipeline/dags/data
@@ -354,20 +373,26 @@ Version control the raw ingested data to ensure reproducibility and enable rollb
 
    This creates `raw.dvc` (and updates `.gitignore` for the raw directory).
 
-2. **Commit .dvc files to Git**
+3. **Commit .dvc files to Git**
 
    ```bash
    git add raw.dvc
    git commit -m "Add raw data v1.0"
    ```
 
-3. **Push data to remote storage**
+4. **Push data to remote storage**
 
    ```bash
    dvc push
    ```
 
-4. **Tag the version**
+5. **Pull data on a fresh checkout**
+
+   ```bash
+   dvc pull            # restores raw/processed/features into data_pipeline/dags/data/
+   ```
+
+6. **Tag the version**
    ```bash
    git tag -a "data-raw-v1.0" -m "Initial raw data ingestion"
    ```
@@ -520,13 +545,17 @@ Detect data anomalies (outliers, suspicious patterns) and trigger alerts when is
 
 3. **Configure alerts**
 
-   | Severity | Condition      | Action       |
-   | -------- | -------------- | ------------ |
-   | INFO     | Minor outliers | Log only     |
-   | WARNING  | >5% issues     | Email alert  |
-   | CRITICAL | Data corrupted | Email + halt |
+   | Severity | Condition      | Action          |
+   | -------- | -------------- | --------------- |
+   | INFO     | Minor outliers | Log only        |
+   | WARNING  | >5% issues     | Email alert     |
+   | CRITICAL | Data corrupted | Email + halt    |
+
+   - Implementation: `EmailOperator` per stage in `dags/data_pipeline_airflow.py`. SMTP credentials are read from `SMTP_USER` / `SMTP_PASSWORD` in `.env` and wired into the Airflow connection `smtp_default` automatically by the docker-compose env (`AIRFLOW_CONN_SMTP_DEFAULT`).
+   - Tier-1 (raw) anomaly checks log INFO only and never halt the DAG; Tier-2 (featured, pre-DB) checks gate the DB load and trigger the email alert on WARNING/CRITICAL.
 
 4. **Quarantine suspicious records**
+   - Suspicious records are written to `data/quarantine/<dataset>_anomalies_<timestamp>.json` (one JSON-lines file per detection run) by `dags/src/validation/anomaly/anomaly_validator.py::_quarantine_records`.
 
 
 ---
@@ -581,9 +610,14 @@ Clean, transform, and standardize validated data into a consistent format ready 
    - Operations performed entirely out-of-core utilizing `/tmp` disk spilling to stay within strict Docker RAM limits.
 
 4. **Save processed data**
-   - `data/processed/financial_processed.csv`
-   - `data/processed/products_processed.csv`
-   - `data/processed/reviews_processed.csv`
+   - `data/processed/financial_preprocessed.csv`
+   - `data/processed/product_preprocessed.jsonl`
+   - `data/processed/review_preprocessed.jsonl`
+
+   Last verified end-to-end run:
+   - Financial: 32,424 rows (no records dropped)
+   - Products: 94,327 rows; **47,601 missing prices imputed** (title-group median → category median → global median fallback)
+   - Reviews: 2,128,605 → **2,105,948 rows** (22,657 duplicates removed by `(asin, user_id)`); `timestamp` and `images` dropped as non-useful for embeddings/sentiment
 
 
 ---
@@ -680,10 +714,10 @@ Create meaningful features within each data track — financial health features 
    | `monthly_expense_burden_ratio` | (expenses + emi) / income  | Spending pattern                  |
    | `emergency_fund_months`        | savings / (expenses + emi) | Safety buffer in months           |
 
-2. **Product quality features** (`review_features.py`)
+2. **Product quality features** (`product_review_features.py`)
 
-   Input: `data/processed/review_preprocessed.jsonl`
-   Output: `data/features/product_featured.jsonl` (one row per product)
+   Input: `data/processed/review_preprocessed.jsonl`, `data/processed/product_preprocessed.jsonl`
+   Output: `data/features/product_featured.jsonl` (products enriched with `rating_variance`), `data/features/review_featured.jsonl` (pass-through copy)
 
    | Feature           | Formula                 | Purpose                 |
    | ----------------- | ----------------------- | ----------------------- |
@@ -805,47 +839,45 @@ Load processed data, engineered features, and product embeddings into PostgreSQL
 
 2. **Define database schema (tables)**
 
-   - PostgreSQL Tables: Schema defined in `src/database/db_schema.py`
-
-   - pgvector Table: For embeddings - defined in `src/database/vector_loader.py`
+   - PostgreSQL Tables: Schema defined in `savviocore/database/db_schema.py` (shared with `model_pipeline`).
+   - pgvector Tables: Created on-demand by `src/database/vector_embed.py::_ensure_embedding_tables` using the `vector` extension (auto-created via `ensure_pgvector(engine)`).
 
 3. **Implement data loaders**
 
-   **postgres_loader.py:**
-   - `load_financial_profiles(df, engine)` — Load financial profiles with features
-   - `load_products(products_path, rating_variance_path, engine)` — Load products with rating_variance merged
-   - `load_reviews(df, engine)` — Load individual reviews
-   - `get_engine(env)` — Get connection based on environment
+   **`src/database/upload_to_db.py`** (pandas → SQLAlchemy bulk load):
+   - `load_financial(engine, path)` — Loads `data/features/financial_featured.csv` into `financial_profiles`.
+   - `load_products(engine, path)` — Loads `data/features/product_featured.jsonl` (rating_variance already merged in Phase 11) into `products`.
+   - `load_reviews(engine, path)` — Loads `data/features/review_featured.jsonl` into `reviews`.
+   - `load_all(engine, data_dir)` — Convenience wrapper that runs all three loaders.
 
-   **vector_loader.py:**
-   - `generate_embeddings(texts, model)` — Create embeddings from product descriptions
-   - `load_embeddings(product_ids, embeddings, engine)` — Store in pgvector
+   **`src/database/vector_embed.py`** (embeddings → pgvector):
+   - `load_model()` — Loads `sentence-transformers/all-MiniLM-L6-v2` (384-dim).
+   - `embed_products(engine, path, model)` — Embeds product titles + descriptions, writes to `product_embeddings`.
+   - `embed_reviews(engine, path, model)` — Embeds review text, writes to `review_embeddings`.
+
+   **`savviocore/database/db_connection.py`** (shared connection helpers):
+   - `get_engine()` — Reads `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`, `DB_NAME` from env and returns a SQLAlchemy `Engine`.
+   - `ensure_pgvector(engine)` — Idempotent `CREATE EXTENSION IF NOT EXISTS vector`.
 
 4. **Environment-based configuration**
 
-   ```yaml
-   # config/database.yaml
-   development:
-     host: localhost
-     port: 5432
-     database: savvio_dev
-     user: ${DB_USER}
-     password: ${DB_PASSWORD}
+   No YAML config file is used. The active database is selected purely by `.env` values:
 
-   production:
-     host: /cloudsql/project:region:instance
-     port: 5432
-     database: savvio_prod
-     user: ${DB_USER}
-     password: ${DB_PASSWORD}
-   ```
+   | Variable      | Local Dev (Mac + Docker)   | Production (Cloud SQL)               |
+   | ------------- | -------------------------- | ------------------------------------ |
+   | `DB_HOST`     | `host.docker.internal`     | Cloud SQL private IP / `/cloudsql/…` |
+   | `DB_PORT`     | `5432`                     | `5432`                               |
+   | `DB_NAME`     | e.g. `savvio_dev`          | e.g. `savvio_prod`                   |
+   | `DB_USER`     | local pg user              | Cloud SQL user (Secret Manager)      |
+   | `DB_PASSWORD` | local pg password          | Cloud SQL password (Secret Manager)  |
+
+   `docker-compose.yaml` overrides `DB_HOST=host.docker.internal` and `DB_PORT=5432` for the Airflow services so pipeline tasks can reach the host's Postgres on macOS regardless of the user's `.env`.
 
 5. **Load data**
-   - Truncate existing data (or upsert strategy)
-   - Load financial profiles (with pre-computed features)
-   - Load products (with rating_variance merged)
-   - Load reviews
-   - Generate and load embeddings
+   - `setup_database_task` calls `create_tables(engine)` (idempotent — `CREATE TABLE IF NOT EXISTS`).
+   - `load_financial_profiles` and `load_products` run in parallel.
+   - `load_reviews` runs after products to satisfy the `parent_asin` FK.
+   - `generate_and_load_embedding_task` (currently commented out in the DAG; available as a manual callable in `run_database.py`) embeds products and reviews and writes them to pgvector.
 
 
 
@@ -1082,49 +1114,67 @@ Structure the entire pipeline using Apache Airflow DAGs with conditional branchi
    - Core DAG file: `dags/data_pipeline_airflow.py`
 
 2. **Implemented DAG Structure**
-   The DAG achieves maximum concurrency while respecting data dependencies and executing specific validation branches to catch failures. Here is the implemented structure:
+   The DAG achieves maximum concurrency while respecting data dependencies and executing specific validation branches to catch failures. Each `check_*` branch routes to a stage-specific `EmailOperator` on failure (and on the final success). Here is the implemented structure:
 
    ```
    [ingest_financial] ───────┐
    [ingest_product]   ───────┼──> [check_ingestion] ──(failed?)──> [email_error_at_ingestion]
    [ingest_review]    ───────┘          │ (success)
                                         ▼
-   [validate_raw_financial] ─┐
-   [validate_raw_product]   ─┼──> [check_raw_validation] ──(failed?)──> [email_error_error_raw_validation]
-   [validate_raw_review]    ─┘          │
-                                        ▼
-   [detect_anomalies_*]     ────> [check_anomalies] ──(failed?)──> [email_error_at_anomalies]
+   [validate_raw_data, validate_raw_anomalies]
                                         │
                                         ▼
-   [preprocess_financial] ───       (parallel)
-   [preprocess_product]   ───> [preprocess_review]
+   [check_raw_validation] ──(failed?)──> [email_error_at_raw_validation]
+                                        │ (success)
+                                        ▼
+   [preprocess_financial, preprocess_product, preprocess_review]   (parallel)
                                         │
                                         ▼
    [check_preprocessing] ──(failed?)──> [email_error_at_preprocessing]
                                         │
                                         ▼
-   [validate_processed_*] ──> [check_processed_validation] ──(failed?)──> [email_error_at_processed_validation]
+   [validate_processed_data] ──> [check_processed_validation]
+                                        │
+                                        ▼ ──(failed?)──> [email_error_at_processed_validation]
+                                        │ (success)
+                                        ▼
+   [feature_financial_data, feature_product_review_data]   (parallel)
                                         │
                                         ▼
-   [feature_financial]    ───┐
-   [feature_reviews]      ───┴──> [check_feature_engineering] ──(failed?)──> [email_error_at_feature_engineering]
+   [check_feature_engineering] ──(failed?)──> [email_error_at_feature_engineering]
+                                        │ (success)
+                                        ▼
+   [validate_featured_data] ──> [check_featured_validation]
+                                        │
+                                        ▼ ──(failed?)──> [email_error_at_featured_validation]
+                                        │ (success)
+                                        ▼
+   [setup_database] ──> [load_financial_profiles, load_products] ──> [load_reviews]
                                         │
                                         ▼
-   [validate_featured]    ──────> [check_featured_validation] ──(failed?)──> [email_error_at_featured_validation]
-                                        │
-                                        ▼
-   [setup_database] ──> [load_financial, load_product] ──> [load_review] ──> [generate_load_embeddings]
-                                        │
-                                        ▼
-   [check_db_loading] ──(failed?)──> [email_error_at_DB_loading]
-                                        │(success)
-                                        ▼
-   [email_pipeline_success] ──> [pipeline_sentinel]
+   [bias_analysis_financial, bias_analysis_products, bias_analysis_reviews]   (parallel)
+        │                                │
+        │ (any failed, ONE_FAILED)       │ (all done)
+        ▼                                ▼
+   [email_error_at_bias_analysis]   [check_db_loading]
+                                         │
+                                         ├──(failed?)──> [email_error_at_DB_loading]
+                                         │ (success)
+                                         ▼
+                              [email_pipeline_success]
+                                         │
+                                         ▼
+                                  [pipeline_sentinel]
    ```
+
+   Notes on the diagram:
+   - Bias-stage failures (`bias_analysis_*`) trigger their own dedicated email alert via `TriggerRule.ONE_FAILED`, but they **do not block** the success email — `check_db_loading` only inspects `load_*` task states.
+   - `pipeline_sentinel` runs with `TriggerRule.ALL_DONE` and fails the DAG run if `send_email_pipeline_success` did not succeed (i.e. the pipeline didn't fully complete).
 
 3. **Task Implementation**
    - The DAG tasks primarily map directly to `src/` modules using `PythonOperator`.
-   - Error detection is implemented via `BranchPythonOperator` blocks (e.g., `make_branch_check(...)`) that evaluate upstream task states and trigger `EmailOperator` tasks on failure.
+   - Error detection is implemented via `BranchPythonOperator` blocks (e.g., `make_branch_check(...)`) that evaluate upstream task states and route to the per-stage email alert on failure or to the next stage on success. Branches use `TriggerRule.ALL_DONE` so they always run and can route to alerts even when upstream tasks fail.
+   - Alerts are dispatched via `EmailOperator` (SMTP, configured via `SMTP_USER` / `SMTP_PASSWORD` in `.env`; the docker-compose env wires this into the Airflow connection `smtp_default` automatically through `AIRFLOW_CONN_SMTP_DEFAULT`).
 
 ---
 
@@ -1134,15 +1184,47 @@ Structure the entire pipeline using Apache Airflow DAGs with conditional branchi
 
 Provide comprehensive coverage of all data modules and tasks before pipeline deployment using parameterized test files and robust service mocks.
 
+### Layout
+
+```
+data_pipeline/tests/
+├── conftest.py                          # Shared fixtures (sample dataframes, tmp paths)
+├── test_requirements.txt                # Test-only deps (pytest, pytest-mock, etc.)
+├── test_data_pipeline_airflow.py        # DAG import + structure + branching tests
+├── test_incremental.py                  # DuckDB out-of-core merge regression tests
+├── ingestion/                           # Tests for src/ingestion/* (gcs_loader, api_loader, run_ingestion)
+├── preprocess/                          # Tests for src/preprocess/* (financial, product, review, utils)
+├── features/                            # Tests for src/features/* (financial_features, product_review_features)
+├── validation/                          # Tests for raw/processed/feature validators + anomaly detectors
+├── database/                            # Tests for upload_to_db + vector_embed (mocked engine)
+└── bias/                                # Tests for financial/product/review bias modules
+```
+
 ### Implementation
 
 1. **Testing Standards Applied**
-   - **Mocking Extraneous Services**: Stubs are aggressively used (e.g., `_stub` in `test_data_pipeline_airflow.py` and `_stub_google` in `test_gcs_loader.py`) to effectively isolate module tests from requiring active GCP or Airflow metadata connections.
+   - **Mocking Extraneous Services**: Stubs are aggressively used to isolate module tests from active GCP, Postgres, or Airflow metadata connections (`_stub` patterns in `test_data_pipeline_airflow.py`, GCS client stubs in `tests/ingestion/`, mocked SQLAlchemy engines in `tests/database/`).
    - **Format Standard:** All test files include module docstrings, section dividers, and structural comments.
-   - **Bias Detection Validation:** The bias detection modules (`financial_bias.py`, `product_bias.py`, `review_bias.py`, `run_bias.py`) are exercised end-to-end by running `python3 src/bias/run_bias.py` against the engineered datasets. The logged outputs and the \"Bias Detection Report\" section above form the test oracle for Phase 15.
+   - **Bias Detection Validation:** The bias detection modules (`financial_bias.py`, `product_bias.py`, `review_bias.py`, `run_bias.py`) are exercised end-to-end by running `python -m src.bias.run_bias` against the engineered datasets. The logged outputs and the "Bias Detection Report" section above form the test oracle for Phase 15.
+   - **DAG Import Test**: `test_data_pipeline_airflow.py` parses `dags/data_pipeline_airflow.py` and asserts every expected task ID exists, including the `EmailOperator` alerts and the `pipeline_sentinel` (Slack tasks are intentionally not present since Slack was removed).
 
 2. **Running the Tests**
-   - `pytest <path_to_tests>/tests/ -v`
+
+   Tests are the only component **not** orchestrated via Docker Compose — they run against a local virtual environment.
+
+   ```bash
+   # From repo root
+   python3 -m venv savvio_tests
+   source savvio_tests/bin/activate
+   pip install -e savviocore
+   pip install -r data_pipeline/tests/test_requirements.txt
+
+   # Run everything
+   pytest data_pipeline/tests/ -v
+
+   # Run a specific module
+   pytest data_pipeline/tests/bias/ -v
+   ```
 
 ---
 
@@ -1157,8 +1239,13 @@ Ensure data pipeline execution observability.
 1. **Module-wide Logging**
    - `src/utils.py` contains shared `logging` config that formats logs by `[timestamp] [level] [module_name]`.
    - Every individual script explicitly initializes its logger instance globally using `logger = logging.getLogger(__name__)`.
-2. **Airflow Alerts**
-   - If any core task fails, branching conditions inside Airflow dynamically evaluate the task context state and trigger an `EmailOperator` (like `email_error_at_preprocessing`) notifying pipeline maintainers precisely which phase failed.
+   - Airflow's task-level logs are persisted under `data_pipeline/logs/` and surfaced in the Airflow UI per task run.
+2. **Airflow Alerts (Email)**
+   - If any core task fails, branching conditions inside Airflow (`make_branch_check(...)`) dynamically evaluate the task context state and route to a stage-specific `EmailOperator` (e.g. `email_error_at_preprocessing`) that sends an HTML email to the on-call list.
+   - Bias-stage failures use a separate `ONE_FAILED` alert (`email_error_at_bias_analysis`) that fires without blocking the success path.
+   - On a clean run, `send_email_pipeline_success` confirms completion; the `pipeline_sentinel` task fails the DAG run if the success notification didn't fire.
+3. **Connection Setup (one-time)**
+   - **SMTP** — set `SMTP_USER` / `SMTP_PASSWORD` (Gmail App Password) in `.env`. The docker-compose env (`AIRFLOW_CONN_SMTP_DEFAULT`) wires these into the Airflow connection `smtp_default` automatically; no manual UI configuration is required.
 
 ---
 
@@ -1179,3 +1266,74 @@ Diagnose runtime bottlenecks and pipeline faults.
 
 3. **Orchestration Concurrency**
    - Tasks like `ingest_financial`, `ingest_product`, and `ingest_review` execute totally asynchronously without blocking execution threads since they exist independently of one another.
+
+---
+
+## Appendix A: End-to-End Verification Run
+
+The pipeline has been executed end-to-end both as an **orchestrated Airflow DAG** (via `docker compose up -d`) and as **standalone scripts** (each module's `__main__` block invoked directly inside the `airflow-worker` container with `python -m src.<phase>.run_<phase>`). The standalone runs produce identical outputs to the DAG and serve as the per-stage smoke test.
+
+### Phase-by-Phase Results (most recent run)
+
+| #   | Phase                          | Entry Point                                | Result                                                                                                                                                            |
+| --- | ------------------------------ | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Ingestion                      | `python -m src.ingestion.run_ingestion`    | ✅ 32,424 financial / 94,327 products / 2,128,605 reviews loaded from GCS (~46 s)                                                                                  |
+| 2a  | Raw validation                 | `validate_raw()` in `run_validation.py`    | ✅ 73/74 checks pass; 1 WARNING (`prod_nulls_price` = 50.46% — known data-quality issue) → ALERT, pipeline continues                                               |
+| 2b  | Raw anomaly (Tier-1)           | `validate_raw_anomalies()`                 | ✅ 1/3 checks pass; 2 INFO failures → CONTINUE; 27 suspicious financial records quarantined to `data/quarantine/raw_financial_anomalies_<ts>.json`                 |
+| 3   | Preprocessing                  | `python -m src.preprocess.run_preprocessing` | ✅ Financial: 32,424 rows. Products: 94,327 rows, **47,601 prices imputed**. Reviews: **2,105,948** (22,657 duplicates removed)                                  |
+| 4   | Processed validation           | `validate_processed()`                     | ✅ 33/33 checks pass — CONTINUE                                                                                                                                    |
+| 5   | Feature engineering            | `python -m src.features.run_features`      | ✅ 5 financial features derived (`liquid_savings`, `discretionary_income`, `debt_to_income_ratio`, `monthly_expense_burden_ratio`, `emergency_fund_months`); `rating_variance` computed for **94,319** products (47,177 had review data) |
+| 6a  | Featured validation            | `validate_features()`                      | ✅ 21/22 checks pass; 1 WARNING → ALERT, pipeline continues                                                                                                        |
+| 6b  | Tier-2 anomaly                 | `validate_anomalies()`                     | ✅ 5/8 checks pass; 3 expected outlier WARNINGS in `discretionary_income`, `debt_to_income_ratio`, `emergency_fund_months` (IQR×4) → ALERT, pipeline continues     |
+| 7   | Bias detection                 | `python -m src.bias.run_bias`              | ✅ All three modules (financial / product / review) ran; representation risks surfaced and training-time mitigation strategies emitted (see Phase 15 report)       |
+| 8   | DB load + embeddings           | `python -m src.database.run_database`      | ▶ Requires a reachable Postgres with `pgvector`. In Airflow, runs after featured validation; in standalone mode, requires `DB_*` env vars to point at a live DB. |
+
+### Reproducing the Verification
+
+**Inside the Airflow worker container** (recommended — all dependencies pre-installed):
+
+```bash
+cd data_pipeline
+docker compose up -d
+docker compose exec -T -w /opt/airflow/dags airflow-worker python -m src.ingestion.run_ingestion
+docker compose exec -T -w /opt/airflow/dags airflow-worker python -m src.preprocess.run_preprocessing
+docker compose exec -T -w /opt/airflow/dags airflow-worker python -m src.features.run_features
+docker compose exec -T -w /opt/airflow/dags airflow-worker python -m src.bias.run_bias
+docker compose exec -T -w /opt/airflow/dags airflow-worker python -c \
+  "from src.validation.run_validation import validate_raw, validate_raw_anomalies, validate_processed, validate_features, validate_anomalies; \
+   [print(f(), '\n---') for f in (validate_raw, validate_raw_anomalies, validate_processed, validate_features, validate_anomalies)]"
+docker compose exec -T -w /opt/airflow/dags airflow-worker python -m src.database.run_database
+```
+
+**Or trigger the full DAG end-to-end** via the Airflow UI at `http://localhost:8080` (DAG: `Data_pipeline_airflow`).
+
+### Known Data-Quality Behaviors (expected, not bugs)
+
+| Stage              | Signal                                                | Pipeline Action |
+| ------------------ | ----------------------------------------------------- | --------------- |
+| Raw validation     | `price` 50.46% null in product data                   | WARNING → email alert, continue (imputed in Phase 8) |
+| Raw anomaly        | 27 financial records with extreme outliers            | INFO → quarantine, continue                          |
+| Featured validation | Outliers in `discretionary_income` / `DTI` / `emergency_fund_months` (IQR×4) | WARNING → email alert, continue                      |
+
+These trigger the **Tier-1 alert path** (email only, no halt) by design — they reflect real-world data heterogeneity, not pipeline failures. Only **CRITICAL** validation failures or **task-level exceptions** halt the DAG.
+
+---
+
+## Appendix B: Notification & Alerting Summary
+
+The pipeline uses **email-only** notifications (Slack was previously wired but removed; only `EmailOperator` paths remain in production).
+
+| Trigger                                | Operator                                  | Trigger Rule        | Behavior                                                            |
+| -------------------------------------- | ----------------------------------------- | ------------------- | ------------------------------------------------------------------- |
+| Any ingestion task fails               | `email_error_at_ingestion`                | Branch (ALL_DONE)   | Halts downstream stages; sends red HTML email                       |
+| Raw validation fails (CRITICAL)        | `email_error_at_raw_validation`           | Branch (ALL_DONE)   | Halts downstream stages                                             |
+| Preprocessing task fails               | `email_error_at_preprocessing`            | Branch (ALL_DONE)   | Halts downstream stages                                             |
+| Processed validation fails (CRITICAL)  | `email_error_at_processed_validation`     | Branch (ALL_DONE)   | Halts downstream stages                                             |
+| Feature task fails                     | `email_error_at_feature_engineering`      | Branch (ALL_DONE)   | Halts downstream stages                                             |
+| Featured validation fails (CRITICAL)   | `email_error_at_featured_validation`      | Branch (ALL_DONE)   | Halts downstream stages                                             |
+| DB load task fails                     | `email_error_at_DB_loading`               | Branch (ALL_DONE)   | Pipeline marked failed; success email is **not** sent               |
+| Any bias task fails                    | `email_error_at_bias_analysis`            | `ONE_FAILED`        | Sends alert in parallel; **does not block** the success email path  |
+| All loads succeed                      | `email_pipeline_success`                  | Branch (ALL_DONE)   | Sends green HTML stage-status table                                 |
+| Sentinel: success email did not fire   | `pipeline_sentinel`                       | `ALL_DONE`          | Raises `AirflowException` so the DAG run is marked **failed**       |
+
+SMTP credentials (`SMTP_USER`, `SMTP_PASSWORD`) are read from `.env` and wired into the Airflow `smtp_default` connection automatically by `docker-compose.yaml` via `AIRFLOW_CONN_SMTP_DEFAULT` — no manual UI configuration is required.

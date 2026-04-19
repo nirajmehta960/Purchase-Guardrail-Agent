@@ -82,9 +82,6 @@ _stub("airflow.providers.standard.operators.trigger_dagrun",
 _stub("airflow.providers.smtp")
 _stub("airflow.providers.smtp.operators")
 _stub("airflow.providers.smtp.operators.smtp", EmailOperator=_EmailOperator)
-_stub("airflow.providers.slack")
-_stub("airflow.providers.slack.operators")
-_stub("airflow.providers.slack.operators.slack_webhook", SlackWebhookOperator=MagicMock())
 
 # airflow SDK (used inside make_branch_check)
 _stub("airflow.sdk")

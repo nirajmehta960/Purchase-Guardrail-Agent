@@ -18,7 +18,6 @@ from airflow.providers.smtp.operators.smtp import EmailOperator
 # from airflow.providers.slack.operators.slack_webhook import SlackWebhookOperator  # TODO: uncomment when Slack is configured
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.utils.trigger_rule import TriggerRule
-# from airflow.task.trigger_rule import TriggerRule new one, need to verify
 
 
 # ==================== BRANCHING HELPER ====================
@@ -84,7 +83,6 @@ def make_branch_check(upstream_ids, success_ids, failure_ids):
 
 # ---------- Constants ----------
 ALERT_EMAIL = "murtaza.sn786@gmail.com"
-# SLACK_CHANNEL = "#group-34"  # TODO: uncomment when Slack is configured
 
 # ---------- Default args ----------
 default_args = {
@@ -111,7 +109,7 @@ dag = DAG(
 
 
 # ==================== ERROR ALERT OPERATORS ====================
-# Each pair (email + slack) is a terminal leaf — pipeline stops here.
+# Each error alert is a terminal leaf — pipeline stops here.
 
 # --- Ingestion Errors ---
 email_error_at_ingestion = EmailOperator(
@@ -231,32 +229,20 @@ email_error_at_DB_loading = EmailOperator(
     dag=dag,
 )
 
-# slack_error_at_DB_loading = SlackWebhookOperator(
-#     task_id="send_slack_at_DB_loading_error",
-#     slack_webhook_conn_id="slack_webhook",
-#     message=":red_circle: *SavVio Data Pipeline* — Error at *DB Loading* stage.",
-#     channel=SLACK_CHANNEL,
-#     dag=dag,
-# )
-
-# --- Bias Analysis Errors (placeholder) ---
-# email_error_at_bias_analysis = EmailOperator(
-#     task_id="send_email_at_bias_analysis_error",
-#     to=ALERT_EMAIL,
-#     subject="SavVio Data Pipeline Airflow - Error at Bias Analysis",
-#     html_content="<p>Something went wrong at Bias Analysis stage.</p>",
-#     trigger_rule=TriggerRule.ONE_FAILED,
-#     dag=dag,
-# )
-
-# slack_error_at_bias_analysis = SlackWebhookOperator(
-#     task_id="send_slack_at_bias_analysis_error",
-#     slack_webhook_conn_id="slack_webhook",
-#     message=":red_circle: *SavVio Data Pipeline* — Error at *Bias Analysis* stage.",
-#     channel=SLACK_CHANNEL,
-#     trigger_rule=TriggerRule.ONE_FAILED,
-#     dag=dag,
-# )
+# --- Bias Analysis Errors ---
+# Bias failures DO NOT block the success email (check_db_loading only inspects
+# load_* task states). This alert uses ONE_FAILED so it fires as soon as any
+# bias task fails, in parallel with the rest of the success path.
+email_error_at_bias_analysis = EmailOperator(
+    task_id="send_email_at_bias_analysis_error",
+    to=ALERT_EMAIL,
+    cc="nirajmehta960@gmail.com",
+    subject="SavVio Data Pipeline Airflow - Error at Bias Analysis",
+    html_content="<p>Something went wrong at Bias Analysis stage. The pipeline "
+                 "continued to completion, but bias metrics may be incomplete.</p>",
+    trigger_rule=TriggerRule.ONE_FAILED,
+    dag=dag,
+)
 
 
 # ==================== SUCCESS ALERT OPERATORS ====================
@@ -652,5 +638,11 @@ bias_reviews = PythonOperator(
 
 # Run bias in parallel after load_review, then feed into check_db_loading.
 # This ensures send_email_pipeline_success only triggers after all bias
-# tasks complete, while bias failures still don't block the success email.
+# tasks complete, while bias failures still don't block the success email
+# (check_db_loading only inspects load_* task states).
 load_review >> [bias_financial, bias_products, bias_reviews] >> check_db_loading
+
+# Bias-stage alert: fires on ANY bias task failure, in parallel with the success
+# path. trigger_rule=ONE_FAILED on the alert operator ensures it only runs when
+# at least one bias task actually failed.
+[bias_financial, bias_products, bias_reviews] >> email_error_at_bias_analysis

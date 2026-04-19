@@ -96,12 +96,8 @@ mkdir -p data_pipeline/logs data_pipeline/plugins
    API_KEY=your-api-key-here
    ```
 
-   **Notifications**
+   **Notifications (Email)**
    ```env
-   # Slack Incoming Webhook URL for pipeline alerts (Optional) 
-   # Setup: https://api.slack.com/apps → Incoming Webhooks
-   SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
-
    # Your Gmail address and matching App Password for sending email notifications
    # Setup: https://support.google.com/accounts/answer/185833
    SMTP_USER=example@gmail.com
@@ -163,6 +159,24 @@ docker compose down -v
 cd data_pipeline
 docker compose up -d
 ```
+
+---
+
+## Pulling Versioned Data with DVC
+
+The pipeline's raw / processed / featured datasets are tracked with DVC and stored in `gs://savvio-data-bucket/dvcstore`. The remote is already configured in `.dvc/config`; you only need to authenticate.
+
+DVC reads Google credentials from the standard `GOOGLE_APPLICATION_CREDENTIALS` env var (no machine-specific path is hard-coded in `.dvc/config`).
+
+```bash
+# Point at your GCP service account key (same file referenced by GCP_CREDENTIALS_PATH in .env)
+export GOOGLE_APPLICATION_CREDENTIALS="$(pwd)/data_pipeline/config/savvio-gcp-key.json"
+
+# Pull all versioned datasets into data_pipeline/dags/data/
+dvc pull
+```
+
+> If you ever need to override per-machine, run `dvc remote modify --local gcs credentialpath /abs/path/to/key.json` — `--local` writes to `.dvc/config.local` (git-ignored) instead of the shared config.
 
 ---
 

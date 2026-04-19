@@ -107,7 +107,7 @@ jobs:
           key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
           timeout: 60s
           command_timeout: 15m
-          envs: IMAGE,GITHUB_SHA
+          envs: IMAGE,GITHUB_SHA,GITHUB_RUN_ID
           script: |
             cd /opt/savvio/data_pipeline
 
@@ -132,8 +132,21 @@ jobs:
             EOF
 
             sudo docker compose -f docker-compose.yaml -f docker-compose.ci.yml pull airflow-apiserver
-            sudo docker compose -f docker-compose.yaml -f docker-compose.ci.yml up -d --remove-orphans
-            echo "Deployed $IMAGE:$GITHUB_SHA"
+            sudo docker compose -f docker-compose.yaml -f docker-compose.ci.yml up -d --remove-orphans            
+            for i in {1..20}; do
+              if sudo docker compose -f docker-compose.yaml -f docker-compose.ci.yml exec -T airflow-scheduler airflow dags list >/dev/null 2>&1; then
+                break
+              fi
+              echo "Waiting for Airflow to become ready ($i/20)..."
+              sleep 15
+            done
+            
+            sudo docker compose -f docker-compose.yaml -f docker-compose.ci.yml exec -T airflow-scheduler \
+              airflow dags trigger Data_pipeline_airflow \
+              --run-id "deploy__${GITHUB_SHA}__${GITHUB_RUN_ID}"
+            
+            echo "Deployed $IMAGE:$GITHUB_SHA and triggered Data_pipeline_airflow"
         env:
           IMAGE: ${{ env.IMAGE }}
           GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}

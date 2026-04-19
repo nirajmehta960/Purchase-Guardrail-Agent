@@ -52,7 +52,7 @@ The system employs a three-layer decision engine to ensure fiduciary responsibil
 ### 4. Monitoring & Observability
 Continuous monitoring ensures the system remains reliable and accurate:
 - **System Metrics**: Real-time tracking of API latency and throughput via Prometheus and Grafana Cloud.
-- **Drift Detection**: Evidently AI-based drift detection runs weekly via the `ops-monitoring.yml` workflow; RED severity auto-dispatches `modelpipeline_ci.yml` to retrain and redeploy.
+- **Drift Detection**: Evidently AI-based drift detection runs weekly via the `ops-monitoring.yml` workflow; RED severity auto-dispatches `modelpipeline.yml` to retrain and redeploy.
 - **Data Quality**: Schema and anomaly monitoring via Great Expectations (during data pipeline ingestion).
 - **Alerting**: Email-only via SMTP — Airflow DAG failures, drift severity (YELLOW + RED), and CI workflow status all flow to `ALERT_EMAIL_LIST`.
 

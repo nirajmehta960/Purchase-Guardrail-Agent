@@ -1,11 +1,5 @@
 name: Deployment CI/CD
 
-# Triggers:
-#   - push to main on app/library code paths (excluding model_pipeline:
-#     model retraining is handled by modelpipeline_ci.yml, which dispatches
-#     this workflow on success — avoids double-fires for the same SHA).
-#   - workflow_dispatch (used by modelpipeline_ci.yml's trigger-deployment
-#     job and by ops-monitoring.yml's RED-drift retraining flow indirectly).
 on:
   push:
     branches: [main]
@@ -17,46 +11,43 @@ on:
       - "deployment/requirements.txt"
       - "deployment/__init__.py"
       - "savviocore/**"
+      - ".github/workflows/deployment.yml"
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
-  ENVIRONMENT: dev
-  REGION: us-east1
-  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  PYTHON_VERSION: '3.11'
+  IMAGE_BASE: ${{ vars.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ vars.AR_REPO }}
 
 jobs:
   # ===========================================================================
-  # Testing Phase
+  # JOB 1 — API Tests
   # ===========================================================================
   test-api:
     name: API Tests
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-deployment-${{ hashFiles('deployment/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-deployment-
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: deployment/requirements.txt
 
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -e savviocore
           pip install -r deployment/requirements.txt
           pip install pytest httpx
@@ -66,12 +57,16 @@ jobs:
           PYTHONPATH: "${{ github.workspace }}/model_pipeline/src:${{ github.workspace }}/savviocore/src:${{ github.workspace }}"
         run: python -m pytest deployment/tests/ -v --tb=short
 
+  # ===========================================================================
+  # JOB 2 — Frontend Tests
+  # ===========================================================================
   test-frontend:
     name: Frontend Tests
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -91,7 +86,7 @@ jobs:
         run: bun run test
 
   # ===========================================================================
-  # Artifact Build & Registry Push
+  # JOB 3 — Build & Push API Image
   # ===========================================================================
   build-push-api:
     name: Build & Push API
@@ -99,9 +94,11 @@ jobs:
     needs: test-api
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: google-github-actions/auth@v2
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
@@ -109,32 +106,38 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+        run: gcloud auth configure-docker ${{ vars.AR_REGION }}-docker.pkg.dev --quiet
 
-      - uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build and push
-        env:
-          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-api
-        run: |
-          docker buildx build \
-            --platform linux/amd64 \
-            -f deployment/api/Dockerfile \
-            -t $IMAGE:${{ github.sha }} \
-            -t $IMAGE:latest \
-            --push .
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deployment/api/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE_BASE }}/${{ vars.AR_IMAGE_API }}:${{ github.sha }}
+            ${{ env.IMAGE_BASE }}/${{ vars.AR_IMAGE_API }}:latest
+          cache-from: type=registry,ref=${{ env.IMAGE_BASE }}/${{ vars.AR_IMAGE_API }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE_BASE }}/${{ vars.AR_IMAGE_API }}:buildcache,mode=max
 
+  # ===========================================================================
+  # JOB 4 — Build & Push MLflow Image
+  # ===========================================================================
   build-push-mlflow:
     name: Build & Push MLflow
     runs-on: ubuntu-latest
-    # Gated on test-api so mlflow image is not built when API tests fail
-    # (previously had no needs:, so it built on any push regardless of tests).
     needs: test-api
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: google-github-actions/auth@v2
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
@@ -142,30 +145,38 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+        run: gcloud auth configure-docker ${{ vars.AR_REGION }}-docker.pkg.dev --quiet
 
-      - uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build and push
-        env:
-          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-mlflow
-        run: |
-          docker buildx build \
-            --platform linux/amd64 \
-            -f deployment/mlflow/Dockerfile \
-            -t $IMAGE:${{ github.sha }} \
-            -t $IMAGE:latest \
-            --push deployment/mlflow/
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: deployment/mlflow
+          file: deployment/mlflow/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE_BASE }}/${{ vars.AR_IMAGE_MLFLOW }}:${{ github.sha }}
+            ${{ env.IMAGE_BASE }}/${{ vars.AR_IMAGE_MLFLOW }}:latest
+          cache-from: type=registry,ref=${{ env.IMAGE_BASE }}/${{ vars.AR_IMAGE_MLFLOW }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE_BASE }}/${{ vars.AR_IMAGE_MLFLOW }}:buildcache,mode=max
 
+  # ===========================================================================
+  # JOB 5 — Build & Push Frontend Image
+  # ===========================================================================
   build-push-frontend:
     name: Build & Push Frontend
     runs-on: ubuntu-latest
     needs: test-frontend
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: google-github-actions/auth@v2
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
@@ -173,24 +184,29 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+        run: gcloud auth configure-docker ${{ vars.AR_REGION }}-docker.pkg.dev --quiet
 
-      - uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build and push
-        env:
-          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-frontend
-        run: |
-          docker buildx build \
-            --platform linux/amd64 \
-            -f deployment/frontend/Dockerfile \
-            --build-arg VITE_API_BASE=${{ secrets.API_URL_DEV }} \
-            -t $IMAGE:${{ github.sha }} \
-            -t $IMAGE:latest \
-            --push deployment/frontend/
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: deployment/frontend
+          file: deployment/frontend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            VITE_API_BASE=${{ secrets.API_URL_DEV }}
+            VITE_DEFAULT_USER_ID=${{ vars.VITE_DEFAULT_USER_ID }}
+          tags: |
+            ${{ env.IMAGE_BASE }}/${{ vars.AR_IMAGE_FRONTEND }}:${{ github.sha }}
+            ${{ env.IMAGE_BASE }}/${{ vars.AR_IMAGE_FRONTEND }}:latest
+          cache-from: type=registry,ref=${{ env.IMAGE_BASE }}/${{ vars.AR_IMAGE_FRONTEND }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE_BASE }}/${{ vars.AR_IMAGE_FRONTEND }}:buildcache,mode=max
 
   # ===========================================================================
-  # Production Deployment
+  # JOB 6 — Deploy to Cloud Run (Terraform-managed services)
   # ===========================================================================
   deploy:
     name: Deploy to Cloud Run
@@ -198,9 +214,8 @@ jobs:
     needs: [build-push-api, build-push-frontend, build-push-mlflow]
 
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: google-github-actions/auth@v2
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
@@ -208,70 +223,65 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Deploy API
-        env:
-          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-api
         run: |
-          gcloud run deploy savvio-backend-api \
-            --image $IMAGE:${{ github.sha }} \
-            --region ${{ env.REGION }} \
+          gcloud run deploy "${{ vars.CLOUD_RUN_API }}" \
+            --image "${{ env.IMAGE_BASE }}/${{ vars.AR_IMAGE_API }}:${{ github.sha }}" \
+            --region "${{ vars.AR_REGION }}" \
             --quiet
 
       - name: Deploy Frontend
-        env:
-          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-frontend
         run: |
-          gcloud run deploy savvio-ai \
-            --image $IMAGE:${{ github.sha }} \
-            --region ${{ env.REGION }} \
+          gcloud run deploy "${{ vars.CLOUD_RUN_FRONTEND }}" \
+            --image "${{ env.IMAGE_BASE }}/${{ vars.AR_IMAGE_FRONTEND }}:${{ github.sha }}" \
+            --region "${{ vars.AR_REGION }}" \
             --quiet
 
       - name: Deploy MLflow
-        env:
-          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/savvio-${{ env.ENVIRONMENT }}-docker-repo/savvio-mlflow
         run: |
-          gcloud run deploy savvio-ai-mlflow \
-            --image $IMAGE:${{ github.sha }} \
-            --region ${{ env.REGION }} \
+          gcloud run deploy "${{ vars.CLOUD_RUN_MLFLOW }}" \
+            --image "${{ env.IMAGE_BASE }}/${{ vars.AR_IMAGE_MLFLOW }}:${{ github.sha }}" \
+            --region "${{ vars.AR_REGION }}" \
             --quiet
 
       - name: Verify API health
         run: |
-          API_URL=$(gcloud run services describe savvio-backend-api \
-            --region ${{ env.REGION }} --format='value(status.url)')
+          API_URL=$(gcloud run services describe "${{ vars.CLOUD_RUN_API }}" \
+            --region "${{ vars.AR_REGION }}" --format='value(status.url)')
           echo "API: $API_URL"
           curl -sf "$API_URL/health" || { echo "ERROR: health check failed"; exit 1; }
 
-  # ---------------------------------------------------------------------------
-  # Notifications (covers all jobs) — sent via SMTP to ALERT_EMAIL_LIST.
-  # if: always() ensures these run even if upstream jobs are skipped.
-  # ---------------------------------------------------------------------------
+  # ===========================================================================
+  # JOB 7 — Notify on Failure
+  # ===========================================================================
   notify-on-failure:
-    name: Notify Failure
+    name: Notify on Failure
     runs-on: ubuntu-latest
     needs: [test-api, test-frontend, build-push-api, build-push-frontend, build-push-mlflow, deploy]
     if: always() && contains(needs.*.result, 'failure')
+
     steps:
       - name: Log failure summary
         run: |
-          echo "Deployment CI/CD FAILED — ${{ env.ENVIRONMENT }} — ${{ github.sha }}"
+          echo "Deployment CI/CD FAILED — ${{ vars.ENVIRONMENT }} — ${{ github.sha }}"
           echo "Branch:       ${{ github.ref_name }}"
           echo "Triggered by: ${{ github.actor }}"
           echo "Run URL:      ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: Send failure email
+        if: vars.NOTIFY_EMAILS_ENABLED == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.SMTP_HOST }}
           server_port: ${{ secrets.SMTP_PORT }}
           username: ${{ secrets.SMTP_USER }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          from: SavVio CI <${{ secrets.ALERT_EMAIL_FROM }}>
+          from: ${{ vars.PROJECT_NAME }} CI <${{ secrets.ALERT_EMAIL_FROM }}>
           to: ${{ secrets.ALERT_EMAIL_LIST }}
-          subject: "[SavVio][FAILED] Deployment CI/CD — ${{ env.ENVIRONMENT }} — ${{ github.sha }}"
+          subject: "[${{ vars.PROJECT_NAME }}][FAILED] Deployment CI/CD — ${{ vars.ENVIRONMENT }} — ${{ github.sha }}"
           body: |
             Deployment CI/CD FAILED
 
-            Environment:  ${{ env.ENVIRONMENT }}
+            Environment:  ${{ vars.ENVIRONMENT }}
             Branch:       ${{ github.ref_name }}
             Commit:       ${{ github.sha }}
             Triggered by: ${{ github.actor }}
@@ -287,37 +297,46 @@ jobs:
 
             Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
+  # ===========================================================================
+  # JOB 8 — Notify on Success
+  # ===========================================================================
   notify-on-success:
-    name: Notify Success
+    name: Notify on Success
     runs-on: ubuntu-latest
     needs: [test-api, test-frontend, build-push-api, build-push-frontend, build-push-mlflow, deploy]
-    if: always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    if: |
+      always()
+      && !contains(needs.*.result, 'failure')
+      && !contains(needs.*.result, 'cancelled')
+      && github.event_name == 'push'
+      && github.ref == 'refs/heads/main'
+
     steps:
       - name: Log success summary
         run: |
-          echo "Deployment CI/CD PASSED — ${{ env.ENVIRONMENT }} — ${{ github.sha }}"
+          echo "Deployment CI/CD PASSED — ${{ vars.ENVIRONMENT }} — ${{ github.sha }}"
           echo "Branch:       ${{ github.ref_name }}"
           echo "Triggered by: ${{ github.actor }}"
-          echo "Run URL:      ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: Send success email
+        if: vars.NOTIFY_EMAILS_ENABLED == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.SMTP_HOST }}
           server_port: ${{ secrets.SMTP_PORT }}
           username: ${{ secrets.SMTP_USER }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          from: SavVio CI <${{ secrets.ALERT_EMAIL_FROM }}>
+          from: ${{ vars.PROJECT_NAME }} CI <${{ secrets.ALERT_EMAIL_FROM }}>
           to: ${{ secrets.ALERT_EMAIL_LIST }}
-          subject: "[SavVio][OK] Deployment CI/CD — ${{ env.ENVIRONMENT }} — ${{ github.sha }}"
+          subject: "[${{ vars.PROJECT_NAME }}][OK] Deployment CI/CD — ${{ vars.ENVIRONMENT }} — ${{ github.sha }}"
           body: |
             Deployment CI/CD PASSED
 
-            Environment:  ${{ env.ENVIRONMENT }}
+            Environment:  ${{ vars.ENVIRONMENT }}
             Branch:       ${{ github.ref_name }}
             Commit:       ${{ github.sha }}
             Triggered by: ${{ github.actor }}
 
-            API, Frontend, and MLflow images deployed to Cloud Run.
+            API, Frontend and MLflow images deployed to Cloud Run.
 
             Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

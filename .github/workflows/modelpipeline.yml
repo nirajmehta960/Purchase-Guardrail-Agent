@@ -6,11 +6,13 @@ on:
     paths:
       - 'model_pipeline/**'
       - 'savviocore/**'
+      - '.github/workflows/modelpipeline.yml'
   pull_request:
     branches: [main]
     paths:
       - 'model_pipeline/**'
       - 'savviocore/**'
+      - '.github/workflows/modelpipeline.yml'
   workflow_dispatch:
     inputs:
       skip_rollback_check:
@@ -26,18 +28,17 @@ on:
         type: choice
         options: ['false', 'true']
 
+permissions:
+  contents: read
+  id-token: write
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
-  id-token: write
-  actions: write
-
 env:
-  ENVIRONMENT: dev
-  CLOUD_SQL_PROXY_URL: https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.1/cloud-sql-proxy.linux.amd64
+  PYTHON_VERSION: '3.11'
+  IMAGE: ${{ vars.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ vars.AR_REPO }}/${{ vars.AR_IMAGE_MODELPIPELINE }}
 
 jobs:
   # ===========================================================================
@@ -54,20 +55,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-modelpipeline-${{ hashFiles('model_pipeline/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-modelpipeline-
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: model_pipeline/requirements.txt
 
       - name: Install dependencies
         working-directory: model_pipeline
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -e ../savviocore
           pip install -e .
           pip install -r requirements.txt
@@ -90,89 +85,12 @@ jobs:
             -v --tb=short
 
   # ===========================================================================
-  # JOB 2 — DB Connection Check (runs in parallel with unit tests)
-  # ===========================================================================
-  db-connection-check:
-    name: DB Connection Check
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Authenticate to GCP
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Cache Cloud SQL Auth Proxy
-        id: cache-proxy
-        uses: actions/cache@v4
-        with:
-          path: cloud-sql-proxy
-          key: cloud-sql-proxy-v2.14.1-linux-amd64
-
-      - name: Download Cloud SQL Auth Proxy
-        if: steps.cache-proxy.outputs.cache-hit != 'true'
-        run: |
-          curl -so cloud-sql-proxy ${{ env.CLOUD_SQL_PROXY_URL }}
-          chmod +x cloud-sql-proxy
-
-      - name: Start Cloud SQL Auth Proxy
-        run: |
-          chmod +x cloud-sql-proxy
-          ./cloud-sql-proxy "${{ secrets.DB_INSTANCE_CONNECTION_NAME }}" --port 5432 &
-          sleep 3
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install sqlalchemy psycopg2-binary
-
-      - name: Check DB connection
-        env:
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-        run: |
-          python3 - <<'EOF'
-          import os, sys, urllib.parse
-          if not os.getenv("DB_HOST"):
-              print("No DB_HOST configured — skipping DB connection check.")
-              sys.exit(0)
-          try:
-              from sqlalchemy import create_engine, text
-              user = urllib.parse.quote_plus(os.environ['DB_USER'])
-              password = urllib.parse.quote_plus(os.environ['DB_PASSWORD'])
-              url = f"postgresql://{user}:{password}@{os.environ['DB_HOST']}:{os.environ.get('DB_PORT', '5432')}/{os.environ['DB_NAME']}"
-              engine = create_engine(url)
-              with engine.connect() as conn:
-                  result = conn.execute(text("SELECT 1"))
-                  print(f"DB connection OK: {result.scalar()}")
-          except Exception as e:
-              print(f"DB connection FAILED: {e}")
-              sys.exit(1)
-          EOF
-
-  # ===========================================================================
-  # JOB 3 — Run Model Pipeline
-  # Waits for both unit-tests and db-connection-check to pass.
-  # Writes metrics.txt and bias_metrics.txt, uploads as artifacts for gate jobs.
-  # Downloads previous_metrics.txt from GCS for rollback baseline.
+  # JOB 2 — Run Model Pipeline
   # ===========================================================================
   run-pipeline:
     name: Run Model Pipeline
     runs-on: ubuntu-latest
-    needs: [unit-tests, db-connection-check]
-    # Heavy job: pulls Cloud SQL data, retrains model, writes to GCS.
-    # Skip on PRs to keep validation cheap; main-push and workflow_dispatch only.
+    needs: [unit-tests]
     if: github.event_name != 'pull_request'
 
     steps:
@@ -197,32 +115,25 @@ jobs:
       - name: Download Cloud SQL Auth Proxy
         if: steps.cache-proxy.outputs.cache-hit != 'true'
         run: |
-          curl -so cloud-sql-proxy ${{ env.CLOUD_SQL_PROXY_URL }}
+          curl -so cloud-sql-proxy https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.1/cloud-sql-proxy.linux.amd64
           chmod +x cloud-sql-proxy
 
       - name: Start Cloud SQL Auth Proxy
         run: |
-          chmod +x cloud-sql-proxy
           ./cloud-sql-proxy "${{ secrets.DB_INSTANCE_CONNECTION_NAME }}" --port 5432 &
           sleep 3
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-modelpipeline-${{ hashFiles('model_pipeline/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-modelpipeline-
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: model_pipeline/requirements.txt
 
       - name: Install dependencies
         working-directory: model_pipeline
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -e ../savviocore
           pip install -e .
           pip install -r requirements.txt
@@ -230,14 +141,14 @@ jobs:
       - name: Download previous metrics from GCS (rollback baseline)
         run: |
           gcloud storage cp \
-            gs://savvio-${{ env.ENVIRONMENT }}-mlflow-artifacts/ci/previous_metrics.txt \
+            gs://${{ vars.MLFLOW_GCS_BUCKET }}/ci/previous_metrics.txt \
             model_pipeline/previous_metrics.txt \
             || echo "No previous metrics found — first run, skipping rollback baseline."
 
-      - name: Get MLflow tracking URI
+      - name: Resolve MLflow tracking URI
         run: |
-          MLFLOW_URL=$(gcloud run services describe savvio-ai-mlflow \
-            --region us-east1 --format='value(status.url)')
+          MLFLOW_URL=$(gcloud run services describe ${{ vars.CLOUD_RUN_MLFLOW }} \
+            --region ${{ vars.AR_REGION }} --format='value(status.url)')
           echo "MLFLOW_TRACKING_URI=${MLFLOW_URL}" >> $GITHUB_ENV
 
       - name: Run pipeline
@@ -249,11 +160,10 @@ jobs:
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-          GCP_REGION: us-east1
-        run: |
-          python src/run_pipeline.py
+          GCP_REGION: ${{ vars.AR_REGION }}
+        run: python src/run_pipeline.py
 
-      - name: Upload metrics artifacts (for gate jobs)
+      - name: Upload metrics artifacts
         uses: actions/upload-artifact@v4
         with:
           name: pipeline-metrics
@@ -265,8 +175,7 @@ jobs:
           retention-days: 7
 
   # ===========================================================================
-  # JOB 4 — Validation Gate  (runs in parallel with bias-gate)
-  # Blocks if F1 < 0.70 or ROC AUC < 0.75
+  # JOB 3 — Validation Gate (parallel with bias-gate)
   # ===========================================================================
   validation-gate:
     name: Validation Gate
@@ -282,8 +191,8 @@ jobs:
 
       - name: Check validation thresholds
         env:
-          F1_THRESHOLD: "0.70"
-          ROC_AUC_THRESHOLD: "0.75"
+          F1_THRESHOLD: ${{ vars.F1_THRESHOLD }}
+          ROC_AUC_THRESHOLD: ${{ vars.ROC_AUC_THRESHOLD }}
         run: |
           python3 - <<'EOF'
           import os, sys
@@ -299,8 +208,8 @@ jobs:
                   k, v = line.strip().split("=")
                   metrics[k.strip()] = float(v.strip())
 
-          f1      = metrics.get("f1_score", 0.0)
-          roc_auc = metrics.get("roc_auc", 0.0)
+          f1         = metrics.get("f1_score", 0.0)
+          roc_auc    = metrics.get("roc_auc", 0.0)
           f1_thresh  = float(os.environ["F1_THRESHOLD"])
           roc_thresh = float(os.environ["ROC_AUC_THRESHOLD"])
 
@@ -320,8 +229,7 @@ jobs:
           EOF
 
   # ===========================================================================
-  # JOB 5 — Bias Detection Gate  (runs in parallel with validation-gate)
-  # Delegates pass/fail to detect_and_mitigate() via bias_gate_passed flag.
+  # JOB 4 — Bias Detection Gate (parallel with validation-gate)
   # ===========================================================================
   bias-gate:
     name: Bias Detection Gate
@@ -336,9 +244,15 @@ jobs:
           path: model_pipeline/
 
       - name: Check bias thresholds
+        env:
+          SKIP_BIAS_GATE: ${{ github.event.inputs.skip_bias_gate || 'false' }}
         run: |
           python3 - <<'EOF'
           import os, sys
+
+          if os.environ.get("SKIP_BIAS_GATE", "false").lower() == "true":
+              print("BIAS GATE SKIPPED (manual override via workflow_dispatch input)")
+              sys.exit(0)
 
           bias_file = "model_pipeline/bias_metrics.txt"
           if not os.path.exists(bias_file):
@@ -354,28 +268,15 @@ jobs:
                   k, v = line.split("=", 1)
                   metrics[k.strip()] = v.strip()
 
-          # bias_gate_passed is set by detect_and_mitigate() in bias_detection.py,
-          # which applies category-aware thresholds (financial DPD not checked by design,
-          # product DPD threshold=0.30, demographic DPD threshold=0.10).
-          skip = os.environ.get("SKIP_BIAS_GATE", "false").lower() == "true"
-          if skip:
-              print("BIAS GATE SKIPPED (manual override via workflow_dispatch input)")
-              sys.exit(0)
-
-          passed = int(metrics.get("bias_gate_passed", "0"))
-          if passed:
+          if int(metrics.get("bias_gate_passed", "0")):
               print("BIAS GATE PASSED")
           else:
-              print("BIAS GATE FAILED — see run_pipeline logs for which slices violated thresholds")
+              print("BIAS GATE FAILED — see run-pipeline logs for which slices violated thresholds")
               sys.exit(1)
           EOF
-        env:
-          SKIP_BIAS_GATE: ${{ github.event.inputs.skip_bias_gate || 'false' }}
 
   # ===========================================================================
-  # JOB 6 — Rollback Check
-  # Blocks if F1 drops more than 0.02 vs previous passing model.
-  # Skipped automatically on first run (no baseline) or via workflow_dispatch input.
+  # JOB 5 — Rollback Check
   # ===========================================================================
   rollback-check:
     name: Rollback Check
@@ -391,7 +292,7 @@ jobs:
 
       - name: Check rollback threshold
         env:
-          ROLLBACK_THRESHOLD: "0.02"
+          ROLLBACK_THRESHOLD: ${{ vars.ROLLBACK_THRESHOLD }}
           SKIP_ROLLBACK: ${{ github.event.inputs.skip_rollback_check || 'false' }}
         run: |
           python3 - <<'EOF'
@@ -434,9 +335,7 @@ jobs:
           EOF
 
   # ===========================================================================
-  # JOB 7 — Persist Metrics Baseline to GCS
-  # Saves current metrics.txt as the baseline for the next run's rollback check.
-  # Only runs after all gates pass, on main branch.
+  # JOB 6 — Persist Metrics Baseline to GCS (main only)
   # ===========================================================================
   persist-metrics-baseline:
     name: Persist Metrics Baseline
@@ -445,9 +344,6 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
@@ -465,44 +361,90 @@ jobs:
       - name: Push current metrics to GCS as new baseline
         run: |
           gcloud storage cp model_pipeline/metrics.txt \
-            gs://savvio-${{ env.ENVIRONMENT }}-mlflow-artifacts/ci/previous_metrics.txt
+            gs://${{ vars.MLFLOW_GCS_BUCKET }}/ci/previous_metrics.txt
           echo "Baseline updated in GCS."
 
   # ===========================================================================
-  # JOB 8 — Trigger Deployment (main branch only, after all gates pass)
+  # JOB 7 — Build & Push Trainer Image (main only)
   # ===========================================================================
-  trigger-deployment:
-    name: Trigger Deployment CI
+  build-and-push:
+    name: Build & Push Image
     runs-on: ubuntu-latest
-    needs: rollback-check
+    needs: persist-metrics-baseline
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    permissions:
-      actions: write
+    outputs:
+      image_tag: ${{ steps.tag.outputs.image_tag }}
 
     steps:
-      - name: Trigger deployment.yml
-        uses: actions/github-script@v7
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'deployment.yml',
-              ref: 'main',
-            });
-            console.log('deployment.yml triggered successfully');
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.AR_REGION }}-docker.pkg.dev --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute image tag
+        id: tag
+        run: echo "image_tag=${{ env.IMAGE }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: model_pipeline
+          file: model_pipeline/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
+
+  # ===========================================================================
+  # JOB 8 — Deploy Trainer to Cloud Run (Terraform-managed service)
+  # ===========================================================================
+  deploy:
+    name: Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+
+    steps:
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy image to Cloud Run
+        run: |
+          gcloud run deploy "${{ vars.CLOUD_RUN_ML_TRAINER }}" \
+            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --region "${{ vars.AR_REGION }}" \
+            --platform managed \
+            --image "${{ needs.build-and-push.outputs.image_tag }}" \
+            --service-account "${{ vars.RUN_SA_EMAIL }}" \
+            --quiet
 
   # ===========================================================================
   # JOB 9 — Notify on Failure
-  # Sends an email via SMTP to ALERT_EMAIL_LIST.
-  # if: always() ensures this runs even when upstream jobs are skipped
-  # (e.g. run-pipeline skipped on PRs, persist-metrics skipped off main).
   # ===========================================================================
   notify-on-failure:
     name: Notify on Failure
     runs-on: ubuntu-latest
-    needs: [unit-tests, db-connection-check, run-pipeline, validation-gate, bias-gate, rollback-check, persist-metrics-baseline, trigger-deployment]
+    needs: [unit-tests, run-pipeline, validation-gate, bias-gate, rollback-check, persist-metrics-baseline, build-and-push, deploy]
     if: always() && contains(needs.*.result, 'failure')
 
     steps:
@@ -515,15 +457,16 @@ jobs:
           echo "Run URL:      ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: Send failure email
+        if: vars.NOTIFY_EMAILS_ENABLED == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.SMTP_HOST }}
           server_port: ${{ secrets.SMTP_PORT }}
           username: ${{ secrets.SMTP_USER }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          from: SavVio CI <${{ secrets.ALERT_EMAIL_FROM }}>
+          from: ${{ vars.PROJECT_NAME }} CI <${{ secrets.ALERT_EMAIL_FROM }}>
           to: ${{ secrets.ALERT_EMAIL_LIST }}
-          subject: "[SavVio][FAILED] Model Pipeline CI/CD — ${{ github.ref_name }} @ ${{ github.sha }}"
+          subject: "[${{ vars.PROJECT_NAME }}][FAILED] Model Pipeline CI/CD — ${{ github.ref_name }} @ ${{ github.sha }}"
           body: |
             Model Pipeline CI/CD FAILED
 
@@ -534,25 +477,29 @@ jobs:
 
             Per-job results:
               unit-tests:               ${{ needs.unit-tests.result }}
-              db-connection-check:      ${{ needs.db-connection-check.result }}
               run-pipeline:             ${{ needs.run-pipeline.result }}
               validation-gate:          ${{ needs.validation-gate.result }}
               bias-gate:                ${{ needs.bias-gate.result }}
               rollback-check:           ${{ needs.rollback-check.result }}
               persist-metrics-baseline: ${{ needs.persist-metrics-baseline.result }}
-              trigger-deployment:       ${{ needs.trigger-deployment.result }}
+              build-and-push:           ${{ needs.build-and-push.result }}
+              deploy:                   ${{ needs.deploy.result }}
 
             Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
   # ===========================================================================
   # JOB 10 — Notify on Success
-  # Runs only when no upstream job failed or was cancelled.
   # ===========================================================================
   notify-on-success:
     name: Notify on Success
     runs-on: ubuntu-latest
-    needs: [unit-tests, db-connection-check, run-pipeline, validation-gate, bias-gate, rollback-check, persist-metrics-baseline, trigger-deployment]
-    if: always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    needs: [unit-tests, run-pipeline, validation-gate, bias-gate, rollback-check, persist-metrics-baseline, build-and-push, deploy]
+    if: |
+      always()
+      && !contains(needs.*.result, 'failure')
+      && !contains(needs.*.result, 'cancelled')
+      && github.event_name == 'push'
+      && github.ref == 'refs/heads/main'
 
     steps:
       - name: Log success summary
@@ -560,21 +507,18 @@ jobs:
           echo "Model Pipeline CI/CD PASSED"
           echo "Branch:       ${{ github.ref_name }}"
           echo "Commit:       ${{ github.sha }}"
-          echo "Triggered by: ${{ github.actor }}"
-          echo "Run URL:      ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: Send success email
-        # Only send success emails on push to main, not on every PR — keeps inbox sane.
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: vars.NOTIFY_EMAILS_ENABLED == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.SMTP_HOST }}
           server_port: ${{ secrets.SMTP_PORT }}
           username: ${{ secrets.SMTP_USER }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          from: SavVio CI <${{ secrets.ALERT_EMAIL_FROM }}>
+          from: ${{ vars.PROJECT_NAME }} CI <${{ secrets.ALERT_EMAIL_FROM }}>
           to: ${{ secrets.ALERT_EMAIL_LIST }}
-          subject: "[SavVio][OK] Model Pipeline CI/CD — ${{ github.ref_name }} @ ${{ github.sha }}"
+          subject: "[${{ vars.PROJECT_NAME }}][OK] Model Pipeline CI/CD — ${{ github.ref_name }} @ ${{ github.sha }}"
           body: |
             Model Pipeline CI/CD PASSED
 
@@ -582,7 +526,7 @@ jobs:
             Commit:       ${{ github.sha }}
             Triggered by: ${{ github.actor }}
 
-            Validation gate, bias gate, and rollback check all passed.
-            New metrics baseline persisted; deployment.yml dispatched.
+            Validation gate, bias gate and rollback check all passed.
+            New metrics baseline persisted; trainer image deployed to Cloud Run.
 
             Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

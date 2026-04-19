@@ -203,7 +203,7 @@ def test_check_preprocessing_branch_exists():
 # 5) Feature engineering tasks
 # =============================================================================
 
-@pytest.mark.parametrize("attr", ["feature_financial", "feature_reviews"])
+@pytest.mark.parametrize("attr", ["feature_financial", "feature_product_reviews"])
 def test_feature_task_exists(attr):
     assert hasattr(M, attr)
     assert isinstance(getattr(M, attr), _PythonOperator)

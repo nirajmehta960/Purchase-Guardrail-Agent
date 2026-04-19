@@ -69,6 +69,7 @@ def merge_csv(
         return stats
 
     partition_clause = ", ".join(key_cols)
+    join_condition = " AND ".join([f"n.{col} IS NOT DISTINCT FROM e.{col}" for col in key_cols])
     temp_out = existing_path + ".duckdb.tmp"
 
     # Set DuckDB configuration
@@ -86,6 +87,25 @@ def merge_csv(
         con.execute("PRAGMA memory_limit='1000MB';")
         con.execute("PRAGMA preserve_insertion_order=false;")
         con.execute("PRAGMA threads=2;")
+
+        # Compute key-level stats without loading full datasets into memory.
+        con.execute(
+            f"CREATE TEMP VIEW new_keys AS "
+            f"SELECT DISTINCT {partition_clause} FROM read_csv_auto('{new_path}')"
+        )
+        con.execute(
+            f"CREATE TEMP VIEW existing_keys AS "
+            f"SELECT DISTINCT {partition_clause} FROM read_csv_auto('{existing_path}')"
+        )
+        new_key_count_res = con.execute("SELECT COUNT(*) FROM new_keys").fetchone()
+        existing_key_count_res = con.execute("SELECT COUNT(*) FROM existing_keys").fetchone()
+        overlap_count_res = con.execute(
+            f"SELECT COUNT(*) FROM new_keys n JOIN existing_keys e ON {join_condition}"
+        ).fetchone()
+
+        new_key_count = int(new_key_count_res[0]) if new_key_count_res else 0
+        existing_key_count = int(existing_key_count_res[0]) if existing_key_count_res else 0
+        overlap_count = int(overlap_count_res[0]) if overlap_count_res else 0
 
         query = f"""
         COPY (
@@ -118,6 +138,9 @@ def merge_csv(
     total_count = sum(1 for _ in open(temp_out)) - 1  # subtract header row
 
     stats = {
+        "updated": overlap_count,
+        "appended": new_key_count - overlap_count,
+        "unchanged": existing_key_count - overlap_count,
         "total": total_count,
     }
 
@@ -153,6 +176,7 @@ def merge_jsonl(
         return stats
 
     partition_clause = ", ".join(key_cols)
+    join_condition = " AND ".join([f"n.{col} IS NOT DISTINCT FROM e.{col}" for col in key_cols])
     temp_out = existing_path + ".duckdb.tmp"
 
     with duckdb.connect() as con:
@@ -160,6 +184,27 @@ def merge_jsonl(
         con.execute("PRAGMA memory_limit='1000MB';")
         con.execute("PRAGMA preserve_insertion_order=false;")
         con.execute("PRAGMA threads=2;")
+
+        # Compute key-level stats without loading full datasets into memory.
+        con.execute(
+            f"CREATE TEMP VIEW new_keys AS "
+            f"SELECT DISTINCT {partition_clause} "
+            f"FROM read_json_auto('{new_path}', maximum_object_size=33554432)"
+        )
+        con.execute(
+            f"CREATE TEMP VIEW existing_keys AS "
+            f"SELECT DISTINCT {partition_clause} "
+            f"FROM read_json_auto('{existing_path}', maximum_object_size=33554432)"
+        )
+        new_key_count_res = con.execute("SELECT COUNT(*) FROM new_keys").fetchone()
+        existing_key_count_res = con.execute("SELECT COUNT(*) FROM existing_keys").fetchone()
+        overlap_count_res = con.execute(
+            f"SELECT COUNT(*) FROM new_keys n JOIN existing_keys e ON {join_condition}"
+        ).fetchone()
+
+        new_key_count = int(new_key_count_res[0]) if new_key_count_res else 0
+        existing_key_count = int(existing_key_count_res[0]) if existing_key_count_res else 0
+        overlap_count = int(overlap_count_res[0]) if overlap_count_res else 0
 
         query = f"""
         COPY (
@@ -192,6 +237,9 @@ def merge_jsonl(
     total_count = sum(1 for _ in open(temp_out))
 
     stats = {
+        "updated": overlap_count,
+        "appended": new_key_count - overlap_count,
+        "unchanged": existing_key_count - overlap_count,
         "total": total_count,
     }
 

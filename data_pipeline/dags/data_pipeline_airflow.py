@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from src.ingestion.run_ingestion import ingest_financial_task, ingest_product_task, ingest_review_task
 from src.preprocess.run_preprocessing import preprocess_financial_task, preprocess_product_task, preprocess_review_task
@@ -80,21 +81,38 @@ def make_branch_check(upstream_ids, success_ids, failure_ids):
     return _check
 
 
-# ---------- Constants ----------
-ALERT_EMAIL = "murtaza.sn786@gmail.com"
+# ---------- Notification recipients (env-driven) ----------
+# ALERT_EMAIL_LIST is the canonical comma-separated list of "to" recipients
+# (also used by the drift_detector + CI workflows). ALERT_EMAIL_CC is an
+# optional comma-separated CC list. Falls back to ALERT_EMAIL_FROM (or an
+# empty string) so the DAG still parses when nothing is configured.
+def _split_csv_env(name: str) -> list[str]:
+    raw = os.getenv(name, "")
+    return [v.strip() for v in raw.split(",") if v.strip()]
+
+
+_ALERT_TO_LIST = _split_csv_env("ALERT_EMAIL_LIST") or _split_csv_env("ALERT_EMAIL_FROM")
+_ALERT_CC_LIST = _split_csv_env("ALERT_EMAIL_CC")
+
+# Airflow EmailOperator accepts a list or a string — pass list for clarity.
+ALERT_EMAIL = _ALERT_TO_LIST or [os.getenv("ALERT_EMAIL_FROM", "")]
+ALERT_EMAIL_CC = _ALERT_CC_LIST or None
 
 # ---------- Default args ----------
 default_args = {
-    'owner': 'Murtaza Nipplewala',
+    'owner': os.getenv("DAG_OWNER", "SavVio Data Team"),
     'start_date': datetime(2026, 2, 21),
     'retries': 0,
     'retry_delay': timedelta(minutes=0.3),
-    'email': 'murtaza.sn786@gmail.com',
+    'email': ALERT_EMAIL,
     'email_on_failure': True,
     'email_on_retry': False,
 }
 
 # ---------- DAG ----------
+_DAG_OWNER_NAME = default_args["owner"]
+_DAG_OWNER_LINK = os.getenv("DAG_OWNER_LINK", "")
+_owner_links = {_DAG_OWNER_NAME: _DAG_OWNER_LINK} if _DAG_OWNER_LINK else {}
 dag = DAG(
     dag_id="Data_pipeline_airflow",
     default_args=default_args,
@@ -102,7 +120,7 @@ dag = DAG(
     schedule="@daily",
     catchup=False,
     tags=["example"],
-    owner_links={"Murtaza Nipplewala": "https://github.com/MurtazaNipplewala/SavVio"},
+    owner_links=_owner_links,
     max_active_runs=1,
 )
 
@@ -114,7 +132,7 @@ dag = DAG(
 email_error_at_ingestion = EmailOperator(
     task_id="send_email_at_ingestion_error",
     to=ALERT_EMAIL,
-    cc="nirajmehta960@gmail.com",
+    cc=ALERT_EMAIL_CC,
     subject="SavVio Data Pipeline Airflow - Error at Ingestion",
     html_content="<p>Something went wrong at Ingestion stage.</p>",
     dag=dag,
@@ -132,7 +150,7 @@ email_error_at_ingestion = EmailOperator(
 email_error_at_raw_validation = EmailOperator(
     task_id="send_email_at_raw_validation_error",
     to=ALERT_EMAIL,
-    cc="nirajmehta960@gmail.com",
+    cc=ALERT_EMAIL_CC,
     subject="SavVio Data Pipeline Airflow - Error at Raw Validation",
     html_content="<p>Something went wrong at Raw Data Validation stage.</p>",
     dag=dag,
@@ -150,7 +168,7 @@ email_error_at_raw_validation = EmailOperator(
 email_error_at_preprocessing = EmailOperator(
     task_id="send_email_at_preprocessing_error",
     to=ALERT_EMAIL,
-    cc="nirajmehta960@gmail.com",
+    cc=ALERT_EMAIL_CC,
     subject="SavVio Data Pipeline Airflow - Error at Preprocessing",
     html_content="<p>Something went wrong at Preprocessing stage.</p>",
     dag=dag,
@@ -168,7 +186,7 @@ email_error_at_preprocessing = EmailOperator(
 email_error_at_processed_validation = EmailOperator(
     task_id="send_email_at_processed_validation_error",
     to=ALERT_EMAIL,
-    cc="nirajmehta960@gmail.com",
+    cc=ALERT_EMAIL_CC,
     subject="SavVio Data Pipeline Airflow - Error at Processed Validation",
     html_content="<p>Something went wrong at Processed Data Validation stage.</p>",
     dag=dag,
@@ -186,7 +204,7 @@ email_error_at_processed_validation = EmailOperator(
 email_error_at_feature_engineering = EmailOperator(
     task_id="send_email_at_feature_engineering_error",
     to=ALERT_EMAIL,
-    cc="nirajmehta960@gmail.com",
+    cc=ALERT_EMAIL_CC,
     subject="SavVio Data Pipeline Airflow - Error at Feature Engineering",
     html_content="<p>Something went wrong at Feature Engineering stage.</p>",
     dag=dag,
@@ -204,7 +222,7 @@ email_error_at_feature_engineering = EmailOperator(
 email_error_at_featured_validation = EmailOperator(
     task_id="send_email_at_featured_validation_error",
     to=ALERT_EMAIL,
-    cc="nirajmehta960@gmail.com",
+    cc=ALERT_EMAIL_CC,
     subject="SavVio Data Pipeline Airflow - Error at Featured Validation",
     html_content="<p>Something went wrong at Featured Data Validation stage.</p>",
     dag=dag,
@@ -222,7 +240,7 @@ email_error_at_featured_validation = EmailOperator(
 email_error_at_DB_loading = EmailOperator(
     task_id="send_email_at_DB_loading_error",
     to=ALERT_EMAIL,
-    cc="nirajmehta960@gmail.com",
+    cc=ALERT_EMAIL_CC,
     subject="SavVio Data Pipeline Airflow - Error at DB Loading",
     html_content="<p>Something went wrong at DB Loading stage.</p>",
     dag=dag,
@@ -235,7 +253,7 @@ email_error_at_DB_loading = EmailOperator(
 email_error_at_bias_analysis = EmailOperator(
     task_id="send_email_at_bias_analysis_error",
     to=ALERT_EMAIL,
-    cc="nirajmehta960@gmail.com",
+    cc=ALERT_EMAIL_CC,
     subject="SavVio Data Pipeline Airflow - Error at Bias Analysis",
     html_content="<p>Something went wrong at Bias Analysis stage. The pipeline "
                  "continued to completion, but bias metrics may be incomplete.</p>",
@@ -249,7 +267,7 @@ email_error_at_bias_analysis = EmailOperator(
 email_pipeline_success = EmailOperator(
     task_id="send_email_pipeline_success",
     to=ALERT_EMAIL,
-    cc="nirajmehta960@gmail.com",
+    cc=ALERT_EMAIL_CC,
     subject="SavVio Data Pipeline — Run Completed Successfully",
     html_content="""
             <html>
@@ -538,20 +556,47 @@ load_review = PythonOperator(
     dag=dag,
 )
 
-generate_load_embeddings = PythonOperator(
-    task_id='generate_load_embeddings',
-    python_callable=generate_and_load_embedding_task,
-    dag=dag,
-)
+# ───────────────────────────────────────────────────────────────────
+# DISABLED: generate_load_embeddings
+#
+# Generates 384-dim embeddings for ~94k products and ~2.1M reviews via
+# sentence-transformers (all-MiniLM-L6-v2) and bulk-inserts them into the
+# product_embeddings / review_embeddings pgvector tables.
+#
+# Why it's disabled today:
+#   - On CPU inside Docker (no GPU/MPS) it takes 4–8h+ per pipeline run and
+#     has been the dominant cause of failed runs (worker timeouts/restarts).
+#   - Nothing in deployment/api or model_pipeline currently queries these
+#     tables — product_resolver uses ILIKE + token-overlap scoring on the
+#     `products` table, and review snippets come from a plain
+#     `SELECT ... FROM reviews WHERE product_id = :pid` sorted by helpful_vote.
+#     The embedding tables are populated but never read.
+#
+# Re-enable when:
+#   - product_resolver is rewritten to do true semantic search via
+#     `ORDER BY embedding <=> :query_vec`, OR
+#   - the API gains a "reviews most relevant to user query" feature, OR
+#   - the workload is moved to a GPU-backed runner (Cloud Run job with GPU,
+#     GKE node with T4/L4, etc.) where the cost drops to ~10 minutes.
+#
+# To re-enable: uncomment the operator below, restore it at the end of the
+# `setup_database >> ...` chain, and add 'generate_load_embeddings' back to
+# `check_db_loading`'s upstream_ids list.
+# ───────────────────────────────────────────────────────────────────
+# generate_load_embeddings = PythonOperator(
+#     task_id='generate_load_embeddings',
+#     python_callable=generate_and_load_embedding_task,
+#     dag=dag,
+# )
 
 check_featured_validation >> setup_database
-setup_database >> [load_financial, load_product] >> load_review >> generate_load_embeddings
+setup_database >> [load_financial, load_product] >> load_review
 
 # BRANCH: all DB loading succeeded?
 check_db_loading = BranchPythonOperator(
     task_id='check_db_loading',
     python_callable=make_branch_check(
-        upstream_ids=['load_financial_profiles', 'load_products', 'load_reviews', 'generate_load_embeddings'],
+        upstream_ids=['load_financial_profiles', 'load_products', 'load_reviews'],
         # success_ids=['send_email_pipeline_success', 'send_slack_pipeline_success'],
         success_ids=['send_email_pipeline_success'],
         # failure_ids=['send_email_at_DB_loading_error', 'send_slack_at_DB_loading_error'],

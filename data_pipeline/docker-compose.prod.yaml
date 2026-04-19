@@ -1,0 +1,37 @@
+# =============================================================================
+# Production / CI overlay for the Airflow stack on the GCE VM.
+#
+# Used together with docker-compose.yaml. Replaces the local `build:` of every
+# Airflow service with a pre-built image pulled from Artifact Registry, and
+# strips host-mounted source-code volumes so the DAGs / savviocore baked into
+# the image are the ones executed (the dev compose mounts ./dags, ./plugins
+# and ../savviocore which would otherwise mask the image contents).
+#
+# Usage on the VM:
+#
+#   IMAGE_TAG=us-east1-docker.pkg.dev/<proj>/<repo>/<image>:<sha> \
+#     docker compose -f docker-compose.yaml -f docker-compose.prod.yaml up -d
+#
+# Requires Docker Compose v2.24+ for the `!override` / `!reset` tags.
+# =============================================================================
+
+x-airflow-prod: &airflow-prod
+  image: ${IMAGE_TAG:?IMAGE_TAG must be set to the Artifact Registry image:tag}
+  build: !reset null
+  pull_policy: always
+  volumes: !override
+    # Keep only logs (so Airflow logs persist on the host) and config (so the
+    # GCP service-account key file mounted on the host is reachable). DAGs,
+    # plugins and savviocore now come from the image.
+    - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
+    - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
+
+services:
+  airflow-apiserver: { <<: *airflow-prod }
+  airflow-scheduler: { <<: *airflow-prod }
+  airflow-dag-processor: { <<: *airflow-prod }
+  airflow-worker: { <<: *airflow-prod }
+  airflow-triggerer: { <<: *airflow-prod }
+  airflow-init: { <<: *airflow-prod }
+  airflow-cli: { <<: *airflow-prod }
+  flower: { <<: *airflow-prod }

@@ -51,7 +51,7 @@
 │                        ↓                                        │
 │  14. LOAD TO DATABASE                                           │
 │      ├── PostgreSQL (financial, product, review data)           │
-│      └── pgvector (product embeddings for RAG)                  │
+│      └── pgvector embeddings — DISABLED (see Phase 14)          │
 │                        ↓                                        │
 │  15. BIAS DETECTION & MITIGATION                                │
 │      └── Slice analysis on features, fairness checks            │
@@ -89,7 +89,7 @@
 | Feature Validation   | Great Expectations            | Pandera, custom validators              | PythonOperator                 |
 | Versioning           | DVC, GCP Cloud Storage        | —                                       | BashOperator                   |
 | Load to Database     | SQLAlchemy, psycopg2          | pandas.to_sql                           | PythonOperator                 |
-| Embeddings           | Sentence-Transformers, OpenAI | LangChain embeddings                    | PythonOperator                 |
+| Embeddings           | Sentence-Transformers (`all-MiniLM-L6-v2`, 384-dim) | LangChain embeddings                    | PythonOperator |
 | Bias Detection       | Fairlearn                     | Custom Pandas slicing, AIF360           | PythonOperator                 |
 | Orchestration        | Apache Airflow                | —                                       | Native                         |
 | Testing              | pytest                        | unittest                                | —                              |
@@ -877,7 +877,18 @@ Load processed data, engineered features, and product embeddings into PostgreSQL
    - `setup_database_task` calls `create_tables(engine)` (idempotent — `CREATE TABLE IF NOT EXISTS`).
    - `load_financial_profiles` and `load_products` run in parallel.
    - `load_reviews` runs after products to satisfy the `parent_asin` FK.
-   - `generate_and_load_embedding_task` (currently commented out in the DAG; available as a manual callable in `run_database.py`) embeds products and reviews and writes them to pgvector.
+   - `generate_and_load_embedding_task` is **currently disabled in the DAG** (the operator block in `dags/data_pipeline_airflow.py` is commented out and the task id has been removed from `check_db_loading.upstream_ids`). The callable still exists in `src/database/run_database.py` and can be invoked manually.
+
+   **Why disabled:**
+   - On CPU inside Docker (no GPU/MPS) the embedding step takes 4–8 h+ per run for ~94k products and ~2.1M reviews and was the dominant cause of failed runs (worker timeouts/restarts).
+   - Nothing in `deployment/api` or `model_pipeline` currently queries `product_embeddings` / `review_embeddings`. `model_pipeline/src/llm/product_resolver.py` uses SQL `ILIKE` + token-overlap scoring on the `products` table; `deployment/api/inference.py` fetches review snippets via plain `SELECT … FROM reviews WHERE product_id = :pid ORDER BY helpful_vote DESC LIMIT N`.
+
+   **How to re-enable** (when product_resolver gains true semantic search via `ORDER BY embedding <=> :query_vec`, or the workload moves to a GPU runner):
+   1. Uncomment the `generate_load_embeddings = PythonOperator(…)` block in `dags/data_pipeline_airflow.py`.
+   2. Restore it at the end of the dependency chain: `setup_database >> [load_financial, load_product] >> load_review >> generate_load_embeddings`.
+   3. Add `'generate_load_embeddings'` back to `check_db_loading`'s `upstream_ids` list.
+
+   The full disable rationale and re-enable instructions are also captured in a comment block directly above the commented operator in the DAG file.
 
 
 
@@ -1286,7 +1297,8 @@ The pipeline has been executed end-to-end both as an **orchestrated Airflow DAG*
 | 6a  | Featured validation            | `validate_features()`                      | ✅ 21/22 checks pass; 1 WARNING → ALERT, pipeline continues                                                                                                        |
 | 6b  | Tier-2 anomaly                 | `validate_anomalies()`                     | ✅ 5/8 checks pass; 3 expected outlier WARNINGS in `discretionary_income`, `debt_to_income_ratio`, `emergency_fund_months` (IQR×4) → ALERT, pipeline continues     |
 | 7   | Bias detection                 | `python -m src.bias.run_bias`              | ✅ All three modules (financial / product / review) ran; representation risks surfaced and training-time mitigation strategies emitted (see Phase 15 report)       |
-| 8   | DB load + embeddings           | `python -m src.database.run_database`      | ▶ Requires a reachable Postgres with `pgvector`. In Airflow, runs after featured validation; in standalone mode, requires `DB_*` env vars to point at a live DB. |
+| 8a  | DB load (financial / products / reviews) | `python -m src.database.run_database` (or `setup_database`, `load_financial_profiles`, `load_products`, `load_reviews` in the DAG) | ✅ Requires a reachable Postgres. Tables are created idempotently. `load_financial_profiles` + `load_products` run in parallel; `load_reviews` runs after products for the FK. |
+| 8b  | Embeddings (product/review pgvector) | `generate_and_load_embedding_task` in `src/database/run_database.py` | ⏸ **Disabled in DAG** (see Phase 14). Callable still works in standalone mode and requires `pgvector`. Skipped end-to-end in current verification runs. |
 
 ### Reproducing the Verification
 
@@ -1337,3 +1349,117 @@ The pipeline uses **email-only** notifications (Slack was previously wired but r
 | Sentinel: success email did not fire   | `pipeline_sentinel`                       | `ALL_DONE`          | Raises `AirflowException` so the DAG run is marked **failed**       |
 
 SMTP credentials (`SMTP_USER`, `SMTP_PASSWORD`) are read from `.env` and wired into the Airflow `smtp_default` connection automatically by `docker-compose.yaml` via `AIRFLOW_CONN_SMTP_DEFAULT` — no manual UI configuration is required.
+
+---
+
+## Appendix C: Environment-Driven Configuration
+
+Every tunable in the pipeline is sourced from environment variables — there are **no hardcoded paths, credentials, recipients, model names, batch sizes, or DAG metadata** in the Python sources or the DAG file. The single source of truth is `data_pipeline/.env.example` (copy to `data_pipeline/.env` and fill in real values). This appendix groups the variables by what they configure so each stage's knobs can be found quickly.
+
+### C.1 GCP & GCS (Phase 3 — Ingestion, Phase 4 — DVC)
+
+| Variable                | Purpose                                                                                       |
+| ----------------------- | --------------------------------------------------------------------------------------------- |
+| `GCP_PROJECT_ID`        | Project that owns the bucket and (in prod) the Cloud Run / Vertex resources.                   |
+| `GCP_CREDENTIALS_PATH`  | Service account JSON key (host path; mounted at `/opt/airflow/config/savvio-gcp-key.json`).    |
+| `GCS_BUCKET_NAME`       | Bucket holding raw / processed / features / validated artifacts and the DVC store.             |
+| `GCS_RAW_PATH` / `GCS_PROCESSED_PATH` / `GCS_FEATURES_PATH` / `GCS_VALIDATED_PATH` | Folder prefixes inside the bucket. |
+| `FINANCIAL_BLOB` / `PRODUCT_BLOB` / `REVIEW_BLOB` | Object keys for the three raw input files.                                |
+| `DVC_REMOTE_NAME` / `DVC_REMOTE_URL` | DVC remote alias and (optional) URL override — `.dvc/config` no longer hardcodes a credential path. |
+
+### C.2 Local Paths (used by every stage)
+
+| Variable    | Purpose                                                                                                                                |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATA_DIR`  | Base directory for `raw/`, `processed/`, `features/`, `quarantine/`. Resolved by `src/ingestion/config.py` against the repo root, so the default `dags/data` maps to `data_pipeline/dags/data` (the DVC-tracked location and the worker mount point `/opt/airflow/dags/data`). Use an absolute path to override entirely. |
+| `LOG_DIR`   | Where module logs are written (Airflow worker logs are separate, under `data_pipeline/logs/`).                                          |
+| `LOG_LEVEL` | Standard Python logging level (`DEBUG`, `INFO`, `WARNING`, …).                                                                          |
+
+### C.3 Pipeline behavior knobs (Phases 5–8)
+
+| Variable                  | Purpose                                                                                |
+| ------------------------- | -------------------------------------------------------------------------------------- |
+| `ENVIRONMENT`             | `dev` / `staging` / `prod` — drives default `DATA_SOURCE` (dev→GCS, prod→API).         |
+| `DATA_SOURCE`             | Override the auto-derived source (`gcs` or `api`).                                     |
+| `MAX_MISSING_VALUES_PCT`  | Validator threshold for null-rate alerts.                                              |
+| `MIN_RECORDS_REQUIRED`    | Lower bound on row count before raw validation fails hard.                             |
+| `MONTHLY_INCOME_COLS`     | Comma-separated list of source columns that contribute to derived monthly income.       |
+| `MONTHLY_EXPENSE_COLS`    | Comma-separated list of source columns that contribute to derived monthly expenses.     |
+
+### C.4 DuckDB merge tunables (Phase 8 — Preprocessing, `incremental.py`)
+
+`preprocessing` runs three DuckDB merges in parallel, so `3 × DUCKDB_MEMORY_LIMIT` must stay below the worker container's `mem_limit` in `docker-compose.yaml`.
+
+| Variable                  | Default     | Purpose                                                       |
+| ------------------------- | ----------- | ------------------------------------------------------------- |
+| `DUCKDB_MEMORY_LIMIT`     | `1000MB`    | Per-merge RAM cap (DuckDB spills to `DUCKDB_TEMP_DIRECTORY`). |
+| `DUCKDB_THREADS`          | `2`         | Threads per merge.                                            |
+| `DUCKDB_TEMP_DIRECTORY`   | `/tmp`      | Disk-spill location.                                          |
+| `JSONL_MAX_OBJECT_SIZE`   | `33554432`  | Max single-object size when streaming JSONL into DuckDB.      |
+
+### C.5 Database load tunables (Phase 14 — `upload_to_db.py`, `vector_embed.py`)
+
+| Variable                   | Default     | Purpose                                                                         |
+| -------------------------- | ----------- | ------------------------------------------------------------------------------- |
+| `JSONL_STREAM_CHUNKSIZE`   | `100000`    | Rows per chunk when streaming JSONL into Postgres.                              |
+| `JSONL_LARGE_FILE_MB`      | `300`       | Files above this threshold use the streaming path; below it, in-memory pandas.  |
+| `UPSERT_CHUNK_SIZE`        | `5000`      | Rows per `INSERT … ON CONFLICT` batch for products.                              |
+| `REVIEWS_INSERT_PAGE_SIZE` | `25000`     | Rows per `psycopg2.execute_values` page for reviews.                            |
+
+### C.6 Embedding tunables (Phase 14 — `vector_embed.py`, currently disabled)
+
+Swap `EMBEDDING_MODEL` and `EMBEDDING_DIM` together — pgvector enforces a fixed column width, so changing the model without updating the dim (and vice versa) corrupts the table.
+
+| Variable                  | Default            | Purpose                                                          |
+| ------------------------- | ------------------ | ---------------------------------------------------------------- |
+| `EMBEDDING_MODEL`         | `all-MiniLM-L6-v2` | Sentence-Transformers model loaded by `vector_embed.load_model`. |
+| `EMBEDDING_DIM`           | `384`              | Must match the model's output dimension and the pgvector column. |
+| `EMBEDDING_BATCH_SIZE`    | `64`               | Per-call batch size into the model.                              |
+| `EMBED_STORE_CHUNK_SIZE`  | `5000`             | Rows per chunk while streaming source text from Postgres.        |
+| `EMBED_INSERT_BATCH_SIZE` | `500`              | Rows per `INSERT` batch into `*_embeddings`.                     |
+
+### C.7 Application database (Phase 14)
+
+| Variable      | Local Dev (Mac + Docker) | Production (Cloud SQL)                                  |
+| ------------- | ------------------------ | -------------------------------------------------------- |
+| `DB_HOST`     | `host.docker.internal`   | Cloud SQL private IP / `/cloudsql/<conn>` socket path    |
+| `DB_PORT`     | `5432`                   | `5432`                                                   |
+| `DB_NAME`     | local DB name            | Cloud SQL DB name                                        |
+| `DB_USER`     | local pg user            | Cloud SQL user (Secret Manager-backed)                   |
+| `DB_PASSWORD` | local pg password        | Cloud SQL password (Secret Manager-backed)               |
+| `DB_ENV`      | `dev`                    | `prod` — toggles which credential source the API uses    |
+
+`docker-compose.yaml` overrides `DB_HOST=host.docker.internal` for the Airflow services so pipeline tasks can reach the host's Postgres on macOS regardless of the user's `.env` value.
+
+### C.8 Airflow runtime & UI (Phase 16)
+
+| Variable                                                          | Purpose                                                                 |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `AIRFLOW_UID` / `AIRFLOW_PROJ_DIR`                                | Host UID for log/plugin folder ownership; project mount path.           |
+| `_AIRFLOW_WWW_USER_USERNAME` / `_AIRFLOW_WWW_USER_PASSWORD`       | Initial UI user created on first boot.                                  |
+| `AIRFLOW_USERNAME` / `AIRFLOW_PASSWORD`                           | Credentials used by API/Backend clients hitting the Airflow REST API.    |
+
+### C.9 DAG metadata & alerting (Phase 16, Phase 18)
+
+| Variable                              | Purpose                                                                                         |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `DAG_OWNER`                           | DAG `owner` field shown in the Airflow UI.                                                      |
+| `DAG_OWNER_LINK`                      | URL the owner name links to in the Airflow UI.                                                  |
+| `SMTP_HOST` / `SMTP_PORT`             | Wired into the Airflow `smtp_default` connection via `AIRFLOW_CONN_SMTP_DEFAULT`.                |
+| `SMTP_USER` / `SMTP_PASSWORD`         | Gmail App Password (or any SMTP creds) used by every `EmailOperator`.                            |
+| `ALERT_EMAIL_FROM`                    | `From` address on every alert/success email.                                                    |
+| `ALERT_EMAIL_LIST`                    | Comma-separated `To` recipients (used by both the DAG email tasks and `monitoring/drift_detector.py`). |
+| `ALERT_EMAIL_CC`                      | Optional comma-separated `CC` recipients.                                                       |
+| `SLACK_WEBHOOK_URL` / `SLACK_WEBHOOK_HOST` | Optional — wires `AIRFLOW_CONN_SLACK_WEBHOOK` for re-enabling Slack alerting if desired.   |
+
+### C.10 Validation that nothing is hardcoded
+
+To audit the pipeline for stray hardcoded values:
+
+```bash
+# From repo root — should return ONLY .env.example matches
+rg -n "murtaza|nirajmehta|gmail.com|all-MiniLM|host.docker.internal|savvio-data-bucket" \
+   data_pipeline/dags data_pipeline/docker-compose.yaml
+```
+
+Anything outside `.env.example`, `docker-compose.yaml` defaults (which document the override path), or test fixtures should be considered a bug.

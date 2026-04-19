@@ -8,13 +8,30 @@ LOG_FORMAT = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
 from src.utils import setup_logging
 
 
-def get_raw_path(filename: str, base_dir: str = "data/raw") -> str:
-    """Return path to a raw data file (relative to data_pipeline)."""
+def _default_data_dir() -> str:
+    """Return the central data directory (env-driven via ingestion config).
+
+    Falls back to the DATA_DIR env var when the full ingestion config can't
+    be imported (e.g. in tests that stub out src.ingestion).
+    """
+    try:
+        from src.ingestion.config import DATA_DIR
+        return str(DATA_DIR)
+    except (ImportError, AttributeError):
+        return os.environ.get("DATA_DIR", "data")
+
+
+def get_raw_path(filename: str, base_dir: str = None) -> str:
+    """Return path to a raw data file. Uses central DATA_DIR by default."""
+    if base_dir is None:
+        return os.path.join(_default_data_dir(), "raw", filename)
     return os.path.join(base_dir, filename)
 
 
-def get_processed_path(filename: str, base_dir: str = "data/processed") -> str:
-    """Return path to a processed data file (relative to data_pipeline)."""
+def get_processed_path(filename: str, base_dir: str = None) -> str:
+    """Return path to a processed data file. Uses central DATA_DIR by default."""
+    if base_dir is None:
+        return os.path.join(_default_data_dir(), "processed", filename)
     return os.path.join(base_dir, filename)
 
 

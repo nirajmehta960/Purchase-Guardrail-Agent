@@ -31,9 +31,18 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────
 
 def _setup():
-    """Return resolved data paths: (processed_dir, features_dir)."""
-    base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    data_dir = os.path.join(base, "data")
+    """Return resolved data paths: (processed_dir, features_dir).
+
+    Uses the central DATA_DIR from ingestion config (env-driven via DATA_DIR)
+    so all stages agree on the data location. Imported lazily and with a fall
+    back to the DATA_DIR env var so the module is import-safe when the DAG is
+    loaded with stubbed src.ingestion (e.g. inside tests).
+    """
+    try:
+        from src.ingestion.config import DATA_DIR as _CONFIG_DATA_DIR
+        data_dir = str(_CONFIG_DATA_DIR)
+    except (ImportError, AttributeError):
+        data_dir = os.environ.get("DATA_DIR", "data")
     return os.path.join(data_dir, "processed"), os.path.join(data_dir, "features")
 
 

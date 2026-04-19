@@ -21,15 +21,28 @@ from src.utils import setup_logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
+
+def _data_dir() -> str:
+    """Return the central data directory (env-driven via ingestion config).
+
+    Lazy import so this module is safe to load when src.ingestion is stubbed
+    (e.g. by tests). Falls back to the DATA_DIR env var (or "data") when the
+    full ingestion config is unavailable.
+    """
+    try:
+        from src.ingestion.config import DATA_DIR as _CONFIG_DATA_DIR
+        return str(_CONFIG_DATA_DIR)
+    except (ImportError, AttributeError):
+        return os.environ.get("DATA_DIR", "data")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run Feature Engineering Pipeline")
     parser.add_argument("--skip-financial", action="store_true", help="Skip financial features")
     parser.add_argument("--skip-reviews", action="store_true", help="Skip review features")
     args = parser.parse_args()
 
-    # Resolve data paths (data is at dags/data).
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    DATA_DIR = os.path.join(BASE_DIR, "data")
+    DATA_DIR = _data_dir()
     
     # Financial input/output files.
     FIN_INPUT = os.path.join(DATA_DIR, "processed/financial_preprocessed.csv")
@@ -72,8 +85,7 @@ def main():
 def feature_financial_task(**context):
     """Airflow task: run financial feature engineering."""
     logger.info(">>> Running Financial Feature Engineering...")
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    DATA_DIR = os.path.join(BASE_DIR, "data")
+    DATA_DIR = _data_dir()
     run_financial_features(
         input_path=os.path.join(DATA_DIR, "processed/financial_preprocessed.csv"),
         output_path=os.path.join(DATA_DIR, "features/financial_featured.csv"),
@@ -89,8 +101,7 @@ def feature_review_task(**context):
 def feature_product_review_task(**context):
     """Airflow task: run product & review feature engineering (produces product + review featured files)."""
     logger.info(">>> Running Product & Review Feature Engineering...")
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    DATA_DIR = os.path.join(BASE_DIR, "data")
+    DATA_DIR = _data_dir()
     run_review_features(
         reviews_path=os.path.join(DATA_DIR, "processed/review_preprocessed.jsonl"),
         products_path=os.path.join(DATA_DIR, "processed/product_preprocessed.jsonl"),

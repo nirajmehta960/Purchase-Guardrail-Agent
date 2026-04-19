@@ -28,7 +28,7 @@ pyyaml>=6.0.1
 
 # Latest Airflow version
 # apache-airflow is intentionally excluded — it is provided by the runtime
-# Airflow VM environment. Install it explicitly in CI (see datapipeline_ci.yml).
+# Airflow VM environment. Install it explicitly in CI (see datapipeline.yml).
 # apache-airflow>=3.0.0
 
 # Airflow providers (runtime DAG dependencies — must be present on the Airflow VM)

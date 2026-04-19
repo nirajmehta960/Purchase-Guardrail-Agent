@@ -33,10 +33,12 @@ class LLMConfig:
     # ---------------------------------------------------------------------------
     # Product Resolution (pgvector similarity search)
     # ---------------------------------------------------------------------------
-    # Must match the embedding model used in the data pipeline
-    # (data_pipeline/dags/src/database/vector_embed.py)
-    EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-    EMBEDDING_DIM = 384
+    # MUST match the embedding model used by the data pipeline
+    # (data_pipeline/dags/src/database/vector_embed.py reads the same env var).
+    # If you swap models, embedding dim must change in lockstep — both pipelines
+    # read from the same env vars so a single .env update keeps them aligned.
+    EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+    EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "384"))
     SIMILARITY_THRESHOLD = float(os.getenv("LLM_SIMILARITY_THRESHOLD", "0.3"))
     TOP_K_PRODUCTS = int(os.getenv("LLM_TOP_K_PRODUCTS", "5"))
 

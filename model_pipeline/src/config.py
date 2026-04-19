@@ -5,30 +5,48 @@ Centralized settings for the ML training pipeline — paths, MLflow,
 feature lists, and scenario generation. All constants used by
 engineering.py and run_pipeline.py live here.
 
+Reproducibility contract:
+    Every value here either comes from an environment variable (so it can be
+    overridden per-environment without code changes) or is a deterministic
+    constant the model assumes (e.g. RANDOM_STATE, feature column lists).
+
 Local dev:  set MLFLOW_TRACKING_URI in model_pipeline/.env
-            (default: http://mlflow-server:5000 for docker-compose)
+            (compose default: http://mlflow-server:${MLFLOW_PORT})
 CI/prod:    MLFLOW_TRACKING_URI is injected by the workflow from Cloud Run.
 """
 
 import os
 
 
+def _build_default_mlflow_uri() -> str:
+    """Build the default MLflow URI from MLFLOW_HOST/MLFLOW_PORT so docker-compose,
+    local virtualenv, and CI all agree without hardcoding the port in two places."""
+    host = os.getenv("MLFLOW_HOST_INTERNAL", "mlflow-server")
+    port = os.getenv("MLFLOW_PORT", "5001")
+    return f"http://{host}:{port}"
+
+
 class Config:
     # ---------------------------------------------------------------------------
-    # Paths
+    # Paths (all derived from BASE_DIR — no absolute paths anywhere)
     # ---------------------------------------------------------------------------
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     MODEL_SAVE_DIR = os.path.join(BASE_DIR, "models", "artifacts")
     ENCODER_SAVE_DIR = os.path.join(BASE_DIR, "models", "preprocessing")
     SCENARIO_OUTPUT_PATH = os.path.join(BASE_DIR, "data", "training_scenarios.csv")
+    REPORTS_DIR = os.path.join(BASE_DIR, "reports")
+    # Where CI gate files (metrics.txt / bias_metrics.txt) are written.
+    # Override via CI_METRICS_DIR when GitHub Actions needs them at the workspace root.
+    CI_METRICS_DIR = os.getenv("CI_METRICS_DIR", BASE_DIR)
 
     # ---------------------------------------------------------------------------
     # MLflow Configuration
     # ---------------------------------------------------------------------------
-    MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow-server:5000")
-    EXPERIMENT_NAME = "SavVio_Prediction"
+    MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", _build_default_mlflow_uri())
+    EXPERIMENT_NAME = os.getenv("MLFLOW_EXPERIMENT_NAME", "SavVio_Prediction")
 
-    # GCP — no hardcoded defaults; must be set via env var or CI secret
+    # GCP — no hardcoded defaults; must be set via env var or CI secret.
+    # GCP_PROJECT_ID is intentionally None when unset so misconfigured runs fail loud.
     GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
     GCP_REGION = os.getenv("GCP_REGION", "us-east1")
     ARTIFACT_REGISTRY_REPO = os.getenv("ARTIFACT_REGISTRY_REPO", "savvio-model-repo")
@@ -100,8 +118,28 @@ class Config:
     # ---------------------------------------------------------------------------
     # Scenario Generation Settings
     # ---------------------------------------------------------------------------
-    N_SCENARIOS = 50_000
-    RANDOM_STATE = 42
+    N_SCENARIOS = int(os.getenv("N_SCENARIOS", "50000"))
+    RANDOM_STATE = int(os.getenv("RANDOM_STATE", "42"))
+
+    # Stratified sampling brackets (income × price) — kept here so any
+    # change is logged with the run via `mlflow.log_param` if needed and so
+    # bias_mitigation, training_data_generator, and downstream tests share a
+    # single source of truth.
+    INCOME_BINS = [0, 3_000, 7_000, float("inf")]
+    INCOME_LABELS = ["low", "mid", "high"]
+    PRICE_BINS = [100, 500, 1_500, float("inf")]
+    PRICE_LABELS = ["budget", "mid", "premium"]
+
+    # ---------------------------------------------------------------------------
+    # Baseline Model Hyperparameters
+    # Centralised so a re-run on any host produces identical baseline candidates.
+    # Tuned variants come from Optuna and are logged to MLflow per-run.
+    # ---------------------------------------------------------------------------
+    BASELINE_MODEL_PARAMS = {
+        "xgboost":    {"max_depth": 3, "learning_rate": 0.1, "n_estimators": 100},
+        "lightgbm":   {"max_depth": 3, "learning_rate": 0.1, "n_estimators": 100},
+        "xgb_linear": {"learning_rate": 0.1, "n_estimators": 100},
+    }
 
     # ---------------------------------------------------------------------------
     # Hyperparameter Tuning

@@ -713,7 +713,7 @@ GitHub Actions / Cloud Build  [Dockerized]
 
 **Tasks:**
 - Write Dockerfile to containerize full training and validation environment
-- Configure GitHub Actions workflow (`.github/workflows/modelpipeline_ci.yml`)
+- Configure GitHub Actions workflow (`.github/workflows/modelpipeline.yml`)
 - Implement automated validation gate
 - Implement automated bias gate
 - Implement rollback mechanism

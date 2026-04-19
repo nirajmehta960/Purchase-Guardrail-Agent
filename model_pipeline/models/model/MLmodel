@@ -3,13 +3,13 @@ flavors:
     artifacts:
       classifier:
         path: artifacts/classifier.pkl
-        uri: /Users/nirajmehta/Documents/SavVio/model_pipeline/models/classifier.pkl
+        uri: /app/models/classifier.pkl
       feature_pipeline:
         path: artifacts/feature_pipeline.pkl
-        uri: /Users/nirajmehta/Documents/SavVio/model_pipeline/models/artifacts/feature_pipeline.pkl
+        uri: /app/models/artifacts/feature_pipeline.pkl
       label_encoder:
         path: artifacts/label_encoder.pkl
-        uri: /Users/nirajmehta/Documents/SavVio/model_pipeline/models/label_encoder.pkl
+        uri: /app/models/label_encoder.pkl
     cloudpickle_version: 3.1.2
     code: null
     env:
@@ -17,9 +17,10 @@ flavors:
       virtualenv: python_env.yaml
     loader_module: mlflow.pyfunc.model
     python_model: python_model.pkl
-    python_version: 3.11.14
+    python_version: 3.11.15
     streamable: false
-mlflow_version: 2.19.0
-model_size_bytes: 407276
-model_uuid: 7a1843f226874ff8946550f052ff34b0
-utc_time_created: '2026-04-18 21:40:47.479334'
+mlflow_version: 2.21.3
+model_size_bytes: 1159913
+model_uuid: ec14392a4ffb4106b95a23825c63e278
+prompts: null
+utc_time_created: '2026-04-19 22:04:26.617926'

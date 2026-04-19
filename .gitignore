@@ -109,7 +109,6 @@ htmlcov/
 
 # OS
 Thumbs.db
-.DS_Store
 
 # Temporary files
 tmp/
@@ -129,7 +128,6 @@ data_pipeline/config/
 *.pyc
 *.pyo
 *.pyd
-.env
 
 # temp_data
 */temp_data/*

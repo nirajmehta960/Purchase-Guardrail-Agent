@@ -98,7 +98,7 @@ _stub("airflow.sdk.execution_time.task_runner",
 for _name, _fns in {
     "src.ingestion.run_ingestion":      ["ingest_financial_task", "ingest_product_task", "ingest_review_task"],
     "src.preprocess.run_preprocessing": ["preprocess_financial_task", "preprocess_product_task", "preprocess_review_task"],
-    "src.features.run_features":        ["feature_financial_task", "feature_review_task"],
+    "src.features.run_features":        ["feature_financial_task", "feature_review_task", "feature_product_review_task"],
     "src.database.run_database":        ["setup_database_task", "load_financial_task", "load_products_task",
                                          "load_reviews_task", "generate_and_load_embedding_task"],
     "src.validation.run_validation":    ["validate_raw", "validate_processed", "validate_features",

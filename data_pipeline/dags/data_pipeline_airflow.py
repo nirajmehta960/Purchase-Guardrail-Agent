@@ -558,13 +558,13 @@ generate_load_embeddings = PythonOperator(
 )
 
 check_featured_validation >> setup_database
-setup_database >> [load_financial, load_product] >> load_review
+setup_database >> [load_financial, load_product] >> load_review >> generate_load_embeddings
 
 # BRANCH: all DB loading succeeded?
 check_db_loading = BranchPythonOperator(
     task_id='check_db_loading',
     python_callable=make_branch_check(
-        upstream_ids=['load_financial_profiles', 'load_products', 'load_reviews'],
+        upstream_ids=['load_financial_profiles', 'load_products', 'load_reviews', 'generate_load_embeddings'],
         # success_ids=['send_email_pipeline_success', 'send_slack_pipeline_success'],
         success_ids=['send_email_pipeline_success'],
         # failure_ids=['send_email_at_DB_loading_error', 'send_slack_at_DB_loading_error'],

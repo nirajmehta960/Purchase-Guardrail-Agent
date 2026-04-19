@@ -245,7 +245,12 @@ Add each secret one by one:
 | 12 | `GRAFANA_REMOTE_WRITE_URL` | Grafana Cloud Prometheus remote-write URL | Grafana Cloud → Connections → Prometheus |
 | 13 | `GRAFANA_CLOUD_USERNAME` | Grafana Cloud instance numeric ID | Same page — "Username / Instance ID" |
 | 14 | `GRAFANA_CLOUD_API_KEY` | Grafana Cloud API key | Grafana Cloud → API Keys |
-| 15 | `SLACK_WEBHOOK_URL` | *(optional)* Slack incoming webhook URL | Slack app settings |
+| 15 | `SMTP_HOST` | SMTP server hostname (e.g. `smtp.gmail.com`) | Email provider |
+| 16 | `SMTP_PORT` | SMTP port (typically `587`) | Email provider |
+| 17 | `SMTP_USER` | SMTP username | Email provider |
+| 18 | `SMTP_PASSWORD` | SMTP password / app password | Email provider |
+| 19 | `ALERT_EMAIL_FROM` | From address used in alert emails | Your domain |
+| 20 | `ALERT_EMAIL_LIST` | Comma-separated recipient list | Project owners |
 
 > [!NOTE]
 > **`DB_HOST=127.0.0.1`** — This is correct for CI. The Cloud SQL Auth Proxy runs as a background process in the runner and listens on `127.0.0.1:5432`. On the GCE VM, the proxy runs as a Docker Compose sidecar and is reachable as `cloud-sql-proxy` (the Docker service name) — these are different values for different environments.
@@ -255,7 +260,7 @@ Add each secret one by one:
 
 ### ✅ Phase 2 Checkpoint
 
-- [ ] All 14 secrets added (or 15 if using Slack)
+- [ ] All 20 secrets added (14 base + 6 SMTP/email for drift + pipeline alerts)
 - [ ] `GCP_SA_KEY` contains the full JSON (not just the key ID)
 - [ ] `GCE_SSH_PRIVATE_KEY` contains the full private key including `-----BEGIN/END-----` lines
 
@@ -356,12 +361,13 @@ AIRFLOW_UID=50000
 _AIRFLOW_WWW_USER_USERNAME=airflow
 _AIRFLOW_WWW_USER_PASSWORD=airflow
 
-# ---- SMTP (optional — Airflow email alerts) ----
+# ---- SMTP (Airflow + drift email alerts — required for alerting) ----
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
 SMTP_USER=your-gmail@gmail.com
 SMTP_PASSWORD=your-app-password
-
-# ---- Slack (optional — DAG failure alerts) ----
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+ALERT_EMAIL_FROM=alerts@example.com
+ALERT_EMAIL_LIST=oncall@example.com,team@example.com
 EOF
 ```
 
@@ -970,7 +976,12 @@ After starting, update `GCE_VM_IP` in GitHub secrets with the new IP (see [VM IP
 | 12 | `GRAFANA_REMOTE_WRITE_URL` | Grafana Cloud Prometheus remote-write URL | deployment |
 | 13 | `GRAFANA_CLOUD_USERNAME` | Grafana Cloud instance numeric ID | deployment |
 | 14 | `GRAFANA_CLOUD_API_KEY` | Grafana Cloud API key | deployment |
-| 15 | `SLACK_WEBHOOK_URL` | *(optional)* Slack webhook URL | deployment |
+| 15 | `SMTP_HOST` | SMTP host (e.g. `smtp.gmail.com`) | deployment, datapipeline |
+| 16 | `SMTP_PORT` | SMTP port (typically `587`) | deployment, datapipeline |
+| 17 | `SMTP_USER` | SMTP username | deployment, datapipeline |
+| 18 | `SMTP_PASSWORD` | SMTP password / app password | deployment, datapipeline |
+| 19 | `ALERT_EMAIL_FROM` | From address used in alert emails | deployment |
+| 20 | `ALERT_EMAIL_LIST` | Comma-separated recipient list | deployment |
 
 ---
 

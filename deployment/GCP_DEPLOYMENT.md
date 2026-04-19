@@ -104,7 +104,8 @@ Add all of these under **Settings → Secrets and variables → Actions** in the
 | `GRAFANA_REMOTE_WRITE_URL` | deployment | Grafana Cloud Prometheus remote-write URL |
 | `GRAFANA_CLOUD_USERNAME` | deployment | Grafana Cloud instance numeric ID |
 | `GRAFANA_CLOUD_API_KEY` | deployment | Grafana Cloud API key |
-| `SLACK_WEBHOOK_URL` | deployment | Slack webhook for drift alerts (optional) |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | deployment | SMTP relay for drift / pipeline email alerts |
+| `ALERT_EMAIL_FROM`, `ALERT_EMAIL_LIST` | deployment | From address and comma-separated recipients for email alerts |
 
 > **Note on `GCE_VM_IP`**: The VM uses an ephemeral public IP. Every time the VM is restarted or recreated, the IP changes. After any VM restart you must get the new IP from `terraform output pipeline_vm_ip` and update this secret — otherwise the datapipeline and deployment CI/CD jobs that SSH into the VM will fail with `i/o timeout`.
 
@@ -279,12 +280,13 @@ DB_PORT=5432
 # GCS
 GCS_DATA_BUCKET=savvio-data-bucket
 
-# SMTP (optional — Airflow email alerts)
+# SMTP (drift + pipeline email alerts — required for alerting)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
 SMTP_USER=<gmail>
 SMTP_PASSWORD=<app password>
-
-# Slack (optional)
-SLACK_WEBHOOK_URL=<url>
+ALERT_EMAIL_FROM=<from-address>
+ALERT_EMAIL_LIST=<comma-separated recipients>
 ```
 
 Build the custom Airflow image and start the stack:

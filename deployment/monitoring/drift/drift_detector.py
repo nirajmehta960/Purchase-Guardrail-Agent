@@ -7,6 +7,9 @@ import logging
 import logging.handlers
 import os
 import json
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
@@ -106,6 +109,73 @@ def send_slack_alert(summary: Dict) -> None:
             logger.warning("Slack alert failed — status %d: %s", resp.status_code, resp.text)
     except Exception as e:
         logger.warning("Slack alert error: %s", e)
+
+
+def send_email_alert(summary: Dict) -> None:
+    """Send an email alert via SMTP if severity is in the notify_on list.
+
+    Required env vars when email is enabled:
+      SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, ALERT_EMAIL_FROM,
+      and the recipients list under the env var named in alert_config.yaml
+      (default: ALERT_EMAIL_LIST, comma-separated).
+    """
+    if not _EMAIL_CFG.get("enabled"):
+        return
+
+    severity = summary["severity"]
+    if severity not in _EMAIL_CFG.get("notify_on", []):
+        return
+
+    recipients_env = _EMAIL_CFG.get("recipients_env_var", "ALERT_EMAIL_LIST")
+    recipients_raw = os.environ.get(recipients_env, "")
+    recipients = [r.strip() for r in recipients_raw.split(",") if r.strip()]
+    if not recipients:
+        logger.warning("Email recipients (%s) not set — skipping email alert.", recipients_env)
+        return
+
+    smtp_host = os.environ.get("SMTP_HOST")
+    smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+    smtp_user = os.environ.get("SMTP_USER")
+    smtp_pass = os.environ.get("SMTP_PASSWORD")
+    sender    = os.environ.get("ALERT_EMAIL_FROM", smtp_user or "")
+
+    if not (smtp_host and smtp_user and smtp_pass and sender):
+        logger.warning("SMTP credentials incomplete — skipping email alert.")
+        return
+
+    drifted = summary.get("drifted_columns", {})
+    drifted_lines = "\n".join(
+        f"  - {col}: drift_score={info.get('drift_score', 'N/A')}"
+        for col, info in drifted.items()
+        if info.get("drift_detected")
+    ) or "  (none)"
+
+    body = (
+        f"SavVio Drift Alert — {severity}\n"
+        f"Action:           {summary['action']}\n"
+        f"Columns drifted:  {summary['n_drifted_cols']}/{summary['n_total_cols']} "
+        f"({summary['share_drifted']*100:.1f}%)\n"
+        f"Time:             {summary['timestamp']}\n\n"
+        f"Drifted columns:\n{drifted_lines}\n\n"
+        f"This is an automated notification from the SavVio monitoring pipeline.\n"
+        f"On RED severity the modelpipeline_ci.yml workflow is auto-dispatched "
+        f"to retrain and redeploy the model."
+    )
+
+    msg = MIMEMultipart()
+    msg["From"]    = sender
+    msg["To"]      = ", ".join(recipients)
+    msg["Subject"] = f"[SavVio] Drift Alert — {severity} ({summary['n_drifted_cols']}/{summary['n_total_cols']} columns)"
+    msg.attach(MIMEText(body, "plain"))
+
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.sendmail(sender, recipients, msg.as_string())
+        logger.info("Email alert sent to %d recipients — severity: %s", len(recipients), severity)
+    except Exception as e:
+        logger.warning("Email alert error: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -209,8 +279,12 @@ def run_drift_detection(
             n_drifted, n_total, share_drifted * 100, action,
         )
 
-    # Send Slack alert
-    send_slack_alert(summary)
+    # Send notifications — email-only (Slack disabled in alert_config.yaml).
+    # The send_slack_alert() function is retained but inert: it short-circuits
+    # at the top because notification.slack.enabled = false. The call below is
+    # commented out so we don't pay the function-call overhead on every run.
+    # send_slack_alert(summary)
+    send_email_alert(summary)
 
     return summary
 

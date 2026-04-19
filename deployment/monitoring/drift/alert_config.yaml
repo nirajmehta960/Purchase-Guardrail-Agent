@@ -54,14 +54,16 @@ monitored_features:
 # Controls which channels receive alerts at each severity level.
 # ---------------------------------------------------------------------------
 notification:
+  # Slack is disabled — project uses email-only alerting.
+  # The send_slack_alert() function in drift_detector.py short-circuits when
+  # enabled=false, so no webhook is required and no notification is sent.
   slack:
-    enabled: true
-    webhook_env_var: SLACK_WEBHOOK_URL   # set in .env or CI secrets
-    notify_on:
-      - YELLOW
-      - RED
+    enabled: false
+    webhook_env_var: SLACK_WEBHOOK_URL
+    notify_on: []
   email:
     enabled: true
     recipients_env_var: ALERT_EMAIL_LIST  # comma-separated emails in .env
     notify_on:
-      - RED                               # email only on RED to avoid noise
+      - YELLOW                            # email on YELLOW + RED (was RED-only
+      - RED                               # since Slack handled YELLOW before)

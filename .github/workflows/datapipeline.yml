@@ -261,7 +261,7 @@ jobs:
           key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
           timeout: 60s
           command_timeout: 20m
-          envs: IMAGE_TAG,DAG_ID,GITHUB_SHA,GITHUB_RUN_ID,VM_DEPLOY_PATH,AR_REGION
+          envs: IMAGE_TAG,VM_DEPLOY_PATH,AR_REGION
           script: |
             set -euo pipefail
 
@@ -278,26 +278,9 @@ jobs:
             $DC pull
             $DC up -d --remove-orphans
 
-            for i in $(seq 1 20); do
-              if $DC exec -T airflow-scheduler airflow dags list >/dev/null 2>&1; then
-                echo "Airflow scheduler is ready."
-                break
-              fi
-              echo "Waiting for Airflow ($i/20)..."
-              sleep 15
-            done
-
-            $DC exec -T airflow-scheduler \
-              airflow dags trigger "$DAG_ID" \
-              --run-id "deploy__${GITHUB_SHA}__${GITHUB_RUN_ID}" || \
-              echo "DAG trigger skipped (already running or scheduler not ready)."
-
             echo "Deployed $IMAGE_TAG"
         env:
           IMAGE_TAG: ${{ steps.tag.outputs.image_tag }}
-          DAG_ID: ${{ vars.AIRFLOW_DAG_ID }}
-          GITHUB_SHA: ${{ github.sha }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
           VM_DEPLOY_PATH: ${{ vars.VM_DEPLOY_PATH }}
           AR_REGION: ${{ vars.AR_REGION }}
 

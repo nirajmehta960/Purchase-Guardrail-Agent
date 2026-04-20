@@ -1,6 +1,6 @@
 project_id  = "savvio-purchase-guardrail"
 region      = "us-east1"
-zone        = "us-east1-c"
+zone        = "us-east1-d"
 environment = "dev"
 db_tier     = "db-f1-micro"
 

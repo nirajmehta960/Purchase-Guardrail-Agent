@@ -310,7 +310,6 @@ jobs:
               exit 1
             fi
 
-
             DAG_READY=0
             for i in $(seq 1 12); do
               if $DC exec -T airflow-scheduler airflow dags list 2>/dev/null | grep -q "^${DAG_ID}"; then

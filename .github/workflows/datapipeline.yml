@@ -242,9 +242,16 @@ jobs:
           key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
           timeout: 60s
           command_timeout: 20m
-          envs: IMAGE_TAG,DAG_ID,GITHUB_SHA,GITHUB_RUN_ID,VM_DEPLOY_PATH
+          envs: IMAGE_TAG,DAG_ID,GITHUB_SHA,GITHUB_RUN_ID,VM_DEPLOY_PATH,AR_REGION
           script: |
             set -euo pipefail
+
+            # Authenticate Docker to Artifact Registry using the instance service account
+            ACCESS_TOKEN=$(curl -sf \
+              "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
+              -H "Metadata-Flavor: Google" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+            echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin "${AR_REGION}-docker.pkg.dev"
+
             cd "$VM_DEPLOY_PATH"
 
             echo "IMAGE_TAG=$IMAGE_TAG" > .env.ci
@@ -286,6 +293,7 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           VM_DEPLOY_PATH: ${{ vars.VM_DEPLOY_PATH }}
+          AR_REGION: ${{ vars.AR_REGION }}
 
   # ===========================================================================
   # JOB 4 — Notify on Failure

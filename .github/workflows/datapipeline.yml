@@ -148,6 +148,7 @@ jobs:
           timeout: 30s
           envs: VM_DEPLOY_PATH,GCP_PROJECT_ID,DB_HOST,DB_PORT,DB_USER,DB_PASSWORD,DB_NAME,SMTP_HOST,SMTP_PORT,SMTP_USER,SMTP_PASSWORD,ALERT_EMAIL_FROM,ALERT_EMAIL_LIST
           script: |
+            set -euo pipefail
             mkdir -p "$VM_DEPLOY_PATH/logs" "$VM_DEPLOY_PATH/config"
             chmod 777 "$VM_DEPLOY_PATH/logs"
             if [ ! -f "$VM_DEPLOY_PATH/.env" ]; then
@@ -248,18 +249,18 @@ jobs:
 
             echo "IMAGE_TAG=$IMAGE_TAG" > .env.ci
 
-            sudo --preserve-env=IMAGE_TAG docker compose \
+            docker compose \
               --env-file .env --env-file .env.ci \
               -f docker-compose.yaml -f docker-compose.prod.yaml \
               pull
 
-            sudo --preserve-env=IMAGE_TAG docker compose \
+            docker compose \
               --env-file .env --env-file .env.ci \
               -f docker-compose.yaml -f docker-compose.prod.yaml \
               up -d --remove-orphans
 
             for i in $(seq 1 20); do
-              if sudo docker compose \
+              if docker compose \
                    --env-file .env --env-file .env.ci \
                    -f docker-compose.yaml -f docker-compose.prod.yaml \
                    exec -T airflow-scheduler airflow dags list >/dev/null 2>&1; then
@@ -270,7 +271,7 @@ jobs:
               sleep 15
             done
 
-            sudo docker compose \
+            docker compose \
               --env-file .env --env-file .env.ci \
               -f docker-compose.yaml -f docker-compose.prod.yaml \
               exec -T airflow-scheduler \

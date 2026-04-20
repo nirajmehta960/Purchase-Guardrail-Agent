@@ -86,10 +86,10 @@ x-airflow-common:
     # See https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/logging-monitoring/check-health.html#scheduler-health-check-server
     # yamllint enable rule:line-length
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
-    # Zombie detection: kill tasks with no heartbeat for > 10 min (default 5 min).
-    # Raised because heavy preprocessing tasks (2M+ rows) can take 5-9 min and
-    # the supervisor may take extra time to finalize state with the API server.
-    AIRFLOW__TASK__TASK_INSTANCE_HEARTBEAT_TIMEOUT: "600"
+    # Zombie detection: kill tasks with no heartbeat for > 60 min (default 5 min).
+    # Raised because load_reviews inserts ~2.1M rows in a single transaction and
+    # takes 22+ min; preprocess tasks take 5-9 min.
+    AIRFLOW__TASK__TASK_INSTANCE_HEARTBEAT_TIMEOUT: "3600"
     # Give the task runner more time to call back to the API server on each
     # heartbeat/state-update. Default 5 s is too short when the API server is
     # under load during a heavy task, causing heartbeat failures → zombie kill.

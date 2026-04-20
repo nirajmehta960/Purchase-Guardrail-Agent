@@ -7,8 +7,7 @@ numpy>=1.26.2
 flask # maybe remove after testing
 scipy 
 
-# Vector Embeddings
-sentence-transformers
+# Vector Embeddings (sentence-transformers removed — embedding task is disabled)
 psycopg2-binary
 sqlalchemy>=2.0
 # -----------------------------------------------------------------------------

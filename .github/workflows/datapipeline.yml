@@ -181,6 +181,7 @@ jobs:
 
             cat > "$VM_DEPLOY_PATH/.env" <<ENVEOF
             GCP_CREDENTIALS_PATH=$GCP_CREDENTIALS_PATH
+            GCP_PROJECT_ID=$PROJECT_ID
             GCS_BUCKET_NAME=$GCS_BUCKET_NAME
             GCS_RAW_PATH=raw/
             GCS_PROCESSED_PATH=processed/
@@ -191,11 +192,10 @@ jobs:
             REVIEW_BLOB=raw/review_data.jsonl
             DATA_DIR=dags/data
             ENVIRONMENT=prod
-            DB_ENV=prod
             AIRFLOW_UID=50000
             AIRFLOW_PROJ_DIR=.
             _AIRFLOW_WWW_USER_USERNAME=airflow
-            AIRFLOW_USERNAME=airflow
+            _AIRFLOW_WWW_USER_PASSWORD=$AIRFLOW_WWW_PWD
             LOG_LEVEL=INFO
             LOG_DIR=logs
             MAX_MISSING_VALUES_PCT=0.1
@@ -204,19 +204,13 @@ jobs:
             MONTHLY_EXPENSE_COLS=rent,bills,subscriptions
             JSONL_STREAM_CHUNKSIZE=100000
             JSONL_LARGE_FILE_MB=300
+            JSONL_MAX_OBJECT_SIZE=33554432
             UPSERT_CHUNK_SIZE=5000
             REVIEWS_INSERT_PAGE_SIZE=25000
-            EMBEDDING_MODEL=all-MiniLM-L6-v2
-            EMBEDDING_DIM=384
-            EMBEDDING_BATCH_SIZE=64
-            EMBED_STORE_CHUNK_SIZE=5000
-            EMBED_INSERT_BATCH_SIZE=500
             DUCKDB_MEMORY_LIMIT=1000MB
             DUCKDB_THREADS=2
             DUCKDB_TEMP_DIRECTORY=/tmp
-            JSONL_MAX_OBJECT_SIZE=33554432
             VERTEX_LOCATION=$VERTEX_LOCATION
-            GCP_PROJECT_ID=$PROJECT_ID
             VERTEX_PROJECT=$PROJECT_ID
             DB_USER=$DB_USER
             DB_PASSWORD=$DB_PASSWORD
@@ -229,8 +223,6 @@ jobs:
             SMTP_PASSWORD=$SMTP_PASSWORD
             ALERT_EMAIL_FROM=$ALERT_EMAIL_FROM
             ALERT_EMAIL_LIST=$ALERT_EMAIL_LIST
-            _AIRFLOW_WWW_USER_PASSWORD=$AIRFLOW_WWW_PWD
-            AIRFLOW_PASSWORD=$AIRFLOW_WWW_PWD
             ENVEOF
 
             chmod 600 "$VM_DEPLOY_PATH/.env"

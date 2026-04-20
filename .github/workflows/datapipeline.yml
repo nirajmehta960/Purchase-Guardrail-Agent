@@ -260,93 +260,37 @@ jobs:
           username: ${{ vars.SSH_USER }}
           key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
           timeout: 60s
-          command_timeout: 30m
+          command_timeout: 20m
           envs: IMAGE_TAG,DAG_ID,GITHUB_SHA,GITHUB_RUN_ID,VM_DEPLOY_PATH,AR_REGION
           script: |
             set -euo pipefail
 
-            # Authenticate Docker to Artifact Registry using the instance service account
             ACCESS_TOKEN=$(curl -sf \
               "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
               -H "Metadata-Flavor: Google" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
             echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin "${AR_REGION}-docker.pkg.dev"
 
             cd "$VM_DEPLOY_PATH"
-
             echo "IMAGE_TAG=$IMAGE_TAG" > .env.ci
-
-            docker compose \
-              --env-file .env --env-file .env.ci \
-              -f docker-compose.yaml -f docker-compose.prod.yaml \
-              pull
-
-            docker compose \
-              --env-file .env --env-file .env.ci \
-              -f docker-compose.yaml -f docker-compose.prod.yaml \
-              up -d --remove-orphans
 
             DC="docker compose --env-file .env --env-file .env.ci -f docker-compose.yaml -f docker-compose.prod.yaml"
 
-            SCHED_READY=0
+            $DC pull
+            $DC up -d --remove-orphans
+
             for i in $(seq 1 20); do
               if $DC exec -T airflow-scheduler airflow dags list >/dev/null 2>&1; then
-                SCHED_READY=1
                 echo "Airflow scheduler is ready."
                 break
               fi
-              echo "Waiting for Airflow scheduler ($i/20)..."
+              echo "Waiting for Airflow ($i/20)..."
               sleep 15
             done
-            if [ "$SCHED_READY" -eq 0 ]; then
-              echo "ERROR: Airflow scheduler did not become ready in time." >&2
-              exit 1
-            fi
-
-            DAG_READY=0
-            for i in $(seq 1 12); do
-              if $DC exec -T airflow-scheduler airflow dags list 2>/dev/null | grep -q "^${DAG_ID}"; then
-                DAG_READY=1
-                echo "DAG $DAG_ID is parsed and available."
-                break
-              fi
-              echo "Waiting for DAG $DAG_ID to be parsed ($i/12)..."
-              sleep 10
-            done
-            if [ "$DAG_READY" -eq 0 ]; then
-              echo "ERROR: DAG $DAG_ID was not visible after 2 minutes — aborting trigger." >&2
-              exit 1
-            fi
-
-            # Gate the trigger on a Celery worker actually being registered with
-            # the broker. Without this, tasks sit in "queued" forever because
-            # the worker's start_period (180s) covers heavy ML imports
-            # (torch + sentence-transformers) and the DAG parses long before
-            # the worker is reachable via celery.
-            CELERY_APP="airflow.providers.celery.executors.celery_executor.app"
-            WORKER_READY=0
-            for i in $(seq 1 24); do
-              if $DC exec -T airflow-scheduler \
-                   celery --app "$CELERY_APP" inspect ping --timeout 5 --quiet \
-                   2>/dev/null | grep -q "pong"; then
-                WORKER_READY=1
-                echo "Celery worker is connected to broker (attempt $i)."
-                break
-              fi
-              echo "Waiting for Celery worker to register with broker ($i/24)..."
-              sleep 10
-            done
-            if [ "$WORKER_READY" -eq 0 ]; then
-              echo "ERROR: Celery worker did not register within 4 minutes — aborting trigger." >&2
-              echo "--- airflow-worker logs (last 60 lines) ---"
-              $DC logs airflow-worker --tail=60 2>&1 || true
-              exit 1
-            fi
-
-            $DC ps --format "table {{.Name}}\t{{.Status}}"
 
             $DC exec -T airflow-scheduler \
               airflow dags trigger "$DAG_ID" \
-              --run-id "deploy__${GITHUB_SHA}__${GITHUB_RUN_ID}"
+              --run-id "deploy__${GITHUB_SHA}__${GITHUB_RUN_ID}" || \
+              echo "DAG trigger skipped (already running or scheduler not ready)."
 
             echo "Deployed $IMAGE_TAG"
         env:

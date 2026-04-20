@@ -173,3 +173,17 @@ variable "grafana_api_key" {
   sensitive   = true
   default     = ""
 }
+
+variable "smtp_password" {
+  description = "SMTP password for Airflow email alerts (e.g. Gmail app password)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "airflow_www_password" {
+  description = "Airflow webserver admin password"
+  type        = string
+  sensitive   = true
+  default     = ""
+}

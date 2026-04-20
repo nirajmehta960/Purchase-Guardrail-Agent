@@ -104,6 +104,22 @@ module "grafana_api_key_secret" {
   depends_on                     = [google_project_service.apis]
 }
 
+module "smtp_password_secret" {
+  source                         = "../../modules/secrets"
+  secret_id                      = "${local.prefix}-smtp-password"
+  secret_data                    = var.smtp_password != "" ? var.smtp_password : "not-configured"
+  accessor_service_account_email = google_service_account.cloud_run.email
+  depends_on                     = [google_project_service.apis]
+}
+
+module "airflow_www_password_secret" {
+  source                         = "../../modules/secrets"
+  secret_id                      = "${local.prefix}-airflow-www-password"
+  secret_data                    = var.airflow_www_password != "" ? var.airflow_www_password : "not-configured"
+  accessor_service_account_email = google_service_account.cloud_run.email
+  depends_on                     = [google_project_service.apis]
+}
+
 # ---- Storage ----
 module "dvc_bucket" {
   source        = "../../modules/storage"

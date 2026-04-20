@@ -273,9 +273,27 @@ jobs:
                 echo "Airflow scheduler is ready."
                 break
               fi
-              echo "Waiting for Airflow ($i/20)..."
+              echo "Waiting for Airflow scheduler ($i/20)..."
               sleep 15
             done
+
+            for i in $(seq 1 20); do
+              WORKER_STATE=$(docker compose \
+                --env-file .env --env-file .env.ci \
+                -f docker-compose.yaml -f docker-compose.prod.yaml \
+                ps airflow-worker --format json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0].get('Health','unknown') if isinstance(d,list) else d.get('Health','unknown'))" 2>/dev/null || echo "unknown")
+              if [ "$WORKER_STATE" = "healthy" ]; then
+                echo "Airflow worker is healthy."
+                break
+              fi
+              echo "Waiting for Airflow worker ($i/20) — state: $WORKER_STATE..."
+              sleep 15
+            done
+
+            docker compose \
+              --env-file .env --env-file .env.ci \
+              -f docker-compose.yaml -f docker-compose.prod.yaml \
+              ps --format "table {{.Name}}\t{{.Status}}"
 
             docker compose \
               --env-file .env --env-file .env.ci \

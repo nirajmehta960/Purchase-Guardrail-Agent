@@ -91,7 +91,6 @@ jobs:
     name: Run Model Pipeline
     runs-on: ubuntu-latest
     needs: [unit-tests]
-    if: github.event_name != 'pull_request'
 
     steps:
       - name: Checkout code
@@ -341,7 +340,6 @@ jobs:
     name: Persist Metrics Baseline
     runs-on: ubuntu-latest
     needs: rollback-check
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
 
     steps:
       - name: Authenticate to GCP
@@ -371,7 +369,6 @@ jobs:
     name: Build & Push Image
     runs-on: ubuntu-latest
     needs: persist-metrics-baseline
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
 
     steps:
       - name: Checkout code
@@ -411,7 +408,6 @@ jobs:
     name: Deploy to Cloud Run
     runs-on: ubuntu-latest
     needs: [build-and-push]
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
 
     steps:
       - name: Authenticate to GCP
@@ -495,8 +491,6 @@ jobs:
       always()
       && !contains(needs.*.result, 'failure')
       && !contains(needs.*.result, 'cancelled')
-      && github.event_name == 'push'
-      && github.ref == 'refs/heads/main'
 
     steps:
       - name: Log success summary

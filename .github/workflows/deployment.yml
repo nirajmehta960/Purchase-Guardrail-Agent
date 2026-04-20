@@ -271,12 +271,12 @@ jobs:
         if: vars.NOTIFY_EMAILS_ENABLED == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: ${{ secrets.SMTP_HOST }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          username: ${{ secrets.SMTP_USER }}
+          server_address: ${{ vars.SMTP_HOST }}
+          server_port: ${{ vars.SMTP_PORT }}
+          username: ${{ vars.SMTP_USER }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          from: ${{ vars.PROJECT_NAME }} CI <${{ secrets.ALERT_EMAIL_FROM }}>
-          to: ${{ secrets.ALERT_EMAIL_LIST }}
+          from: ${{ vars.PROJECT_NAME }} CI <${{ vars.ALERT_EMAIL_FROM }}>
+          to: ${{ vars.ALERT_EMAIL_LIST }}
           subject: "[${{ vars.PROJECT_NAME }}][FAILED] Deployment CI/CD — ${{ vars.ENVIRONMENT }} — ${{ github.sha }}"
           body: |
             Deployment CI/CD FAILED
@@ -308,8 +308,6 @@ jobs:
       always()
       && !contains(needs.*.result, 'failure')
       && !contains(needs.*.result, 'cancelled')
-      && github.event_name == 'push'
-      && github.ref == 'refs/heads/main'
 
     steps:
       - name: Log success summary
@@ -322,12 +320,12 @@ jobs:
         if: vars.NOTIFY_EMAILS_ENABLED == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: ${{ secrets.SMTP_HOST }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          username: ${{ secrets.SMTP_USER }}
+          server_address: ${{ vars.SMTP_HOST }}
+          server_port: ${{ vars.SMTP_PORT }}
+          username: ${{ vars.SMTP_USER }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          from: ${{ vars.PROJECT_NAME }} CI <${{ secrets.ALERT_EMAIL_FROM }}>
-          to: ${{ secrets.ALERT_EMAIL_LIST }}
+          from: ${{ vars.PROJECT_NAME }} CI <${{ vars.ALERT_EMAIL_FROM }}>
+          to: ${{ vars.ALERT_EMAIL_LIST }}
           subject: "[${{ vars.PROJECT_NAME }}][OK] Deployment CI/CD — ${{ vars.ENVIRONMENT }} — ${{ github.sha }}"
           body: |
             Deployment CI/CD PASSED

@@ -1,191 +1,262 @@
-# CI/CD Setup — Reproducing the SavVio Pipelines in a New Project
+# GitHub Actions Workflows
 
-This document is the single source of truth for everything a fresh GCP project
-needs in order to make the GitHub Actions workflows under `.github/workflows/`
-work end-to-end. Nothing project-specific is hardcoded in the workflows; all
-values come from GitHub **Secrets** (sensitive) and **Variables** (non-sensitive,
-visible in logs).
+This directory holds every CI/CD pipeline that ships SavVio. The workflows are
+intentionally **project-agnostic** — every project-specific value comes from
+GitHub **Secrets** (credentials) or **Variables** (non-secret config).
 
-> Settings location:
-> `GitHub → Settings → Secrets and variables → Actions → {Secrets, Variables}`
+If you're trying to bring the stack up in a fresh GCP project, follow
+[`deployment/REPRODUCE.md`](../../deployment/REPRODUCE.md) instead; this file is
+a reference for what's already wired.
 
 ---
 
-## 1. Required GitHub Secrets
+## Overview
 
-| Name | Used by | Purpose |
+| # | Workflow | File | Triggers | What it ships |
+|---|---|---|---|---|
+| 1 | **Terraform Infrastructure** | `terraform.yml` | push / PR on `deployment/terraform/**`, manual | GCP infra (Artifact Registry, Cloud SQL, VM, GCS, Cloud Run shells) |
+| 2 | **Data Pipeline CI/CD** | `datapipeline.yml` | push / PR on `data_pipeline/**` or `savviocore/**`, manual | Airflow image → GCE VM (`docker compose up -d`) + DAG trigger |
+| 3 | **Model Pipeline CI/CD** | `modelpipeline.yml` | push / PR on `model_pipeline/**` or `savviocore/**`, manual | Trainer image → Cloud Run **Job** (gated on F1 / ROC / bias / rollback) |
+| 4 | **Deployment CI/CD** | `deployment.yml` | push / PR on `deployment/api/**`, `deployment/frontend/**`, `deployment/mlflow/**`, manual | API + Frontend + MLflow → Cloud Run **services** |
+| 5 | **Ops Monitoring & Drift Detection** | `ops-monitoring.yml` | weekly cron (Mon 08:00 UTC), push on `deployment/monitoring/**`, manual | Prometheus/Grafana stack on the VM + drift alerts; auto-dispatches `modelpipeline.yml` on RED drift |
+
+### Dependency graph
+
+```
+terraform.yml ─┐ (creates AR repo, VM, Cloud SQL, Cloud Run shells)
+               │
+               ├─► datapipeline.yml  ──► VM (Airflow)
+               ├─► modelpipeline.yml ──► Cloud Run Job (trainer)
+               ├─► deployment.yml    ──► Cloud Run Services (API / FE / MLflow)
+               └─► ops-monitoring.yml
+                     └─► (on RED drift) dispatches modelpipeline.yml
+```
+
+Everything after `terraform.yml` just pushes images and updates an existing
+service — no infra mutation.
+
+---
+
+## 1. `terraform.yml` — Terraform Infrastructure
+
+Provisions and maintains every GCP resource. Holds a **single global lock** via
+`concurrency: terraform-state` so PR plans and main applies can't race over the
+GCS state bucket.
+
+**Jobs**
+
+| Job | When | What |
 |---|---|---|
-| `GCP_PROJECT_ID` | all workflows | GCP project (e.g. `savvio-purchase-guardrail`) |
-| `GCP_SA_KEY` | all workflows | JSON key for a service account with Artifact Registry Writer + Cloud Run Admin (kept as a secret because it's a credential) |
-| `GCE_VM_IP` | data pipeline deploy | External IP of the Airflow VM |
-| `GCE_SSH_PRIVATE_KEY` | data pipeline deploy | Private key matching the `${SSH_USER}` user on the VM |
-| `DB_INSTANCE_CONNECTION_NAME` | model pipeline | Cloud SQL connection name (`<proj>:<region>:<instance>`) — used by the Cloud SQL Auth Proxy in `run-pipeline` |
-| `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | model pipeline | Application DB credentials used while training in CI |
-| `API_URL_DEV` | deployment | Public URL of the deployed API; injected into the frontend image as `VITE_API_BASE` at build time |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | notifications | SMTP relay credentials (Gmail App Password works) |
-| `ALERT_EMAIL_FROM` | notifications | Sender address for CI emails |
-| `ALERT_EMAIL_LIST` | notifications | Comma-separated recipients |
-| `GRAFANA_CLOUD_API_KEY` | terraform | Grafana Cloud API key (passed as `TF_VAR_grafana_api_key`) |
-| `GRAFANA_CLOUD_USERNAME` | terraform | Grafana Cloud username / instance ID (`TF_VAR_grafana_cloud_username`) |
-| `GRAFANA_REMOTE_WRITE_URL` | terraform | Prometheus remote-write endpoint (`TF_VAR_grafana_remote_write_url`) |
+| `terraform-dev` | always | `init` → `validate` → `plan` on every PR/push; `apply -auto-approve` on push to `main` |
 
-## 2. Required GitHub Variables
+PR runs post the plan as a comment (truncated at 60 000 chars). Main pushes print
+the key outputs at the end (`db_connection_name`, `api_url`, `mlflow_url`,
+`pipeline_vm_ip`).
 
-| Name | Example value | Purpose |
+**Inputs it consumes**
+
+- Secrets: `GCP_SA_KEY`, `GCP_PROJECT_ID`, `GRAFANA_CLOUD_API_KEY`, `GRAFANA_CLOUD_USERNAME`, `GRAFANA_REMOTE_WRITE_URL`
+- Variables: `TERRAFORM_VERSION` (optional, default `1.14.7`)
+- Files: `deployment/terraform/environments/dev/terraform.tfvars`, `backend.tf`
+
+**Recovery note.** If a run is interrupted mid-apply, the GCS state lock may
+linger — `cd deployment/terraform/environments/dev && terraform force-unlock <ID>`.
+
+---
+
+## 2. `datapipeline.yml` — Data Pipeline CI/CD
+
+Builds the Airflow image, ships it to Artifact Registry, then SSHes into the
+pipeline VM and swaps the running container in place.
+
+**Jobs**
+
+| Job | Needs | Gate | What |
+|---|---|---|---|
+| `unit-tests` | — | — | Installs `apache-airflow>=3.0` + deps, imports the DAG module (parse check), runs `pytest` across `tests/{bias,database,features,ingestion,preprocess,validation}` |
+| `build-and-push` | `unit-tests` | `main` only | `docker buildx` → AR; tags `:sha` + `:latest`; registry-side `buildcache` |
+| `deploy` | `build-and-push` | `main` only | SSH to VM → regenerates `.env` from Secret Manager → `scp` docker-compose files → `docker compose pull && up -d` → waits for scheduler + Celery worker → triggers DAG |
+| `notify-on-failure` / `notify-on-success` | all three | — | SMTP email if `NOTIFY_EMAILS_ENABLED=true` |
+
+**Deploy details worth knowing**
+
+- The VM never checks out source. It only pulls the image the build job just
+  produced and mounts `config/<sa-key>.json` read-only.
+- `.env` is rewritten **on every deploy** from Secret Manager (prefix
+  `${SECRET_PREFIX}`, default `savvio`). `inherit_errexit` makes a missing
+  secret hard-fail instead of producing an empty env var.
+- Readiness is **three-stage**: scheduler responds (20×15s), DAG is parsed
+  (12×10s), Celery worker registers with the broker (40×15s). The worker wait
+  is critical — sentence-transformers import takes ~60–90s on cold start, long
+  after the DAG shows up in `airflow dags list`.
+- The DAG is triggered with run-id `deploy__${SHA}__${RUN_ID}` so it's
+  traceable back to the exact workflow run.
+
+---
+
+## 3. `modelpipeline.yml` — Model Pipeline CI/CD
+
+Trains the model inside the runner (not on Vertex), writes a metrics artifact,
+gates on quality / fairness / regression, then ships a trainer image to Cloud
+Run Jobs for scheduled re-runs.
+
+**Jobs**
+
+| Job | Needs | Gate | What |
+|---|---|---|---|
+| `unit-tests` | — | — | `pytest` across data / deterministic engine / features / bias-detection tests |
+| `run-pipeline` | `unit-tests` | not on PR | Starts Cloud SQL Auth Proxy (cached), resolves `MLFLOW_TRACKING_URI` from Cloud Run, runs `src/run_pipeline.py`; uploads `metrics.txt` + `bias_metrics.txt` + `previous_metrics.txt` as artifacts |
+| `validation-gate` | `run-pipeline` | fails if `f1_score < F1_THRESHOLD` or `roc_auc < ROC_AUC_THRESHOLD` | Reads `metrics.txt` |
+| `bias-gate` | `run-pipeline` | fails unless `bias_gate_passed=1` in `bias_metrics.txt` | `workflow_dispatch` input `skip_bias_gate=true` bypasses |
+| `rollback-check` | both gates | fails if `previous_f1 - current_f1 > ROLLBACK_THRESHOLD` | No-op on first run. Input `skip_rollback_check=true` bypasses |
+| `persist-metrics-baseline` | `rollback-check` | `main` only | Copies current `metrics.txt` to `gs://${MLFLOW_GCS_BUCKET}/ci/previous_metrics.txt` — this is the next run's baseline |
+| `build-and-push` | `persist-metrics-baseline` | `main` only | Trainer image → AR |
+| `deploy` | `build-and-push` | `main` only | `gcloud run jobs deploy ${CLOUD_RUN_ML_TRAINER}` with `RUN_SA_EMAIL` |
+| `notify-on-failure` / `notify-on-success` | all | — | SMTP |
+
+**Manual overrides** (`workflow_dispatch` inputs)
+
+- `skip_rollback_check=true` — first run, baseline not yet in GCS.
+- `skip_bias_gate=true` — debugging only; never merge with this on.
+
+---
+
+## 4. `deployment.yml` — API / Frontend / MLflow to Cloud Run
+
+Ships the three user-facing services. Assumes the Cloud Run service shells
+already exist (Terraform creates them).
+
+**Jobs**
+
+| Job | Needs | What |
 |---|---|---|
-| `PROJECT_NAME` | `SavVio` | Prefix used in CI email subjects |
-| `AR_REGION` | `us-east1` | Artifact Registry region |
-| `AR_REPO` | `savvio-dev-docker-repo` | Artifact Registry repository name |
-| `AR_IMAGE_DATAPIPELINE` | `savvio-data-pipeline` | Image name for the Airflow image |
-| `AR_IMAGE_MODELPIPELINE` | `savvio-model-pipeline` | Image name for the ML trainer image |
-| `AR_IMAGE_API` | `savvio-api` | Image name for the backend API |
-| `AR_IMAGE_FRONTEND` | `savvio-frontend` | Image name for the frontend |
-| `AR_IMAGE_MLFLOW` | `savvio-mlflow` | Image name for the MLflow tracking server |
-| `VM_DEPLOY_PATH` | `/opt/savvio/data_pipeline` | Path on the Airflow VM that holds `docker-compose.yaml`, `docker-compose.prod.yaml` and `.env` |
-| `MONITORING_VM_PATH` | `/home/github-actions/savvio-monitoring` | Optional — path on the GCE VM holding `prometheus.yml` + `docker-compose.production.yml`. Defaults to `/home/${SSH_USER}/savvio-monitoring` |
-| `SSH_USER` | `github-actions` | OS user CI uses to SSH into the Airflow VM |
-| `AIRFLOW_DAG_ID` | `Data_pipeline_airflow` | DAG to trigger after a successful deploy |
-| `ENVIRONMENT` | `dev` | Deployment environment label (appears in CI emails / logs) |
-| `MLFLOW_GCS_BUCKET` | `savvio-dev-mlflow-artifacts` | GCS bucket holding `ci/previous_metrics.txt` (rollback baseline) and MLflow artifacts |
-| `CLOUD_RUN_API` | `savvio-backend-api` | Cloud Run service updated by the deployment `deploy` job (API) |
-| `CLOUD_RUN_FRONTEND` | `savvio-ai` | Cloud Run service for the frontend |
-| `CLOUD_RUN_MLFLOW` | `savvio-ai-mlflow` | Cloud Run service hosting the MLflow tracking UI (also used by the model pipeline to resolve `MLFLOW_TRACKING_URI`) |
-| `CLOUD_RUN_ML_TRAINER` | `savvio-ai-ml-trainer` | Cloud Run service updated by the model pipeline `deploy` job |
-| `RUN_SA_EMAIL` | `savvio-dev-run-sa@<proj>.iam.gserviceaccount.com` | Runtime service account attached to the trainer Cloud Run service |
-| `F1_THRESHOLD` | `0.70` | Validation gate — fails if F1 falls below this |
-| `ROC_AUC_THRESHOLD` | `0.75` | Validation gate — fails if ROC AUC falls below this |
-| `ROLLBACK_THRESHOLD` | `0.02` | Rollback check — fails if F1 drops by more than this vs the previous baseline |
-| `NOTIFY_EMAILS_ENABLED` | `true` / `false` | Toggle CI email notifications without changing secrets |
-| `TERRAFORM_VERSION` | `1.14.7` | Optional — pin the Terraform CLI version used by the workflow (defaults to `1.14.7` if unset) |
-| `MONITORING_VM_PATH` | `/home/github-actions/savvio-monitoring` | Optional — path on the GCE VM holding `prometheus.yml` + `docker-compose.production.yml`. Defaults to `/home/${SSH_USER}/savvio-monitoring` |
-| `PROMETHEUS_PROJECT_LABEL` | `savvio` | Optional — value of the `project` external label in `prometheus.production.yml`. Defaults to `vars.PROJECT_NAME` |
-| `PROMETHEUS_API_JOB` | `savvio-api` | Optional — Prometheus `job_name`/`service` label for the API target. Defaults to `${PROJECT_NAME}-api` |
-| `VITE_DEFAULT_USER_ID` | `U00001` | Default user ID baked into the frontend at build time (`VITE_DEFAULT_USER_ID`); leave empty to ship no fallback |
+| `test-api` | — | `pytest deployment/tests/` with `PYTHONPATH` covering `model_pipeline/src` + `savviocore/src` |
+| `test-frontend` | — | Bun install (frozen lockfile) → `lint` → `test` |
+| `build-push-api` | `test-api` | API image → AR |
+| `build-push-mlflow` | `test-api` | MLflow image → AR |
+| `build-push-frontend` | `test-frontend` | Frontend image → AR; passes `VITE_API_BASE=${API_URL_DEV}` and `VITE_DEFAULT_USER_ID` as **build args** |
+| `deploy` | all three build jobs | `gcloud run deploy` for each of `CLOUD_RUN_API`, `CLOUD_RUN_FRONTEND`, `CLOUD_RUN_MLFLOW`; curl-based `/health` check on the API |
+| `notify-on-failure` / `notify-on-success` | all | SMTP |
 
-## 3. One-time GCP setup
+The frontend bakes `VITE_API_BASE` at build time, so changing the API URL
+requires a new frontend build. (That's why `API_URL_DEV` is a secret —
+updating it re-runs this workflow.)
 
-1. Enable APIs: Artifact Registry, Compute Engine, Cloud SQL Admin, Cloud Run, IAM.
-2. Create a Docker Artifact Registry repo named `${AR_REPO}` in `${AR_REGION}`.
-3. Create a service account for CI and grant it:
-   - `roles/artifactregistry.writer`
-   - `roles/run.admin` (only if the deployment workflow is used)
-   - `roles/iam.serviceAccountUser` on the runtime SA used by Cloud Run / GCE
-   - Download the JSON key once and store it as `GCP_SA_KEY`.
-4. Provision the Airflow VM (Compute Engine, e2-standard-2 minimum). Attach a
-   runtime service account that has `roles/cloudsql.client` and
-   `roles/secretmanager.secretAccessor` if you use Secret Manager.
-5. Terraform-only: create a GCS bucket for the remote state (e.g.
-   `<project>-tf-state`) with versioning **enabled**, and update the
-   `bucket = "..."` line in
-   `deployment/terraform/environments/{dev,prod}/backend.tf` — Terraform backend
-   blocks can't read variables, so this is the one place a project-specific
-   value lives in code. If a state lock ever gets stuck (interrupted run),
-   recover with `terraform force-unlock <ID>` from the environment dir.
-6. Then edit `deployment/terraform/environments/{dev,prod}/terraform.tfvars`
-   (project ID, region, zone, image placeholders, Cloud Run service names,
-   external `data_bucket_name`, and `ci_ssh_public_keys`). All other knobs
-   (VM size, network, Cloud Run sizing, source ranges) have sensible
-   defaults in `variables.tf` and only need overriding if you want to
-   diverge.
+---
 
-### 3.1 Terraform variables you'll likely override
+## 5. `ops-monitoring.yml` — Drift Detection + Monitoring Stack
 
-Set these in `terraform.tfvars` (or via `TF_VAR_*` env vars in CI):
+Has two largely-independent responsibilities, gated by event type:
 
-| Variable | Why |
-|---|---|
-| `project_id`, `region`, `zone`, `environment` | Targets the GCP project / region. |
-| `name_prefix` | Prepended to every resource name and used as the `project` label. Default `savvio`. |
-| `api_service_name`, `frontend_service_name`, `mlflow_service_name` | Cloud Run service names. **Must equal** `vars.CLOUD_RUN_API` / `CLOUD_RUN_FRONTEND` / `CLOUD_RUN_MLFLOW` in GitHub Actions or `gcloud run deploy` from CI silently targets a non-existent service. Set to `null` to fall back to `<prefix>-api` / `-frontend` / `-mlflow`. |
-| `data_bucket_name` | Externally-managed GCS bucket the Cloud Run SA gets `objectAdmin` on. Empty string skips the IAM grant. |
-| `ci_ssh_public_keys` | List of SSH public keys installed on the pipeline VM for `ci_ssh_user` (default `github-actions`). Must include the public half of `GCE_SSH_PRIVATE_KEY`. |
-| `ssh_source_ranges`, `airflow_ui_source_ranges` | CIDRs allowed through the firewall. Default `["0.0.0.0/0"]` — **tighten for prod**. |
-| `pipeline_vm_machine_type` / `_disk_image` / `_disk_gb`, `vpc_network` | VM tuning. |
-| `api_*` / `frontend_*` / `mlflow_*` (`min_instances`, `max_instances`, `cpu`, `memory`) | Cloud Run sizing per service. |
-| `grafana_remote_write_url`, `grafana_cloud_username`, `grafana_api_key` | Pass via `TF_VAR_*` (matching the CI secrets) — never put `grafana_api_key` in `terraform.tfvars`. |
+**Jobs**
 
-## 4. One-time VM bootstrap
+| Job | `push` event | `workflow_dispatch` | `schedule` | Notes |
+|---|---|---|---|---|
+| `drift-detection` | skipped | runs | runs (Mon 08:00 UTC) | Proxy → Postgres, pulls baseline from `gs://${MLFLOW_GCS_BUCKET}/monitoring/baseline_data.csv`, runs Evidently, uploads `drift_summary_*.json` as an artifact, writes `severity` output (`NONE`/`YELLOW`/`RED`) |
+| `trigger-retraining` | — | if severity=RED | if severity=RED | Dispatches `modelpipeline.yml` against `main` via `actions/github-script` |
+| `deploy-monitoring` | runs | runs if `run_monitoring_sync=true` | — | Renders `prometheus.production.yml` with `envsubst` (API host, Grafana remote-write), `scp`s it + `docker-compose.production.yml` to `MONITORING_VM_PATH`, `docker compose pull && up -d` |
+| `notify-on-failure` / `notify-on-success` | — | — | — | SMTP; drift severity alerts are emitted by `drift_detector.py` itself, not here |
 
-The VM hosts only the runtime; **no application source code** lives on it.
-Perform once per VM, as `root` (or with `sudo`):
+**Manual invocation**
 
-```bash
-# Docker + Compose v2 (Debian/Ubuntu)
-curl -fsSL https://get.docker.com | sh
-sudo apt-get install -y docker-compose-plugin
+- Default `workflow_dispatch` only re-runs drift detection.
+- Toggle `run_monitoring_sync=true` to also redeploy the Prometheus/Grafana
+  stack to the VM.
 
-# CI user with Docker access
-sudo useradd -m -s /bin/bash github-actions
-sudo usermod -aG docker github-actions
-sudo install -d -o github-actions -g github-actions /opt/savvio/data_pipeline
+**Prometheus config is rendered, not static.** `deployment/monitoring/prometheus/prometheus.production.yml`
+is a template with `${API_HOST}`, `${PROMETHEUS_PROJECT_LABEL}`,
+`${PROMETHEUS_API_JOB}`, `${GRAFANA_REMOTE_WRITE_URL}`,
+`${GRAFANA_CLOUD_USERNAME}`, `${GRAFANA_CLOUD_API_KEY}` — substituted by
+`envsubst` in the runner, the rendered file is what lands on the VM.
 
-# SSH key for the github-actions user (paste the public side that pairs with
-# the private key stored in GitHub as GCE_SSH_PRIVATE_KEY).
-sudo -u github-actions mkdir -p /home/github-actions/.ssh
-sudo -u github-actions tee /home/github-actions/.ssh/authorized_keys < your_pubkey.pub
-sudo chmod 600 /home/github-actions/.ssh/authorized_keys
+---
 
-# Allow github-actions to use sudo non-interactively for docker commands only.
-echo 'github-actions ALL=(ALL) NOPASSWD: /usr/bin/docker, /usr/bin/docker-compose' \
-  | sudo tee /etc/sudoers.d/github-actions
-```
+## Shared conventions
 
-Then drop the deployment artefacts into `${VM_DEPLOY_PATH}` once:
+Every workflow follows the same handful of rules so they compose cleanly:
 
-```bash
-cd /opt/savvio/data_pipeline
-# These two are tracked in the repo and can be scp'd or curl'd from GitHub raw:
-curl -L -o docker-compose.yaml      https://raw.githubusercontent.com/<org>/SavVio/main/data_pipeline/docker-compose.yaml
-curl -L -o docker-compose.prod.yaml https://raw.githubusercontent.com/<org>/SavVio/main/data_pipeline/docker-compose.prod.yaml
+- **Concurrency.** `datapipeline`, `modelpipeline`, `deployment` all use
+  `group: ${{ github.workflow }}-${{ github.ref }}` with
+  `cancel-in-progress: true`. `ops-monitoring` runs with
+  `cancel-in-progress: false` (don't kill a mid-flight drift run).
+  `terraform.yml` uses a single global group `terraform-state`.
+- **Auth.** Every job that touches GCP uses `google-github-actions/auth@v2`
+  with `secrets.GCP_SA_KEY`. The VM authenticates separately via its **instance
+  service account** (no key files on disk).
+- **Image tagging.** Every build tags both `:${{ github.sha }}` (immutable,
+  what deploy jobs pin to) and `:latest`, with registry-side `buildcache`.
+- **Email notifications.** All workflows gate SMTP on
+  `vars.NOTIFY_EMAILS_ENABLED == 'true'` so you can flip emails off without
+  touching secrets.
+- **Path filters.** Workflows only trigger on changes under their own
+  directory tree, so an API-only PR doesn't re-run the data pipeline and vice
+  versa.
 
-# Create the runtime .env on the VM (NEVER commit it).
-cat > .env <<'EOF'
-DB_INSTANCE_CONNECTION_NAME=<project>:<region>:<instance>
-DB_HOST=cloud-sql-proxy
-DB_PORT=5432
-DB_NAME=...
-DB_USER=...
-DB_PASSWORD=...
-AIRFLOW_UID=50000
-_AIRFLOW_WWW_USER_USERNAME=airflow
-_AIRFLOW_WWW_USER_PASSWORD=<choose-a-strong-one>
-SMTP_HOST=...
-SMTP_PORT=587
-SMTP_USER=...
-SMTP_PASSWORD=...
-SLACK_WEBHOOK_URL=
-EOF
+---
 
-mkdir -p logs config plugins
-# Place the GCP service-account JSON key here (it is mounted into Airflow):
-sudo cp savvio-gcp-key.json config/
-```
+## Inputs reference (short form)
 
-> **Why no `vm_env_setup.sh` in the repo?**
-> That file historically held the production DB password and was committed
-> by accident. `.env` is now produced on the VM by hand and listed in
-> `.gitignore`. After this change the password should also be rotated in
-> Cloud SQL since the old one is in git history.
+This is the compressed view; for the full table + descriptions, see
+[`deployment/REPRODUCE.md §5`](../../deployment/REPRODUCE.md#5-configure-github).
 
-## 5. How a deploy actually flows
+**Secrets (sensitive — never logged):**
 
 ```
-push to main ─►  unit-tests
-              └► build-and-push   (docker buildx → AR :sha + :latest)
-                 └► deploy        (ssh VM → docker compose pull/up → trigger DAG)
+GCP_PROJECT_ID          GCP_SA_KEY
+GCE_VM_IP               GCE_SSH_PRIVATE_KEY
+DB_INSTANCE_CONNECTION_NAME
+DB_HOST  DB_PORT  DB_NAME  DB_USER  DB_PASSWORD
+SMTP_HOST  SMTP_PORT  SMTP_USER  SMTP_PASSWORD
+ALERT_EMAIL_FROM  ALERT_EMAIL_LIST
+API_URL_DEV
+GRAFANA_CLOUD_API_KEY  GRAFANA_CLOUD_USERNAME  GRAFANA_REMOTE_WRITE_URL
 ```
 
-The VM never pulls source code; it just pulls the image tag CI just produced
-and lets `docker-compose.prod.yaml` strip the host volume mounts so the baked
-DAGs win over whatever is on disk.
+**Variables (visible in logs — safe for names, regions, toggles):**
 
-## 6. Reproducing in another project — checklist
+```
+# Identity / registry
+PROJECT_NAME  ENVIRONMENT  AR_REGION  AR_REPO
 
-- [ ] Enable APIs and create the Artifact Registry repo
-- [ ] Create CI service account + download key
-- [ ] Provision the Airflow VM and run the bootstrap above
-- [ ] Set the secrets in §1 in the new repo
-- [ ] Set the variables in §2 in the new repo
-- [ ] Push to `main` and watch `Data Pipeline CI/CD` run
+# Image names
+AR_IMAGE_DATAPIPELINE  AR_IMAGE_MODELPIPELINE
+AR_IMAGE_API  AR_IMAGE_FRONTEND  AR_IMAGE_MLFLOW
 
-No file under `.github/workflows/` or `data_pipeline/` should need editing.
+# Cloud Run targets
+CLOUD_RUN_API  CLOUD_RUN_FRONTEND  CLOUD_RUN_MLFLOW
+CLOUD_RUN_ML_TRAINER  RUN_SA_EMAIL
+
+# VM deploy
+SSH_USER  VM_DEPLOY_PATH  AIRFLOW_DAG_ID
+MONITORING_VM_PATH                 # optional
+PROMETHEUS_PROJECT_LABEL           # optional
+PROMETHEUS_API_JOB                 # optional
+
+# Storage / MLflow
+MLFLOW_GCS_BUCKET  GCS_BUCKET_NAME  VERTEX_LOCATION
+GCP_CREDENTIALS_PATH  SECRET_PREFIX
+
+# Quality gates
+F1_THRESHOLD  ROC_AUC_THRESHOLD  ROLLBACK_THRESHOLD
+
+# Toggles
+NOTIFY_EMAILS_ENABLED  TERRAFORM_VERSION  VITE_DEFAULT_USER_ID
+```
+
+---
+
+## Adding a new workflow
+
+Checklist so new workflows compose with the rest:
+
+1. Put it under `.github/workflows/` with a descriptive `name:`.
+2. Scope triggers to `paths:` the workflow actually cares about.
+3. Pick a `concurrency` group — use `${{ github.workflow }}-${{ github.ref }}`
+   unless you have a reason not to.
+4. Never hardcode project IDs, regions, bucket names, service names, or email
+   addresses — add a new `vars.*` entry and document it in §5 of
+   `deployment/REPRODUCE.md`.
+5. Add `notify-on-failure` / `notify-on-success` jobs gated on
+   `vars.NOTIFY_EMAILS_ENABLED == 'true'` so alerts share the same toggle as
+   the rest of the stack.
+6. Update this README's overview table and the inputs reference.

@@ -159,7 +159,7 @@ jobs:
           username: ${{ vars.SSH_USER }}
           key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
           timeout: 60s
-          envs: VM_DEPLOY_PATH,SECRET_PREFIX,GCS_BUCKET_NAME,VERTEX_LOCATION,GCP_CREDENTIALS_PATH,DB_HOST,DB_PORT,DB_USER,DB_NAME,SMTP_HOST,SMTP_PORT,SMTP_USER,ALERT_EMAIL_FROM,ALERT_EMAIL_LIST
+          envs: VM_DEPLOY_PATH,SECRET_PREFIX,GCS_BUCKET_NAME,VERTEX_LOCATION,GCP_CREDENTIALS_PATH,DB_HOST,DB_PORT,DB_USER,DB_NAME,SMTP_HOST,SMTP_PORT,SMTP_USER,ALERT_EMAIL_FROM,ALERT_EMAIL_LIST,ALERT_EMAIL_CC
           script: |
             set -euo pipefail
             shopt -s inherit_errexit
@@ -222,6 +222,7 @@ jobs:
             SMTP_PASSWORD=$SMTP_PASSWORD
             ALERT_EMAIL_FROM=$ALERT_EMAIL_FROM
             ALERT_EMAIL_LIST=$ALERT_EMAIL_LIST
+            ALERT_EMAIL_CC=$ALERT_EMAIL_CC
             ENVEOF
 
             chmod 600 "$VM_DEPLOY_PATH/.env"
@@ -241,6 +242,7 @@ jobs:
           SMTP_USER: ${{ vars.SMTP_USER }}
           ALERT_EMAIL_FROM: ${{ vars.ALERT_EMAIL_FROM }}
           ALERT_EMAIL_LIST: ${{ vars.ALERT_EMAIL_LIST }}
+          ALERT_EMAIL_CC: ${{ vars.ALERT_EMAIL_CC || '' }}
 
       - name: Sync docker-compose files to VM
         uses: appleboy/scp-action@v0.1.7

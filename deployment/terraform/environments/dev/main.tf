@@ -152,7 +152,7 @@ module "smtp_password_secret" {
 module "airflow_www_password_secret" {
   source                         = "../../modules/secrets"
   secret_id                      = "${local.prefix}-airflow-www-password"
-  secret_data                    = var.airflow_www_password != "" ? var.airflow_www_password : "not-configured"
+  secret_data                    = var.airflow_www_password != "" ? var.airflow_www_password : "airflow"
   accessor_service_account_email = google_service_account.cloud_run.email
   depends_on                     = [google_project_service.apis]
 }

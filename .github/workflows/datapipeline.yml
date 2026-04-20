@@ -150,7 +150,6 @@ jobs:
           script: |
             set -euo pipefail
             mkdir -p "$VM_DEPLOY_PATH/logs" "$VM_DEPLOY_PATH/config"
-            chmod 777 "$VM_DEPLOY_PATH/logs"
             if [ ! -f "$VM_DEPLOY_PATH/.env" ]; then
               cat > "$VM_DEPLOY_PATH/.env" <<ENVEOF
             GCP_PROJECT_ID=$GCP_PROJECT_ID

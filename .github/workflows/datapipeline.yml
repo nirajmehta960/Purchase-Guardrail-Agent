@@ -53,7 +53,8 @@ jobs:
           pip install -e ../savviocore
           pip install "apache-airflow>=3.0.0" \
                       "apache-airflow-providers-standard" \
-                      "apache-airflow-providers-smtp"
+                      "apache-airflow-providers-smtp" \
+                      "apache-airflow-providers-celery"
           pip install -r requirements.txt
           pip install pytest pytest-cov
 

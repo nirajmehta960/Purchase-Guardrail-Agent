@@ -159,8 +159,8 @@ services:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/version"]
       interval: 30s
       timeout: 10s
-      retries: 5
-      start_period: 30s
+      retries: 10
+      start_period: 120s
     restart: always
     depends_on:
       <<: *airflow-common-depends-on
@@ -213,7 +213,7 @@ services:
     depends_on:
       <<: *airflow-common-depends-on
       airflow-apiserver:
-        condition: service_healthy
+        condition: service_started
       airflow-init:
         condition: service_completed_successfully
 

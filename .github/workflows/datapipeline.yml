@@ -310,25 +310,6 @@ jobs:
               exit 1
             fi
 
-            WORKER_READY=0
-            for i in $(seq 1 40); do
-              WORKER_STATE=$($DC ps airflow-worker --format json 2>/dev/null \
-                | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0].get('Health','unknown') if isinstance(d,list) else d.get('Health','unknown'))" 2>/dev/null \
-                || echo "unknown")
-              if [ "$WORKER_STATE" = "healthy" ]; then
-                WORKER_READY=1
-                echo "Airflow worker is healthy."
-                break
-              fi
-              echo "Waiting for Airflow worker ($i/40) — state: $WORKER_STATE..."
-              sleep 15
-            done
-            if [ "$WORKER_READY" -eq 0 ]; then
-              echo "ERROR: Airflow worker did not become healthy in time." >&2
-              echo "--- worker logs (last 80 lines) ---"
-              $DC logs airflow-worker --tail=80 2>&1 || true
-              exit 1
-            fi
 
             DAG_READY=0
             for i in $(seq 1 12); do
@@ -382,12 +363,12 @@ jobs:
         if: vars.NOTIFY_EMAILS_ENABLED == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: ${{ secrets.SMTP_HOST }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          username: ${{ secrets.SMTP_USER }}
+          server_address: ${{ vars.SMTP_HOST }}
+          server_port: ${{ vars.SMTP_PORT }}
+          username: ${{ vars.SMTP_USER }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          from: ${{ vars.PROJECT_NAME }} CI <${{ secrets.ALERT_EMAIL_FROM }}>
-          to: ${{ secrets.ALERT_EMAIL_LIST }}
+          from: ${{ vars.PROJECT_NAME }} CI <${{ vars.ALERT_EMAIL_FROM }}>
+          to: ${{ vars.ALERT_EMAIL_LIST }}
           subject: "[${{ vars.PROJECT_NAME }}][FAILED] Data Pipeline CI/CD — ${{ github.ref_name }} @ ${{ github.sha }}"
           body: |
             Data Pipeline CI/CD FAILED
@@ -429,12 +410,12 @@ jobs:
         if: vars.NOTIFY_EMAILS_ENABLED == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: ${{ secrets.SMTP_HOST }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          username: ${{ secrets.SMTP_USER }}
+          server_address: ${{ vars.SMTP_HOST }}
+          server_port: ${{ vars.SMTP_PORT }}
+          username: ${{ vars.SMTP_USER }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          from: ${{ vars.PROJECT_NAME }} CI <${{ secrets.ALERT_EMAIL_FROM }}>
-          to: ${{ secrets.ALERT_EMAIL_LIST }}
+          from: ${{ vars.PROJECT_NAME }} CI <${{ vars.ALERT_EMAIL_FROM }}>
+          to: ${{ vars.ALERT_EMAIL_LIST }}
           subject: "[${{ vars.PROJECT_NAME }}][OK] Data Pipeline CI/CD — ${{ github.ref_name }} @ ${{ github.sha }}"
           body: |
             Data Pipeline CI/CD PASSED

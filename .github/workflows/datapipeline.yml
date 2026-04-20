@@ -25,7 +25,7 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.11"
-  IMAGE: ${{ vars.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ vars.AR_REPO }}/${{ vars.AR_IMAGE_DATAPIPELINE }}
+  IMAGE: ${{ vars.AR_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.AR_REPO }}/${{ vars.AR_IMAGE_DATAPIPELINE }}
 
 jobs:
   # ===========================================================================
@@ -139,22 +139,47 @@ jobs:
         id: tag
         run: echo "image_tag=${{ env.IMAGE }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
-      - name: Bootstrap VM directories and .env
+      - name: Bootstrap VM directories
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.GCE_VM_IP }}
           username: ${{ vars.SSH_USER }}
           key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
           timeout: 30s
-          envs: VM_DEPLOY_PATH,GCP_PROJECT_ID,DB_HOST,DB_PORT,DB_USER,DB_PASSWORD,DB_NAME,SMTP_HOST,SMTP_PORT,SMTP_USER,SMTP_PASSWORD,ALERT_EMAIL_FROM,ALERT_EMAIL_LIST
+          envs: VM_DEPLOY_PATH
           script: |
             set -euo pipefail
             mkdir -p "$VM_DEPLOY_PATH/logs" "$VM_DEPLOY_PATH/config"
-            if [ ! -f "$VM_DEPLOY_PATH/.env" ]; then
-              cat > "$VM_DEPLOY_PATH/.env" <<ENVEOF
-            GCP_PROJECT_ID=$GCP_PROJECT_ID
-            GCP_CREDENTIALS_PATH=/opt/airflow/config/savvio-gcp-key.json
-            GCS_BUCKET_NAME=savvio-data-bucket
+        env:
+          VM_DEPLOY_PATH: ${{ vars.VM_DEPLOY_PATH }}
+
+      - name: Write .env from Secret Manager
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.GCE_VM_IP }}
+          username: ${{ vars.SSH_USER }}
+          key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
+          timeout: 60s
+          envs: VM_DEPLOY_PATH,SECRET_PREFIX,GCS_BUCKET_NAME,VERTEX_LOCATION,GCP_CREDENTIALS_PATH
+          script: |
+            set -euo pipefail
+            shopt -s inherit_errexit
+
+            PROJECT_ID=$(curl -sf \
+              "http://metadata.google.internal/computeMetadata/v1/project/project-id" \
+              -H "Metadata-Flavor: Google")
+
+            fetch() {
+              gcloud secrets versions access latest \
+                --secret="${SECRET_PREFIX}-$1" \
+                --project="$PROJECT_ID"
+            }
+
+            AIRFLOW_WWW_PWD=$(fetch airflow-www-password)
+
+            cat > "$VM_DEPLOY_PATH/.env" <<ENVEOF
+            GCP_CREDENTIALS_PATH=$GCP_CREDENTIALS_PATH
+            GCS_BUCKET_NAME=$GCS_BUCKET_NAME
             GCS_RAW_PATH=raw/
             GCS_PROCESSED_PATH=processed/
             GCS_FEATURES_PATH=features/
@@ -164,24 +189,11 @@ jobs:
             REVIEW_BLOB=raw/review_data.jsonl
             DATA_DIR=dags/data
             ENVIRONMENT=prod
-            DB_USER=$DB_USER
-            DB_PASSWORD=$DB_PASSWORD
-            DB_HOST=$DB_HOST
-            DB_PORT=$DB_PORT
-            DB_NAME=$DB_NAME
             DB_ENV=prod
-            SMTP_HOST=$SMTP_HOST
-            SMTP_PORT=$SMTP_PORT
-            SMTP_USER=$SMTP_USER
-            SMTP_PASSWORD=$SMTP_PASSWORD
-            ALERT_EMAIL_FROM=$ALERT_EMAIL_FROM
-            ALERT_EMAIL_LIST=$ALERT_EMAIL_LIST
             AIRFLOW_UID=50000
             AIRFLOW_PROJ_DIR=.
             _AIRFLOW_WWW_USER_USERNAME=airflow
-            _AIRFLOW_WWW_USER_PASSWORD=airflow
             AIRFLOW_USERNAME=airflow
-            AIRFLOW_PASSWORD=airflow
             LOG_LEVEL=INFO
             LOG_DIR=logs
             MAX_MISSING_VALUES_PCT=0.1
@@ -201,27 +213,32 @@ jobs:
             DUCKDB_THREADS=2
             DUCKDB_TEMP_DIRECTORY=/tmp
             JSONL_MAX_OBJECT_SIZE=33554432
-            VERTEX_PROJECT=$GCP_PROJECT_ID
-            VERTEX_LOCATION=us-east1
+            VERTEX_LOCATION=$VERTEX_LOCATION
+            GCP_PROJECT_ID=$PROJECT_ID
+            VERTEX_PROJECT=$PROJECT_ID
+            DB_USER=$(fetch db-user)
+            DB_PASSWORD=$(fetch db-password)
+            DB_HOST=$(fetch db-host)
+            DB_PORT=$(fetch db-port)
+            DB_NAME=$(fetch db-name)
+            SMTP_HOST=$(fetch smtp-host)
+            SMTP_PORT=$(fetch smtp-port)
+            SMTP_USER=$(fetch smtp-user)
+            SMTP_PASSWORD=$(fetch smtp-password)
+            ALERT_EMAIL_FROM=$(fetch alert-email-from)
+            ALERT_EMAIL_LIST=$(fetch alert-email-list)
+            _AIRFLOW_WWW_USER_PASSWORD=${AIRFLOW_WWW_PWD}
+            AIRFLOW_PASSWORD=${AIRFLOW_WWW_PWD}
             ENVEOF
-              echo ".env bootstrapped."
-            else
-              echo ".env already exists — skipping bootstrap."
-            fi
+
+            chmod 600 "$VM_DEPLOY_PATH/.env"
+            echo ".env written ($(wc -l < "$VM_DEPLOY_PATH/.env") lines, perms $(stat -c '%a' "$VM_DEPLOY_PATH/.env"))."
         env:
           VM_DEPLOY_PATH: ${{ vars.VM_DEPLOY_PATH }}
-          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_NAME: ${{ secrets.DB_NAME }}
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
-          ALERT_EMAIL_LIST: ${{ secrets.ALERT_EMAIL_LIST }}
+          SECRET_PREFIX: ${{ vars.SECRET_PREFIX || 'savvio' }}
+          GCS_BUCKET_NAME: ${{ vars.GCS_BUCKET_NAME || 'savvio-data-bucket' }}
+          VERTEX_LOCATION: ${{ vars.VERTEX_LOCATION || 'us-east1' }}
+          GCP_CREDENTIALS_PATH: ${{ vars.GCP_CREDENTIALS_PATH || '/opt/airflow/config/savvio-gcp-key.json' }}
 
       - name: Sync docker-compose files to VM
         uses: appleboy/scp-action@v0.1.7
@@ -265,43 +282,61 @@ jobs:
               -f docker-compose.yaml -f docker-compose.prod.yaml \
               up -d --remove-orphans
 
+            DC="docker compose --env-file .env --env-file .env.ci -f docker-compose.yaml -f docker-compose.prod.yaml"
+
+            SCHED_READY=0
             for i in $(seq 1 20); do
-              if docker compose \
-                   --env-file .env --env-file .env.ci \
-                   -f docker-compose.yaml -f docker-compose.prod.yaml \
-                   exec -T airflow-scheduler airflow dags list >/dev/null 2>&1; then
+              if $DC exec -T airflow-scheduler airflow dags list >/dev/null 2>&1; then
+                SCHED_READY=1
                 echo "Airflow scheduler is ready."
                 break
               fi
               echo "Waiting for Airflow scheduler ($i/20)..."
               sleep 15
             done
+            if [ "$SCHED_READY" -eq 0 ]; then
+              echo "ERROR: Airflow scheduler did not become ready in time." >&2
+              exit 1
+            fi
 
+            WORKER_READY=0
             for i in $(seq 1 20); do
-              WORKER_STATE=$(docker compose \
-                --env-file .env --env-file .env.ci \
-                -f docker-compose.yaml -f docker-compose.prod.yaml \
-                ps airflow-worker --format json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0].get('Health','unknown') if isinstance(d,list) else d.get('Health','unknown'))" 2>/dev/null || echo "unknown")
+              WORKER_STATE=$($DC ps airflow-worker --format json 2>/dev/null \
+                | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0].get('Health','unknown') if isinstance(d,list) else d.get('Health','unknown'))" 2>/dev/null \
+                || echo "unknown")
               if [ "$WORKER_STATE" = "healthy" ]; then
+                WORKER_READY=1
                 echo "Airflow worker is healthy."
                 break
               fi
               echo "Waiting for Airflow worker ($i/20) — state: $WORKER_STATE..."
               sleep 15
             done
+            if [ "$WORKER_READY" -eq 0 ]; then
+              echo "ERROR: Airflow worker did not become healthy in time." >&2
+              exit 1
+            fi
 
-            docker compose \
-              --env-file .env --env-file .env.ci \
-              -f docker-compose.yaml -f docker-compose.prod.yaml \
-              ps --format "table {{.Name}}\t{{.Status}}"
+            DAG_READY=0
+            for i in $(seq 1 12); do
+              if $DC exec -T airflow-scheduler airflow dags list 2>/dev/null | grep -q "^${DAG_ID}"; then
+                DAG_READY=1
+                echo "DAG $DAG_ID is parsed and available."
+                break
+              fi
+              echo "Waiting for DAG $DAG_ID to be parsed ($i/12)..."
+              sleep 10
+            done
+            if [ "$DAG_READY" -eq 0 ]; then
+              echo "ERROR: DAG $DAG_ID was not visible after 2 minutes — aborting trigger." >&2
+              exit 1
+            fi
 
-            docker compose \
-              --env-file .env --env-file .env.ci \
-              -f docker-compose.yaml -f docker-compose.prod.yaml \
-              exec -T airflow-scheduler \
+            $DC ps --format "table {{.Name}}\t{{.Status}}"
+
+            $DC exec -T airflow-scheduler \
               airflow dags trigger "$DAG_ID" \
-              --run-id "deploy__${GITHUB_SHA}__${GITHUB_RUN_ID}" || \
-              echo "DAG trigger skipped (already triggered or scheduler not ready)."
+              --run-id "deploy__${GITHUB_SHA}__${GITHUB_RUN_ID}"
 
             echo "Deployed $IMAGE_TAG"
         env:

@@ -426,12 +426,11 @@ jobs:
         id: tag
         run: echo "image_tag=${{ env.IMAGE }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy image to Cloud Run
+      - name: Deploy image to Cloud Run Job
         run: |
-          gcloud run deploy "${{ vars.CLOUD_RUN_ML_TRAINER }}" \
+          gcloud run jobs deploy "${{ vars.CLOUD_RUN_ML_TRAINER }}" \
             --project "${{ secrets.GCP_PROJECT_ID }}" \
             --region "${{ vars.AR_REGION }}" \
-            --platform managed \
             --image "${{ steps.tag.outputs.image_tag }}" \
             --service-account "${{ vars.RUN_SA_EMAIL }}" \
             --quiet

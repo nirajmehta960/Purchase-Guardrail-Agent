@@ -237,10 +237,10 @@ jobs:
             echo ".env written ($(wc -l < "$VM_DEPLOY_PATH/.env") lines, perms $(stat -c '%a' "$VM_DEPLOY_PATH/.env"))."
         env:
           VM_DEPLOY_PATH: ${{ vars.VM_DEPLOY_PATH }}
-          SECRET_PREFIX: ${{ vars.SECRET_PREFIX }}
-          GCS_BUCKET_NAME: ${{ vars.GCS_BUCKET_NAME }}
-          VERTEX_LOCATION: ${{ vars.VERTEX_LOCATION }}
-          GCP_CREDENTIALS_PATH: ${{ vars.GCP_CREDENTIALS_PATH }}
+          SECRET_PREFIX: ${{ vars.SECRET_PREFIX || 'savvio' }}
+          GCS_BUCKET_NAME: ${{ vars.GCS_BUCKET_NAME || 'savvio-data-bucket' }}
+          VERTEX_LOCATION: ${{ vars.VERTEX_LOCATION || 'us-east1' }}
+          GCP_CREDENTIALS_PATH: ${{ vars.GCP_CREDENTIALS_PATH || '/opt/airflow/config/savvio-gcp-key.json' }}
           DB_HOST: ${{ vars.DB_HOST }}
           DB_PORT: ${{ vars.DB_PORT }}
           DB_USER: ${{ vars.DB_USER }}

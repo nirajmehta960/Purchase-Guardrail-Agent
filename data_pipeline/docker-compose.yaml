@@ -89,6 +89,7 @@ x-airflow-common:
     _PIP_ADDITIONAL_REQUIREMENTS: ""
     # The following line can be used to set a custom config file, stored in the local config folder
     AIRFLOW_CONFIG: "/opt/airflow/config/airflow.cfg"
+    CONNECTION_CHECK_MAX_COUNT: "0"
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
@@ -174,8 +175,8 @@ services:
       test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob"]
       interval: 30s
       timeout: 30s
-      retries: 5
-      start_period: 60s
+      retries: 10
+      start_period: 120s
     restart: always
     depends_on:
       <<: *airflow-common-depends-on
@@ -189,8 +190,8 @@ services:
       test: ["CMD-SHELL", "airflow jobs check --job-type DagProcessorJob"]
       interval: 30s
       timeout: 30s
-      retries: 5
-      start_period: 60s
+      retries: 10
+      start_period: 120s
     restart: always
     depends_on:
       <<: *airflow-common-depends-on
@@ -224,8 +225,8 @@ services:
       test: ["CMD-SHELL", "airflow jobs check --job-type TriggererJob"]
       interval: 30s
       timeout: 30s
-      retries: 5
-      start_period: 60s
+      retries: 10
+      start_period: 120s
     restart: always
     depends_on:
       <<: *airflow-common-depends-on

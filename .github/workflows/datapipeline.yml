@@ -325,6 +325,33 @@ jobs:
               exit 1
             fi
 
+            # Gate the trigger on a Celery worker actually being registered with
+            # the broker. Without this, tasks sit in "queued" forever because
+            # the worker's start_period (180s) covers heavy ML imports
+            # (torch + sentence-transformers) and the DAG parses long before
+            # the worker is reachable via celery.
+            CELERY_APP="airflow.providers.celery.executors.celery_executor.app"
+            WORKER_READY=0
+            for i in $(seq 1 40); do
+              if $DC exec -T airflow-worker \
+                   celery --app "$CELERY_APP" inspect ping --timeout 10 \
+                   >/dev/null 2>&1; then
+                WORKER_READY=1
+                echo "Celery worker responded to ping (attempt $i)."
+                break
+              fi
+              echo "Waiting for Celery worker to register with broker ($i/40)..."
+              sleep 15
+            done
+            if [ "$WORKER_READY" -eq 0 ]; then
+              echo "ERROR: Celery worker did not register within 10 minutes — aborting trigger." >&2
+              echo "--- airflow-worker status ---"
+              $DC ps airflow-worker || true
+              echo "--- airflow-worker logs (last 120 lines) ---"
+              $DC logs airflow-worker --tail=120 2>&1 || true
+              exit 1
+            fi
+
             $DC ps --format "table {{.Name}}\t{{.Status}}"
 
             $DC exec -T airflow-scheduler \

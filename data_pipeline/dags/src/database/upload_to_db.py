@@ -260,22 +260,18 @@ def load_products(engine, jsonl_path: str) -> int:
 
 
 def load_reviews(engine, jsonl_path: str) -> int:
-    """Load reviews from JSONL into reviews table.
+    """Load reviews from JSONL into reviews table via per-chunk upsert.
 
-    Uses TRUNCATE + per-chunk committed INSERTs instead of one giant transaction.
-    A single transaction across 2.1M rows causes WAL buildup that makes each
-    successive chunk progressively slower (8s → 3 min) and risks zombie kills.
-    Committing per-chunk keeps each transaction small and fast.
-    A SQL dedup pass after all chunks handles any cross-chunk (user_id, product_id)
-    duplicates before the unique constraint is recreated.
+    Uses per-chunk upsert (ON CONFLICT DO UPDATE) — the unique index stays in
+    place throughout, so each chunk commits in seconds with no index rebuild cost.
+    This mirrors the April-14 approach which loaded 2.1M rows in ~20-25 min.
     """
-    from psycopg2.extras import execute_values
-
     # Fetch valid product_ids once to filter orphaned reviews (FK: reviews.product_id → products)
     with engine.connect() as conn:
         existing_ids_set = set(
             pd.read_sql(text("SELECT product_id FROM products"), conn)["product_id"].tolist()
         )
+    logger.info("Fetched %d valid product_ids for FK filtering.", len(existing_ids_set))
 
     file_size_mb = os.path.getsize(jsonl_path) / (1024 * 1024)
     logger.info(
@@ -283,21 +279,12 @@ def load_reviews(engine, jsonl_path: str) -> int:
         file_size_mb, JSONL_STREAM_CHUNKSIZE,
     )
 
-    all_cols = list(REVIEW_COLS.values())
-    col_list = ", ".join(all_cols)
-    sql = f"INSERT INTO reviews ({col_list}) VALUES %s"
-
-    # Step 1: TRUNCATE + drop constraints in a single short transaction
-    with engine.begin() as conn:
-        conn.execute(text("TRUNCATE TABLE reviews RESTART IDENTITY"))
-        conn.execute(text("ALTER TABLE reviews DROP CONSTRAINT IF EXISTS uq_reviews_user_product"))
-        conn.execute(text("ALTER TABLE reviews DROP CONSTRAINT IF EXISTS reviews_product_id_fkey"))
-    logger.info("Truncated reviews and dropped constraints for fast bulk load.")
-
-    # Step 2: Insert each chunk in its own committed transaction — keeps WAL small
+    conflict_cols = ["user_id", "product_id"]
     total_rows = 0
     total_dropped = 0
+
     for i, chunk in enumerate(pd.read_json(jsonl_path, lines=True, chunksize=JSONL_STREAM_CHUNKSIZE), start=1):
+        logger.info("Reviews chunk %d: reading and preparing...", i)
         df = _select_and_rename(chunk, REVIEW_COLS)
         if "verified_purchase" in df.columns:
             df["verified_purchase"] = df["verified_purchase"].astype(bool)
@@ -306,41 +293,16 @@ def load_reviews(engine, jsonl_path: str) -> int:
         before_count = len(df)
         df = df[df["product_id"].isin(existing_ids_set)]
         total_dropped += before_count - len(df)
-        df = df.drop_duplicates(subset=["user_id", "product_id"], keep="last")
-        if df.empty:
-            continue
-        tuples = [tuple(row) for row in df.itertuples(index=False, name=None)]
-        with engine.begin() as conn:
-            raw = conn.connection
-            cursor = raw.cursor()
-            execute_values(cursor, sql, tuples, page_size=REVIEWS_INSERT_PAGE_SIZE)
-        total_rows += len(tuples)
-        logger.info("Reviews chunk %d inserted: %d rows (running total: %d)", i, len(tuples), total_rows)
-
-    # Step 3: Remove cross-chunk duplicates (keep highest id = last seen)
-    with engine.begin() as conn:
-        result = conn.execute(text(
-            "DELETE FROM reviews WHERE id NOT IN ("
-            "  SELECT MAX(id) FROM reviews GROUP BY user_id, product_id"
-            ")"
-        ))
-        deduped = result.rowcount
-        if deduped:
-            logger.info("Removed %d cross-chunk duplicate reviews.", deduped)
-
-    # Step 4: Recreate constraints — table is clean, this is fast
-    with engine.begin() as conn:
-        raw = conn.connection
-        cursor = raw.cursor()
-        cursor.execute(
-            "ALTER TABLE reviews ADD CONSTRAINT uq_reviews_user_product "
-            "UNIQUE (user_id, product_id)"
+        update_cols = [c for c in df.columns if c not in conflict_cols]
+        logger.info("Reviews chunk %d: upserting %d rows into DB...", i, len(df))
+        rows = _upsert_df(engine, df, "reviews", conflict_cols, update_cols)
+        total_rows += rows
+        logger.info(
+            "Reviews chunk %d done: %d rows upserted (running total: %d)",
+            i, rows, total_rows,
         )
-        cursor.execute(
-            "ALTER TABLE reviews ADD CONSTRAINT reviews_product_id_fkey "
-            "FOREIGN KEY (product_id) REFERENCES products(product_id)"
-        )
-    logger.info("Recreated reviews constraints after bulk load.")
+
+    logger.info("All %d chunks complete. Total reviews upserted: %d", i, total_rows)
 
     if total_dropped:
         logger.warning("Dropped %d orphaned reviews (product_id not in products table)", total_dropped)

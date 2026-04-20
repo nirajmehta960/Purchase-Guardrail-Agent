@@ -295,9 +295,6 @@ jobs:
             echo "Deployed $IMAGE_TAG"
         env:
           IMAGE_TAG: ${{ steps.tag.outputs.image_tag }}
-          DAG_ID: ${{ vars.AIRFLOW_DAG_ID }}
-          GITHUB_SHA: ${{ github.sha }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
           VM_DEPLOY_PATH: ${{ vars.VM_DEPLOY_PATH }}
           AR_REGION: ${{ vars.AR_REGION }}
 

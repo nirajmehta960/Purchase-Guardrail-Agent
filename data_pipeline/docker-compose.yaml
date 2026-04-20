@@ -204,18 +204,11 @@ services:
     ports:
       - "5555:5555"
     healthcheck:
-      # yamllint disable rule:line-length
-      # Ping any worker (no -d flag) with a 15s timeout; fall back to the
-      # legacy app path for Airflow <3.x. Heavy ML imports (torch,
-      # sentence-transformers) can push startup past 2 min, so start_period
-      # is set to 3 min and retries give 5 more min of grace.
-      test:
-        - "CMD-SHELL"
-        - 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping --timeout 15 || celery --app airflow.executors.celery_executor.app inspect ping --timeout 15'
+      test: ["CMD-SHELL", "celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d celery@$HOSTNAME -t 10 2>/dev/null | grep -q pong"]
       interval: 30s
-      timeout: 30s
-      retries: 10
-      start_period: 180s
+      timeout: 20s
+      retries: 5
+      start_period: 30s
     environment:
       <<: *airflow-common-env
       AIRFLOW__CELERY__WORKER_CONCURRENCY: "4"

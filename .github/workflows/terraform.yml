@@ -13,11 +13,11 @@ on:
       - 'deployment/terraform/**'
       - '.github/workflows/terraform.yml'
 
-# One Terraform run at a time per branch — cancel in-flight PR plans, queue
-# main-push applies so they don't race.
+# One Terraform run at a time globally — PRs and main pushes share the same
+# lock so a PR plan and a main apply can never race over the GCS state lock.
 concurrency:
-  group: terraform-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: terraform-state
+  cancel-in-progress: false
 
 jobs:
   # ===========================================================================

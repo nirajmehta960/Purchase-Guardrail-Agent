@@ -111,12 +111,15 @@ REVIEW_API_ENDPOINT = os.getenv("REVIEW_API_ENDPOINT", f"{API_BASE_URL}/reviews"
 ENVIRONMENT = os.getenv("ENVIRONMENT", "dev")  # dev, staging, prod
 
 # Determine data source based on environment
-if ENVIRONMENT == "dev":
+DATA_SOURCE_ENV = os.getenv("DATA_SOURCE", "")
+if DATA_SOURCE_ENV:
+    DATA_SOURCE = DATA_SOURCE_ENV
+elif ENVIRONMENT == "dev":
     DATA_SOURCE = "gcs"
 elif ENVIRONMENT == "prod":
     DATA_SOURCE = "api"
 else:
-    DATA_SOURCE = os.getenv("DATA_SOURCE", "gcs")
+    DATA_SOURCE = "gcs"
 
 
 # ============================================================================

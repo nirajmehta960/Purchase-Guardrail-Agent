@@ -193,6 +193,7 @@ jobs:
             REVIEW_BLOB=raw/review_data.jsonl
             DATA_DIR=dags/data
             ENVIRONMENT=prod
+            DATA_SOURCE=gcs
             AIRFLOW_UID=50000
             AIRFLOW_PROJ_DIR=.
             _AIRFLOW_WWW_USER_USERNAME=airflow

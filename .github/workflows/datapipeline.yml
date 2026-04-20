@@ -324,21 +324,21 @@ jobs:
             # the worker is reachable via celery.
             CELERY_APP="airflow.providers.celery.executors.celery_executor.app"
             WORKER_READY=0
-            for i in $(seq 1 36); do
+            for i in $(seq 1 24); do
               if $DC exec -T airflow-scheduler \
-                   python -m celery --app "$CELERY_APP" inspect ping -t 5 \
+                   celery --app "$CELERY_APP" inspect ping --timeout 5 --quiet \
                    2>/dev/null | grep -q "pong"; then
                 WORKER_READY=1
                 echo "Celery worker is connected to broker (attempt $i)."
                 break
               fi
-              echo "Waiting for Celery worker to register with broker ($i/36)..."
-              sleep 15
+              echo "Waiting for Celery worker to register with broker ($i/24)..."
+              sleep 10
             done
             if [ "$WORKER_READY" -eq 0 ]; then
-              echo "ERROR: Celery worker did not register within 9 minutes — aborting trigger." >&2
-              echo "--- airflow-worker logs (last 80 lines) ---"
-              $DC logs airflow-worker --tail=80 2>&1 || true
+              echo "ERROR: Celery worker did not register within 4 minutes — aborting trigger." >&2
+              echo "--- airflow-worker logs (last 60 lines) ---"
+              $DC logs airflow-worker --tail=60 2>&1 || true
               exit 1
             fi
 

@@ -33,6 +33,7 @@ pyyaml>=6.0.1
 # Airflow providers (runtime DAG dependencies — must be present on the Airflow VM)
 apache-airflow-providers-standard  # BashOperator, PythonOperator, TriggerDagRunOperator
 apache-airflow-providers-smtp      # EmailOperator
+apache-airflow-providers-celery    # CeleryExecutor (required in Airflow 3)
 
 # Airflow GCP provider for GCS integration
 apache-airflow-providers-google>=3.1.7

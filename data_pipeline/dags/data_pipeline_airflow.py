@@ -16,7 +16,6 @@ from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.python import PythonOperator, BranchPythonOperator
 from airflow.providers.smtp.operators.smtp import EmailOperator
 # from airflow.providers.slack.operators.slack_webhook import SlackWebhookOperator  # commented because Prof disabled it
-from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.sdk.execution_time.task_runner import RuntimeTaskInstance
 

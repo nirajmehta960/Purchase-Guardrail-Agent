@@ -42,6 +42,8 @@ from deployment.api.metrics import (
     record_layer2_downgrade,
     observe_ml_confidence,
     observe_llm_latency,
+    record_llm_error,
+    record_product_resolution,
 )
 from deployment.api.schemas import (
     FinancialFeaturesView,
@@ -133,10 +135,15 @@ def _resolve_product(request: PredictRequest, manager) -> ProductResolution | Pr
             explanation=PRODUCT_NOT_FOUND_RESPONSE, evaluation_mode="none",
         )
 
+    _provider_name = getattr(manager.llm_provider, "provider_name", "unknown")
     _t0 = time.time()
-    parsed = parse_user_input(request.user_query, manager.llm_provider)
+    try:
+        parsed = parse_user_input(request.user_query, manager.llm_provider)
+    except Exception as _e:
+        record_llm_error(provider=_provider_name, operation="intent_parse")
+        raise
     observe_llm_latency(
-        provider=getattr(manager.llm_provider, "provider_name", "unknown"),
+        provider=_provider_name,
         operation="intent_parse",
         latency=time.time() - _t0,
     )
@@ -390,10 +397,15 @@ def _generate_explanation(product: ProductResolution, ml: MLScore, user_profile:
         review_snippets=review_snippets or [],
     )
 
+    _provider_name_gen = getattr(manager.llm_provider, "provider_name", "unknown")
     _t0 = time.time()
-    response_text = generate_response(context, manager.llm_provider)
+    try:
+        response_text = generate_response(context, manager.llm_provider)
+    except Exception as _e:
+        record_llm_error(provider=_provider_name_gen, operation="response_gen")
+        raise
     observe_llm_latency(
-        provider=getattr(manager.llm_provider, "provider_name", "unknown"),
+        provider=_provider_name_gen,
         operation="response_gen",
         latency=time.time() - _t0,
     )
@@ -429,7 +441,10 @@ def run_inference(request: PredictRequest, manager) -> PredictResponse:
 
     resolution = _resolve_product(request, manager)
     if isinstance(resolution, PredictResponse):
+        # Resolution failed (no product found, out-of-scope, or user not found)
+        record_product_resolution(mode="failed")
         return resolution
+    record_product_resolution(mode=resolution.evaluation_mode)
 
     product_data, review_snippets = _load_product_data(resolution, manager)
 

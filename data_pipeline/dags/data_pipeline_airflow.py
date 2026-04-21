@@ -616,6 +616,7 @@ check_db_loading >> email_pipeline_success
 def _check_pipeline_complete(**context):
     """Fail the DAG run if the success email was not sent (i.e. pipeline didn't fully complete)."""
     import logging
+    import time
     logger = logging.getLogger(__name__)
     dag_run = context['dag_run']
 
@@ -632,9 +633,35 @@ def _check_pipeline_complete(**context):
         raise AirflowException(f"Failed to query task states: {e}")
 
     state = str(states.get('send_email_pipeline_success', 'missing'))
+    succeeded = state in ('success', 'TaskInstanceState.SUCCESS') or 'success' in state.lower()
+
+    # Push DAG-level metrics to Pushgateway before potentially raising.
+    try:
+        from src.metrics import push_stage_metrics, _get_run_id
+        run_id = _get_run_id(context)
+        start_ts = dag_run.start_date.timestamp() if getattr(dag_run, 'start_date', None) else 0
+        total_duration = time.time() - start_ts if start_ts else 0
+        push_stage_metrics(
+            grouping_key={"dag_run_id": run_id},
+            metrics_dict={
+                "pipeline_total_duration_seconds": (
+                    total_duration, {}, "Total DAG wall-clock time in seconds",
+                ),
+                "pipeline_run_success": (
+                    1 if succeeded else 0, {}, "1 if DAG completed successfully",
+                ),
+                "pipeline_last_success_timestamp": (
+                    time.time() if succeeded else 0,
+                    {},
+                    "Unix timestamp of the last successful DAG run",
+                ),
+            },
+        )
+    except Exception as metric_exc:
+        logger.warning("Failed to push DAG-level metrics: %s", metric_exc)
 
     # Handle string 'success' or TaskInstanceState enum strings
-    if state not in ('success', 'TaskInstanceState.SUCCESS') and 'success' not in state.lower():
+    if not succeeded:
         raise AirflowException(
             f"Pipeline did not complete successfully — "
             f"'send_email_pipeline_success' state is '{state}'"

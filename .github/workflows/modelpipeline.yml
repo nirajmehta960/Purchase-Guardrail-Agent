@@ -160,6 +160,9 @@ jobs:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
           GCP_REGION: ${{ vars.AR_REGION }}
+          PUSHGATEWAY_URL: ${{ secrets.PUSHGATEWAY_URL }}
+          MP_METRICS_ENABLED: "true"
+          GITHUB_RUN_ID: ${{ github.run_id }}
         run: python src/run_pipeline.py
 
       - name: Upload metrics artifacts

@@ -82,14 +82,21 @@ def main():
 
 # ---------- Airflow task wrappers ----------
 
+def _features_grouping_key(context: dict) -> dict:
+    from src.metrics import _get_run_id
+    return {"dag_run_id": _get_run_id(context)}
+
+
 def feature_financial_task(**context):
     """Airflow task: run financial feature engineering."""
+    from src.metrics import timed_stage
     logger.info(">>> Running Financial Feature Engineering...")
     DATA_DIR = _data_dir()
-    run_financial_features(
-        input_path=os.path.join(DATA_DIR, "processed/financial_preprocessed.csv"),
-        output_path=os.path.join(DATA_DIR, "features/financial_featured.csv"),
-    )
+    with timed_stage("feature_engineering", _features_grouping_key(context), {"dataset": "financial"}):
+        run_financial_features(
+            input_path=os.path.join(DATA_DIR, "processed/financial_preprocessed.csv"),
+            output_path=os.path.join(DATA_DIR, "features/financial_featured.csv"),
+        )
     logger.info(">>> Financial Feature Engineering: SUCCESS")
 
 
@@ -100,14 +107,16 @@ def feature_review_task(**context):
 
 def feature_product_review_task(**context):
     """Airflow task: run product & review feature engineering (produces product + review featured files)."""
+    from src.metrics import timed_stage
     logger.info(">>> Running Product & Review Feature Engineering...")
     DATA_DIR = _data_dir()
-    run_review_features(
-        reviews_path=os.path.join(DATA_DIR, "processed/review_preprocessed.jsonl"),
-        products_path=os.path.join(DATA_DIR, "processed/product_preprocessed.jsonl"),
-        product_output_path=os.path.join(DATA_DIR, "features/product_featured.jsonl"),
-        review_output_path=os.path.join(DATA_DIR, "features/review_featured.jsonl"),
-    )
+    with timed_stage("feature_engineering", _features_grouping_key(context), {"dataset": "product_review"}):
+        run_review_features(
+            reviews_path=os.path.join(DATA_DIR, "processed/review_preprocessed.jsonl"),
+            products_path=os.path.join(DATA_DIR, "processed/product_preprocessed.jsonl"),
+            product_output_path=os.path.join(DATA_DIR, "features/product_featured.jsonl"),
+            review_output_path=os.path.join(DATA_DIR, "features/review_featured.jsonl"),
+        )
     logger.info(">>> Product & Review Feature Engineering: SUCCESS")
 
 

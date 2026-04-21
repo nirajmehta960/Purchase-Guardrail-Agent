@@ -255,24 +255,37 @@ def run_ingestion() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 # Individual Airflow task functions (for parallel ingestion)
 # ──────────────────────────────────────────────────────────────
 
+def _ingestion_grouping_key(context: dict) -> dict:
+    from src.metrics import _get_run_id
+    return {"dag_run_id": _get_run_id(context)}
+
+
 def ingest_financial_task(**context):
     """Airflow task: ingest financial data only."""
+    from src.metrics import timed_stage, push_stage_metrics
+    gk = _ingestion_grouping_key(context)
     logger.info("Ingesting financial data...")
-    if DATA_SOURCE.lower() == 'gcs':
-        from src.ingestion.gcs_loader import load_financial_data
-        df = load_financial_data(
-            bucket_name=GCS_BUCKET_NAME, blob_name=FINANCIAL_BLOB,
-            destination_path=FINANCIAL_RAW_PATH,
-            credentials_path=GCP_CREDENTIALS_PATH, project_id=GCP_PROJECT_ID,
-        )
-    else:
-        from src.ingestion.api_loader import load_financial_data
-        df = load_financial_data(
-            api_base_url=API_BASE_URL,
-            endpoint=FINANCIAL_API_ENDPOINT.replace(API_BASE_URL, ''),
-            destination_path=FINANCIAL_RAW_PATH,
-            api_key=API_KEY, timeout=API_TIMEOUT,
-        )
+    with timed_stage("ingestion", gk, {"dataset": "financial"}):
+        if DATA_SOURCE.lower() == 'gcs':
+            from src.ingestion.gcs_loader import load_financial_data
+            df = load_financial_data(
+                bucket_name=GCS_BUCKET_NAME, blob_name=FINANCIAL_BLOB,
+                destination_path=FINANCIAL_RAW_PATH,
+                credentials_path=GCP_CREDENTIALS_PATH, project_id=GCP_PROJECT_ID,
+            )
+        else:
+            from src.ingestion.api_loader import load_financial_data
+            df = load_financial_data(
+                api_base_url=API_BASE_URL,
+                endpoint=FINANCIAL_API_ENDPOINT.replace(API_BASE_URL, ''),
+                destination_path=FINANCIAL_RAW_PATH,
+                api_key=API_KEY, timeout=API_TIMEOUT,
+            )
+        push_stage_metrics(gk, {
+            "ingestion_records_total": (
+                len(df), {"dataset": "financial"}, "Total records ingested",
+            ),
+        })
     context['ti'].xcom_push(key='financial_path', value=FINANCIAL_RAW_PATH)
     logger.info(f"Financial ingestion complete: {len(df)} records")
     return {'records': len(df), 'status': 'success'}
@@ -280,22 +293,30 @@ def ingest_financial_task(**context):
 
 def ingest_product_task(**context):
     """Airflow task: ingest product data only."""
+    from src.metrics import timed_stage, push_stage_metrics
+    gk = _ingestion_grouping_key(context)
     logger.info("Ingesting product data...")
-    if DATA_SOURCE.lower() == 'gcs':
-        from src.ingestion.gcs_loader import load_product_data
-        df = load_product_data(
-            bucket_name=GCS_BUCKET_NAME, blob_name=PRODUCT_BLOB,
-            destination_path=PRODUCT_RAW_PATH,
-            credentials_path=GCP_CREDENTIALS_PATH, project_id=GCP_PROJECT_ID,
-        )
-    else:
-        from src.ingestion.api_loader import load_product_data
-        df = load_product_data(
-            api_base_url=API_BASE_URL,
-            endpoint=PRODUCT_API_ENDPOINT.replace(API_BASE_URL, ''),
-            destination_path=PRODUCT_RAW_PATH,
-            api_key=API_KEY, timeout=API_TIMEOUT,
-        )
+    with timed_stage("ingestion", gk, {"dataset": "product"}):
+        if DATA_SOURCE.lower() == 'gcs':
+            from src.ingestion.gcs_loader import load_product_data
+            df = load_product_data(
+                bucket_name=GCS_BUCKET_NAME, blob_name=PRODUCT_BLOB,
+                destination_path=PRODUCT_RAW_PATH,
+                credentials_path=GCP_CREDENTIALS_PATH, project_id=GCP_PROJECT_ID,
+            )
+        else:
+            from src.ingestion.api_loader import load_product_data
+            df = load_product_data(
+                api_base_url=API_BASE_URL,
+                endpoint=PRODUCT_API_ENDPOINT.replace(API_BASE_URL, ''),
+                destination_path=PRODUCT_RAW_PATH,
+                api_key=API_KEY, timeout=API_TIMEOUT,
+            )
+        push_stage_metrics(gk, {
+            "ingestion_records_total": (
+                len(df), {"dataset": "product"}, "Total records ingested",
+            ),
+        })
     context['ti'].xcom_push(key='product_path', value=PRODUCT_RAW_PATH)
     logger.info(f"Product ingestion complete: {len(df)} records")
     return {'records': len(df), 'status': 'success'}
@@ -303,22 +324,30 @@ def ingest_product_task(**context):
 
 def ingest_review_task(**context):
     """Airflow task: ingest review data only."""
+    from src.metrics import timed_stage, push_stage_metrics
+    gk = _ingestion_grouping_key(context)
     logger.info("Ingesting review data...")
-    if DATA_SOURCE.lower() == 'gcs':
-        from src.ingestion.gcs_loader import load_review_data
-        df = load_review_data(
-            bucket_name=GCS_BUCKET_NAME, blob_name=REVIEW_BLOB,
-            destination_path=REVIEW_RAW_PATH,
-            credentials_path=GCP_CREDENTIALS_PATH, project_id=GCP_PROJECT_ID,
-        )
-    else:
-        from src.ingestion.api_loader import load_review_data
-        df = load_review_data(
-            api_base_url=API_BASE_URL,
-            endpoint=REVIEW_API_ENDPOINT.replace(API_BASE_URL, ''),
-            destination_path=REVIEW_RAW_PATH,
-            api_key=API_KEY, timeout=API_TIMEOUT,
-        )
+    with timed_stage("ingestion", gk, {"dataset": "review"}):
+        if DATA_SOURCE.lower() == 'gcs':
+            from src.ingestion.gcs_loader import load_review_data
+            df = load_review_data(
+                bucket_name=GCS_BUCKET_NAME, blob_name=REVIEW_BLOB,
+                destination_path=REVIEW_RAW_PATH,
+                credentials_path=GCP_CREDENTIALS_PATH, project_id=GCP_PROJECT_ID,
+            )
+        else:
+            from src.ingestion.api_loader import load_review_data
+            df = load_review_data(
+                api_base_url=API_BASE_URL,
+                endpoint=REVIEW_API_ENDPOINT.replace(API_BASE_URL, ''),
+                destination_path=REVIEW_RAW_PATH,
+                api_key=API_KEY, timeout=API_TIMEOUT,
+            )
+        push_stage_metrics(gk, {
+            "ingestion_records_total": (
+                len(df), {"dataset": "review"}, "Total records ingested",
+            ),
+        })
     context['ti'].xcom_push(key='review_path', value=REVIEW_RAW_PATH)
     logger.info(f"Review ingestion complete: {len(df)} records")
     return {'records': len(df), 'status': 'success'}

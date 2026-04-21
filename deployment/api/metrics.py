@@ -65,6 +65,24 @@ LLM_LATENCY = Histogram(
     buckets=(0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
 )
 
+LLM_ERRORS = Counter(
+    f"{_PREFIX}_llm_errors_total",
+    "Total LLM call errors (exceptions) by provider and operation",
+    labelnames=["provider", "operation"],
+)
+
+LLM_FALLBACKS = Counter(
+    f"{_PREFIX}_llm_fallbacks_total",
+    "Total LLM provider fallback events (primary provider failed, fallback used)",
+    labelnames=["from_provider", "to_provider"],
+)
+
+PRODUCT_RESOLUTION = Counter(
+    f"{_PREFIX}_product_resolution_total",
+    "Product resolution outcomes by mode",
+    labelnames=["mode"],
+)
+
 
 # ---------------------------------------------------------------------------
 # Setup — attach instrumentator to FastAPI app
@@ -179,6 +197,31 @@ def observe_llm_latency(
     LLM_LATENCY.labels(provider=provider, operation=operation).observe(latency)
 
 
+def record_llm_error(provider: str, operation: str) -> None:
+    """Record an LLM call that raised an exception."""
+    if not APIConfig.METRICS_ENABLED:
+        return
+    LLM_ERRORS.labels(provider=provider, operation=operation).inc()
+
+
+def record_llm_fallback(from_provider: str, to_provider: str) -> None:
+    """Record a provider fallback event (primary failed, secondary used)."""
+    if not APIConfig.METRICS_ENABLED:
+        return
+    LLM_FALLBACKS.labels(from_provider=from_provider, to_provider=to_provider).inc()
+
+
+def record_product_resolution(mode: str) -> None:
+    """Record a product resolution outcome.
+
+    Args:
+        mode: One of "catalog", "hypothetical", or "failed".
+    """
+    if not APIConfig.METRICS_ENABLED:
+        return
+    PRODUCT_RESOLUTION.labels(mode=mode).inc()
+
+
 def track_active_request():
     """Context-manager-style tracker for in-flight requests.
 
@@ -216,3 +259,13 @@ for _from_color in _COLORS:
     for _to_color in _COLORS:
         if _from_color != _to_color:
             LAYER2_DOWNGRADES.labels(from_color=_from_color, to_color=_to_color)
+
+_PROVIDERS = ["vertex_ai", "openrouter", "mock", "unknown"]
+_LLM_OPERATIONS = ["intent_parse", "response_gen"]
+
+for _provider in _PROVIDERS:
+    for _op in _LLM_OPERATIONS:
+        LLM_ERRORS.labels(provider=_provider, operation=_op)
+
+for _resolution_mode in ["catalog", "hypothetical", "failed"]:
+    PRODUCT_RESOLUTION.labels(mode=_resolution_mode)

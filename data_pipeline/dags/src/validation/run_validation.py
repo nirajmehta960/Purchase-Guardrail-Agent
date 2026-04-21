@@ -51,12 +51,29 @@ logger = logging.getLogger(__name__)
 # Airflow-compatible callables
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _validation_grouping_key(kwargs: dict) -> dict:
+    from src.metrics import _get_run_id
+    return {"dag_run_id": _get_run_id(kwargs)}
+
+
+def _push_validation(report_summary: dict, grouping_key: dict, duration: float) -> None:
+    try:
+        from src.metrics import push_validation_metrics
+        push_validation_metrics(report_summary, grouping_key, duration)
+    except Exception as exc:
+        logger.warning("Failed to push validation metrics: %s", exc)
+
+
 def validate_raw(**kwargs) -> dict:
     """
     Airflow PythonOperator callable for raw validation.
     Raises RuntimeError on CRITICAL failure to halt the DAG.
     """
+    import time
+    gk = _validation_grouping_key(kwargs)
+    start = time.monotonic()
     report = run_raw_validation()
+    _push_validation(report.summary, gk, time.monotonic() - start)
     _handle_report(report)
     return report.summary
 
@@ -66,7 +83,11 @@ def validate_processed(**kwargs) -> dict:
     Airflow PythonOperator callable for processed validation.
     Raises RuntimeError on CRITICAL failure to halt the DAG.
     """
+    import time
+    gk = _validation_grouping_key(kwargs)
+    start = time.monotonic()
     report = run_processed_validation()
+    _push_validation(report.summary, gk, time.monotonic() - start)
     _handle_report(report)
     return report.summary
 
@@ -76,7 +97,11 @@ def validate_features(**kwargs) -> dict:
     Airflow PythonOperator callable for feature validation.
     Raises RuntimeError on CRITICAL failure to halt the DAG.
     """
+    import time
+    gk = _validation_grouping_key(kwargs)
+    start = time.monotonic()
     report = run_feature_validation()
+    _push_validation(report.summary, gk, time.monotonic() - start)
     _handle_report(report)
     return report.summary
 
@@ -85,7 +110,11 @@ def validate_raw_anomalies(**kwargs) -> dict:
     """
     Tier 1: Light anomaly scan on raw financial data. INFO-only — never halts.
     """
+    import time
+    gk = _validation_grouping_key(kwargs)
+    start = time.monotonic()
     report = run_raw_anomaly_validation()
+    _push_validation(report.summary, gk, time.monotonic() - start)
     _handle_report(report)
     return report.summary
 
@@ -95,7 +124,11 @@ def validate_anomalies(**kwargs) -> dict:
     Tier 2: Full anomaly detection on featured financial data.
     WARNING/CRITICAL thresholds gate the DB load.
     """
+    import time
+    gk = _validation_grouping_key(kwargs)
+    start = time.monotonic()
     report = run_anomaly_validation()
+    _push_validation(report.summary, gk, time.monotonic() - start)
     _handle_report(report)
     return report.summary
 

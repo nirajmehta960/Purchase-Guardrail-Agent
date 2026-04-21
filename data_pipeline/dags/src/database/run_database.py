@@ -56,27 +56,62 @@ def setup_database_task(**context):
     create_tables(engine)
     logger.info(">>> Database Setup: SUCCESS")
 
+def _db_grouping_key(context: dict) -> dict:
+    from src.metrics import _get_run_id
+    return {"dag_run_id": _get_run_id(context)}
+
+
 def load_financial_task(**context):
     """Airflow task: load financial profiles into PostgreSQL."""
+    from src.metrics import timed_stage, push_stage_metrics
+    gk = _db_grouping_key(context)
     logger.info(">>> Loading Financial Profiles into PostgreSQL...")
-    data, engine = _setup()
-    load_financial(engine, os.path.join(data, "features/financial_featured.csv"))
+    with timed_stage("db_load", gk, {"table": "financial_profiles"}):
+        data, engine = _setup()
+        n_rows = load_financial(engine, os.path.join(data, "features/financial_featured.csv"))
+        push_stage_metrics(gk, {
+            "db_load_rows_total": (
+                n_rows or 0,
+                {"table": "financial_profiles"},
+                "Rows upserted into DB table",
+            ),
+        })
     logger.info(">>> Financial Profiles Load: SUCCESS")
 
 
 def load_products_task(**context):
     """Airflow task: load products into PostgreSQL."""
+    from src.metrics import timed_stage, push_stage_metrics
+    gk = _db_grouping_key(context)
     logger.info(">>> Loading Products into PostgreSQL...")
-    data, engine = _setup()
-    load_products(engine, os.path.join(data, "features/product_featured.jsonl"))
+    with timed_stage("db_load", gk, {"table": "products"}):
+        data, engine = _setup()
+        n_rows = load_products(engine, os.path.join(data, "features/product_featured.jsonl"))
+        push_stage_metrics(gk, {
+            "db_load_rows_total": (
+                n_rows or 0,
+                {"table": "products"},
+                "Rows upserted into DB table",
+            ),
+        })
     logger.info(">>> Products Load: SUCCESS")
 
 
 def load_reviews_task(**context):
     """Airflow task: load reviews into PostgreSQL."""
+    from src.metrics import timed_stage, push_stage_metrics
+    gk = _db_grouping_key(context)
     logger.info(">>> Loading Reviews into PostgreSQL...")
-    data, engine = _setup()
-    load_reviews(engine, os.path.join(data, "features/review_featured.jsonl"))
+    with timed_stage("db_load", gk, {"table": "reviews"}):
+        data, engine = _setup()
+        n_rows = load_reviews(engine, os.path.join(data, "features/review_featured.jsonl"))
+        push_stage_metrics(gk, {
+            "db_load_rows_total": (
+                n_rows or 0,
+                {"table": "reviews"},
+                "Rows upserted into DB table",
+            ),
+        })
     logger.info(">>> Reviews Load: SUCCESS")
 
 

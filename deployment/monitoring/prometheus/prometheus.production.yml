@@ -43,3 +43,14 @@ scrape_configs:
   - job_name: "prometheus"
     static_configs:
       - targets: ["localhost:9090"]
+
+  # Pushgateway — receives batch metrics pushed from Airflow tasks (on this
+  # same GCE VM) and from GitHub Actions model pipeline runs (over HTTPS).
+  # honor_labels preserves the 'job' label set by each push client
+  # (savvio-data-pipeline, savvio-model-pipeline) instead of overwriting it.
+  - job_name: "pushgateway"
+    honor_labels: true
+    static_configs:
+      - targets: ["localhost:9091"]
+        labels:
+          service: "pushgateway"

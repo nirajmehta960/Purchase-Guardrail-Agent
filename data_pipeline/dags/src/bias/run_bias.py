@@ -109,36 +109,47 @@ def main():
 # Individual Airflow task functions (for parallel bias detection)
 # ──────────────────────────────────────────────────────────────
 
+def _bias_grouping_key(context: dict) -> dict:
+    from src.metrics import _get_run_id
+    return {"dag_run_id": _get_run_id(context)}
+
+
 def bias_financial_task(**context):
     """Airflow task: run financial bias detection."""
+    from src.metrics import timed_stage
     logger.info(">>> Running Financial Bias Detection...")
     processed_dir, features_dir = _setup()
-    run_financial_bias(
-        processed_path=os.path.join(processed_dir, "financial_preprocessed.csv"),
-        featured_path=os.path.join(features_dir, "financial_featured.csv"),
-    )
+    with timed_stage("bias_detection", _bias_grouping_key(context), {"dataset": "financial"}):
+        run_financial_bias(
+            processed_path=os.path.join(processed_dir, "financial_preprocessed.csv"),
+            featured_path=os.path.join(features_dir, "financial_featured.csv"),
+        )
     logger.info(">>> Financial Bias Detection: SUCCESS")
 
 
 def bias_product_task(**context):
     """Airflow task: run product bias detection."""
+    from src.metrics import timed_stage
     logger.info(">>> Running Product Bias Detection...")
     processed_dir, features_dir = _setup()
-    run_product_bias(
-        preprocessed_path=os.path.join(processed_dir, "product_preprocessed.jsonl"),
-        featured_path=os.path.join(features_dir, "product_featured.jsonl"),
-    )
+    with timed_stage("bias_detection", _bias_grouping_key(context), {"dataset": "product"}):
+        run_product_bias(
+            preprocessed_path=os.path.join(processed_dir, "product_preprocessed.jsonl"),
+            featured_path=os.path.join(features_dir, "product_featured.jsonl"),
+        )
     logger.info(">>> Product Bias Detection: SUCCESS")
 
 
 def bias_review_task(**context):
     """Airflow task: run review bias detection."""
+    from src.metrics import timed_stage
     logger.info(">>> Running Review Bias Detection...")
     processed_dir, features_dir = _setup()
-    run_review_bias(
-        preprocessed_path=os.path.join(processed_dir, "review_preprocessed.jsonl"),
-        featured_path=os.path.join(features_dir, "review_featured.jsonl"),
-    )
+    with timed_stage("bias_detection", _bias_grouping_key(context), {"dataset": "review"}):
+        run_review_bias(
+            preprocessed_path=os.path.join(processed_dir, "review_preprocessed.jsonl"),
+            featured_path=os.path.join(features_dir, "review_featured.jsonl"),
+        )
     logger.info(">>> Review Bias Detection: SUCCESS")
 
 

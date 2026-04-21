@@ -15,7 +15,7 @@
       }
     ]
   },
-  "description": "SavVio AI Purchase Advisor — API Observability & Inference Pipeline Monitoring",
+  "description": "SavVio AI Purchase Advisor — API, Inference Pipeline, Data Pipeline & Model Pipeline Monitoring",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -526,6 +526,347 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "id": 400,
+      "title": "Data Pipeline Health",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "mappings": [
+            { "options": { "0": { "text": "Failed" }, "1": { "text": "Success" } }, "type": "value" }
+          ],
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 28 },
+      "id": 20,
+      "title": "Last Run Status",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "savvio_dp_pipeline_run_success",
+          "legendFormat": "Status",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "value_and_name", "colorMode": "background" }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 86400 },
+              { "color": "red", "value": 172800 }
+            ]
+          },
+          "unit": "dtdurations"
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 28 },
+      "id": 21,
+      "title": "Time Since Last Success",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "time() - savvio_dp_pipeline_last_success_timestamp",
+          "legendFormat": "Staleness",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1800 }, { "color": "red", "value": 3600 }] } }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 28 },
+      "id": 22,
+      "title": "Last Run Duration",
+      "type": "stat",
+      "targets": [
+        { "expr": "savvio_dp_pipeline_total_duration_seconds", "legendFormat": "Duration", "refId": "A", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "id": 23,
+      "title": "Ingested Record Counts",
+      "type": "bargauge",
+      "targets": [
+        { "expr": "savvio_dp_ingestion_records_total", "legendFormat": "{{dataset}}", "refId": "A", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "horizontal", "displayMode": "gradient" }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 }] }, "unit": "short" }
+      },
+      "gridPos": { "h": 4, "w": 12, "x": 0, "y": 32 },
+      "id": 24,
+      "title": "Validation Critical Failures by Stage",
+      "type": "bargauge",
+      "targets": [
+        { "expr": "savvio_dp_validation_checks_failed_critical", "legendFormat": "{{stage}}", "refId": "A", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "horizontal", "displayMode": "gradient" }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "unit": "s" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "id": 25,
+      "title": "Stage Durations (Last Run)",
+      "type": "bargauge",
+      "targets": [
+        { "expr": "savvio_dp_ingestion_duration_seconds", "legendFormat": "ingest/{{dataset}}", "refId": "A", "instant": true },
+        { "expr": "savvio_dp_preprocessing_duration_seconds", "legendFormat": "preprocess/{{dataset}}", "refId": "B", "instant": true },
+        { "expr": "savvio_dp_feature_engineering_duration_seconds", "legendFormat": "features/{{dataset}}", "refId": "C", "instant": true },
+        { "expr": "savvio_dp_db_load_duration_seconds", "legendFormat": "db_load/{{table}}", "refId": "D", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "horizontal", "displayMode": "gradient" }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+      "id": 26,
+      "title": "DB Rows Loaded (Last Run)",
+      "type": "bargauge",
+      "targets": [
+        { "expr": "savvio_dp_db_load_rows_total", "legendFormat": "{{table}}", "refId": "A", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "horizontal", "displayMode": "gradient" }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 80 }, { "color": "green", "value": 95 }] },
+          "unit": "percent",
+          "min": 0, "max": 100
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 44 },
+      "id": 27,
+      "title": "Validation Pass Rate by Stage",
+      "type": "gauge",
+      "targets": [
+        { "expr": "savvio_dp_validation_checks_passed / savvio_dp_validation_checks_total * 100", "legendFormat": "{{stage}}", "refId": "A", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 44 },
+      "id": 28,
+      "title": "Validation Action by Stage (0=OK 1=Alert 2=Halt)",
+      "type": "bargauge",
+      "targets": [
+        { "expr": "savvio_dp_validation_action", "legendFormat": "{{stage}}", "refId": "A", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "horizontal", "displayMode": "gradient" }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 53 },
+      "id": 500,
+      "title": "Model Pipeline & Training",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 0.75 }, { "color": "green", "value": 0.85 }] },
+          "unit": "percentunit",
+          "min": 0, "max": 1
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 54 },
+      "id": 30,
+      "title": "Champion Test F1",
+      "type": "stat",
+      "targets": [
+        { "expr": "savvio_mp_champion_test_f1_score", "legendFormat": "{{model}}", "refId": "A", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 0.85 }, { "color": "green", "value": 0.92 }] },
+          "unit": "percentunit",
+          "min": 0, "max": 1
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 54 },
+      "id": 31,
+      "title": "Champion ROC AUC",
+      "type": "stat",
+      "targets": [
+        { "expr": "savvio_mp_champion_test_roc_auc", "legendFormat": "{{model}}", "refId": "A", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] },
+          "mappings": [{ "options": { "0": { "text": "Failed" }, "1": { "text": "Passed" } }, "type": "value" }],
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 54 },
+      "id": 32,
+      "title": "Champion Bias Gate",
+      "type": "stat",
+      "targets": [
+        { "expr": "savvio_mp_champion_bias_passed", "legendFormat": "Bias Gate", "refId": "A", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] },
+          "mappings": [{ "options": { "0": { "text": "Failed" }, "1": { "text": "Success" } }, "type": "value" }],
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 54 },
+      "id": 33,
+      "title": "Pipeline Run Status",
+      "type": "stat",
+      "targets": [
+        { "expr": "savvio_mp_pipeline_success", "legendFormat": "Status", "refId": "A", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "min": 0, "max": 1, "color": { "mode": "palette-classic" } }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 54 },
+      "id": 34,
+      "title": "Baseline Candidate F1 (Last Run)",
+      "type": "bargauge",
+      "targets": [
+        { "expr": "savvio_mp_baseline_val_f1", "legendFormat": "{{model}}", "refId": "A", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "horizontal", "displayMode": "gradient" }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 2, "pointSize": 8, "showPoints": "always" },
+          "unit": "percentunit",
+          "min": 0, "max": 1,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 62 },
+      "id": 35,
+      "title": "Champion F1 Trend (Over Runs)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "savvio_mp_champion_test_f1_score", "legendFormat": "{{model}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 62 },
+      "id": 36,
+      "title": "Training Data Split Sizes",
+      "type": "bargauge",
+      "targets": [
+        { "expr": "savvio_mp_data_split_rows", "legendFormat": "{{split}}", "refId": "A", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "horizontal", "displayMode": "gradient" }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 2 },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 70 },
+      "id": 37,
+      "title": "Pipeline Duration Trend",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "savvio_mp_pipeline_duration_seconds", "legendFormat": "duration", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 2, "pointSize": 8, "showPoints": "always" },
+          "unit": "percentunit",
+          "min": 0, "max": 1
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 70 },
+      "id": 38,
+      "title": "Optuna Best F1 Trend",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "savvio_mp_tuning_best_f1", "legendFormat": "best_f1 ({{model}})", "refId": "A" },
+        { "expr": "savvio_mp_tuning_trials_completed / 100", "legendFormat": "trials/100 ({{model}})", "refId": "B" }
+      ]
     }
   ],
   "schemaVersion": 39,
@@ -533,7 +874,9 @@
     "savvio",
     "mlops",
     "inference",
-    "monitoring"
+    "monitoring",
+    "data-pipeline",
+    "model-pipeline"
   ],
   "templating": {
     "list": [
@@ -564,5 +907,5 @@
   "timezone": "browser",
   "title": "SavVio — API & Inference Monitoring",
   "uid": "savvio-monitoring-v1",
-  "version": 1
+  "version": 2
 }

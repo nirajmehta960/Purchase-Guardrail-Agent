@@ -63,24 +63,35 @@ def run_pipeline():
 # Individual Airflow task functions (for parallel preprocessing)
 # ──────────────────────────────────────────────────────────────
 
+def _preprocess_grouping_key(context: dict) -> dict:
+    from src.metrics import _get_run_id
+    return {"dag_run_id": _get_run_id(context)}
+
+
 def preprocess_financial_task(**context):
     """Airflow task: preprocess financial data only."""
+    from src.metrics import timed_stage
     logger.info(">>> Preprocessing Financial Data...")
-    financial.main()
+    with timed_stage("preprocessing", _preprocess_grouping_key(context), {"dataset": "financial"}):
+        financial.main()
     logger.info(">>> Financial Data Preprocessing: SUCCESS")
 
 
 def preprocess_product_task(**context):
     """Airflow task: preprocess product data only."""
+    from src.metrics import timed_stage
     logger.info(">>> Preprocessing Product Data...")
-    product.main()
+    with timed_stage("preprocessing", _preprocess_grouping_key(context), {"dataset": "product"}):
+        product.main()
     logger.info(">>> Product Data Preprocessing: SUCCESS")
 
 
 def preprocess_review_task(**context):
     """Airflow task: preprocess review data only."""
+    from src.metrics import timed_stage
     logger.info(">>> Preprocessing Review Data...")
-    review.main()
+    with timed_stage("preprocessing", _preprocess_grouping_key(context), {"dataset": "review"}):
+        review.main()
     logger.info(">>> Review Data Preprocessing: SUCCESS")
 
 

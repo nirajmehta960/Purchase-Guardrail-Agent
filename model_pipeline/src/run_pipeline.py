@@ -761,136 +761,187 @@ def write_ci_metrics_files(final_metrics, best_candidate):
 
 
 def main():
-    print("Starting End-to-End ML Pipeline...\n")
-    print(f"[0/6] MLflow tracking URI: {Config.MLFLOW_TRACKING_URI}")
-    print(f"[0/6] MLflow experiment: {Config.EXPERIMENT_NAME}")
+    import time as _time
+    _pipeline_start = _time.monotonic()
 
-    # 1. Initialize seeds and MLflow.
-    print("[1/6] Initializing runtime + MLflow...")
-    initialize()
-    print("[1/6] Initialization complete.")
+    # State collected across the pipeline so the finally block can always push.
+    data: dict = {}
+    candidates: list = []
+    best: dict | None = None
+    final_metrics: dict | None = None
+    tuning_context: dict | None = None
+    _pipeline_success = 0
 
-    # 2. Build features, encode labels, 3-way split.
-    print("[2/6] Preparing data (load/encode/split)...")
-    data = prepare_data()
-    print(
-        "[2/6] Data ready: "
-        f"train={len(data['y_train'])}, val={len(data['y_val'])}, test={len(data['y_test'])}"
-    )
-
-    # 3. Train all candidates, evaluate on validation set.
-    print("[3/6] Training baseline candidates...")
-    candidates = train_candidates(
-        data["X_train"], data["y_train"],
-        data["X_val"], data["y_val"],
-        data["sens_train"], data["sens_val"], data["label_encoder"],
-        data.get("scenarios_val"),
-    )
-    print(f"[3/6] Baseline training complete. candidates={len(candidates)}")
-
-    # 3b. Hyperparameter tuning on best baseline.
-    print("[4/6] Running hyperparameter tuning on best baseline...")
-    candidates, tuning_context = tune_candidate(candidates, data)
-    print(f"[4/6] Tuning stage complete. candidates={len(candidates)}")
-
-    # 4. Select best model (F1 + bias gate).
-    print("[5/6] Selecting best model (F1 + bias gate)...")
-    best = select_best_model(candidates)
-    if best:
-        print(
-            "[5/6] Selected: "
-            f"{best['name']} (val_f1={best['metrics']['f1_score']:.4f}, run_id={best['run_id']})"
-        )
-    else:
-        print("[5/6] No model selected.")
-
-    # 5. Final evaluation on held-out test set.
-    print("[6/6] Running final evaluation on held-out test set...")
-    final_metrics, final_run_id = final_evaluation(
-        best,
-        data["X_test"],
-        data["y_test"],
-        data["label_encoder"],
-        sens_test=data.get("sens_test"),
-    )
-    if final_metrics is not None:
-        print(f"[6/6] Final test metrics: {final_metrics}")
-    else:
-        print("[6/6] Final evaluation skipped or failed.")
-
-    sensitivity_summary = run_sensitivity_analysis(best, tuning_context)
-
-    # SHAP feature-importance analysis on the held-out test set.
-    print("[6c] Running SHAP feature-importance analysis...")
-    explainability_summary = run_explainability_analysis(best, data, final_run_id=final_run_id)
-    if explainability_summary.get("status") == "ok":
-        top = explainability_summary.get("top_features", [])
-        top_str = ", ".join(f"{item['feature']}({item['mean_abs_shap']:.3f})" for item in top[:5])
-        print(f"[6c] SHAP complete. Top features: {top_str}")
-    else:
-        print(f"[6c] SHAP skipped — {explainability_summary.get('reason', 'unknown')}")
-
-    # Write CI gate metric files (metrics.txt, bias_metrics.txt).
-    best_candidate = next((c for c in candidates if best and c["name"] == best["name"]), None)
-    write_ci_metrics_files(final_metrics, best_candidate)
-
-    # 6. Save best model and label encoder locally under artifacts and preprocessing.
-    save_best_model_local(best, data["label_encoder"])
-
-    # 6b. Validate LLM guardrail layer — smoke test + log prompt versions to MLflow.
-    print("[6b] Validating LLM guardrail layer...")
-    validate_llm_layer(best, data)
-    print("[6b] LLM layer validation complete.")
-
-    # 7. Save a simple markdown summary for 3 baseline models + champion final metrics.
-    summary_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    summary_run_id = final_run_id or (best["run_id"] if best else "no_run_id")
-    report_filename = f"evaluation_summary_{summary_timestamp}_{summary_run_id}.md"
-    report_path = os.path.join(Config.REPORTS_DIR, report_filename)
-    write_evaluation_summary_md(
-        candidates,
-        best,
-        final_metrics,
-        report_path,
-        sensitivity_summary=sensitivity_summary,
-        explainability_summary=explainability_summary,
-    )
-
-    if final_run_id and os.path.exists(report_path):
-        with mlflow.start_run(run_id=final_run_id):
-            mlflow.log_artifact(report_path, "reports")
-    # Generate bias analysis report
     try:
-        from guards.bias_report import generate_bias_report
-        if best and final_metrics:
-            best_candidate = next(
-                (c for c in candidates if c["name"] == best["name"]), None
-            )
-            if best_candidate:
-                generate_bias_report(
-                    fairness_metrics=best_candidate.get("fairness_metrics", {}),
-                    model_name=best["name"],
-                    bias_passed=best_candidate.get("bias_passed", False),
-                    all_flags=best_candidate.get("bias_flags", []),
-                    mitigation_applied=bool(
-                        best_candidate.get("mitigation_applied", False)
-                    ),
-                    mitigation_successful=bool(
-                        best_candidate.get("mitigation_successful", False)
-                    ),
-                    final_metrics=final_metrics,
-                    output_dir=Config.REPORTS_DIR,
-                )
-    except Exception as e:
-        logger.warning("Bias report generation failed: %s", e)
+        print("Starting End-to-End ML Pipeline...\n")
+        print(f"[0/6] MLflow tracking URI: {Config.MLFLOW_TRACKING_URI}")
+        print(f"[0/6] MLflow experiment: {Config.EXPERIMENT_NAME}")
 
-    # Summary.
-    if best:
-        print(f"\nPipeline Complete!")
-        print(f"Best Model: {best['name']} — Val F1: {best['metrics']['f1_score']:.4f}")
-        print(f"MLflow Run ID: {best['run_id']}")
-    else:
-        print("\nPipeline Complete — no valid model selected.")
+        # 1. Initialize seeds and MLflow.
+        print("[1/6] Initializing runtime + MLflow...")
+        initialize()
+        print("[1/6] Initialization complete.")
+
+        # 2. Build features, encode labels, 3-way split.
+        print("[2/6] Preparing data (load/encode/split)...")
+        data = prepare_data()
+        print(
+            "[2/6] Data ready: "
+            f"train={len(data['y_train'])}, val={len(data['y_val'])}, test={len(data['y_test'])}"
+        )
+
+        # 3. Train all candidates, evaluate on validation set.
+        print("[3/6] Training baseline candidates...")
+        candidates = train_candidates(
+            data["X_train"], data["y_train"],
+            data["X_val"], data["y_val"],
+            data["sens_train"], data["sens_val"], data["label_encoder"],
+            data.get("scenarios_val"),
+        )
+        print(f"[3/6] Baseline training complete. candidates={len(candidates)}")
+
+        # 3b. Hyperparameter tuning on best baseline.
+        print("[4/6] Running hyperparameter tuning on best baseline...")
+        candidates, tuning_context = tune_candidate(candidates, data)
+        print(f"[4/6] Tuning stage complete. candidates={len(candidates)}")
+
+        # 4. Select best model (F1 + bias gate).
+        print("[5/6] Selecting best model (F1 + bias gate)...")
+        best = select_best_model(candidates)
+        if best:
+            print(
+                "[5/6] Selected: "
+                f"{best['name']} (val_f1={best['metrics']['f1_score']:.4f}, run_id={best['run_id']})"
+            )
+        else:
+            print("[5/6] No model selected.")
+
+        # 5. Final evaluation on held-out test set.
+        print("[6/6] Running final evaluation on held-out test set...")
+        final_metrics, final_run_id = final_evaluation(
+            best,
+            data["X_test"],
+            data["y_test"],
+            data["label_encoder"],
+            sens_test=data.get("sens_test"),
+        )
+        if final_metrics is not None:
+            print(f"[6/6] Final test metrics: {final_metrics}")
+        else:
+            print("[6/6] Final evaluation skipped or failed.")
+
+        sensitivity_summary = run_sensitivity_analysis(best, tuning_context)
+
+        # SHAP feature-importance analysis on the held-out test set.
+        print("[6c] Running SHAP feature-importance analysis...")
+        explainability_summary = run_explainability_analysis(best, data, final_run_id=final_run_id)
+        if explainability_summary.get("status") == "ok":
+            top = explainability_summary.get("top_features", [])
+            top_str = ", ".join(f"{item['feature']}({item['mean_abs_shap']:.3f})" for item in top[:5])
+            print(f"[6c] SHAP complete. Top features: {top_str}")
+        else:
+            print(f"[6c] SHAP skipped — {explainability_summary.get('reason', 'unknown')}")
+
+        # Write CI gate metric files (metrics.txt, bias_metrics.txt).
+        best_candidate = next((c for c in candidates if best and c["name"] == best["name"]), None)
+        write_ci_metrics_files(final_metrics, best_candidate)
+
+        # 6. Save best model and label encoder locally under artifacts and preprocessing.
+        save_best_model_local(best, data["label_encoder"])
+
+        # 6b. Validate LLM guardrail layer — smoke test + log prompt versions to MLflow.
+        print("[6b] Validating LLM guardrail layer...")
+        validate_llm_layer(best, data)
+        print("[6b] LLM layer validation complete.")
+
+        # 7. Save a simple markdown summary for 3 baseline models + champion final metrics.
+        summary_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        summary_run_id = final_run_id or (best["run_id"] if best else "no_run_id")
+        report_filename = f"evaluation_summary_{summary_timestamp}_{summary_run_id}.md"
+        report_path = os.path.join(Config.REPORTS_DIR, report_filename)
+        write_evaluation_summary_md(
+            candidates,
+            best,
+            final_metrics,
+            report_path,
+            sensitivity_summary=sensitivity_summary,
+            explainability_summary=explainability_summary,
+        )
+
+        if final_run_id and os.path.exists(report_path):
+            with mlflow.start_run(run_id=final_run_id):
+                mlflow.log_artifact(report_path, "reports")
+        # Generate bias analysis report
+        try:
+            from guards.bias_report import generate_bias_report
+            if best and final_metrics:
+                best_candidate = next(
+                    (c for c in candidates if c["name"] == best["name"]), None
+                )
+                if best_candidate:
+                    generate_bias_report(
+                        fairness_metrics=best_candidate.get("fairness_metrics", {}),
+                        model_name=best["name"],
+                        bias_passed=best_candidate.get("bias_passed", False),
+                        all_flags=best_candidate.get("bias_flags", []),
+                        mitigation_applied=bool(
+                            best_candidate.get("mitigation_applied", False)
+                        ),
+                        mitigation_successful=bool(
+                            best_candidate.get("mitigation_successful", False)
+                        ),
+                        final_metrics=final_metrics,
+                        output_dir=Config.REPORTS_DIR,
+                    )
+        except Exception as e:
+            logger.warning("Bias report generation failed: %s", e)
+
+        _pipeline_success = 1
+
+        # Summary.
+        if best:
+            print(f"\nPipeline Complete!")
+            print(f"Best Model: {best['name']} — Val F1: {best['metrics']['f1_score']:.4f}")
+            print(f"MLflow Run ID: {best['run_id']}")
+        else:
+            print("\nPipeline Complete — no valid model selected.")
+
+    finally:
+        # Push Prometheus metrics regardless of success or failure.
+        try:
+            from pipeline_metrics import push_pipeline_metrics
+            _run_id = os.getenv("GITHUB_RUN_ID", "local")
+            _best_candidate = next(
+                (c for c in candidates if best and c["name"] == best["name"]), None
+            )
+            _tuning_result = None
+            if tuning_context and tuning_context.get("study"):
+                study = tuning_context["study"]
+                _tuning_result = {
+                    "model_type": tuning_context.get("model_type", "unknown"),
+                    "best_f1": study.best_value if study.best_trial else 0,
+                    "trial_count": len(
+                        [t for t in study.trials if t.state.name == "COMPLETE"]
+                    ),
+                }
+            push_pipeline_metrics(
+                pipeline_duration_seconds=_time.monotonic() - _pipeline_start,
+                pipeline_success=_pipeline_success,
+                data_split={
+                    "train": len(data.get("y_train", [])),
+                    "val": len(data.get("y_val", [])),
+                    "test": len(data.get("y_test", [])),
+                },
+                candidates=candidates,
+                tuning_result=_tuning_result,
+                final_metrics=final_metrics,
+                champion_name=best["name"] if best else None,
+                champion_bias_passed=bool((_best_candidate or {}).get("bias_passed", True)),
+                registry_push_success=1 if final_metrics else 0,
+                run_id=_run_id,
+            )
+        except Exception as _metric_exc:
+            logger.warning("Failed to push model pipeline metrics: %s", _metric_exc)
 
 
 if __name__ == "__main__":

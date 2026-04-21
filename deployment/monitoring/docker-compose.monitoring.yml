@@ -9,11 +9,21 @@ services:
       - "9090:9090"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=7d"
       - "--web.enable-lifecycle"
+    restart: unless-stopped
+    networks:
+      - monitoring
+
+  pushgateway:
+    image: prom/pushgateway:v1.9.0
+    container_name: savvio-pushgateway
+    ports:
+      - "9091:9091"
     restart: unless-stopped
     networks:
       - monitoring

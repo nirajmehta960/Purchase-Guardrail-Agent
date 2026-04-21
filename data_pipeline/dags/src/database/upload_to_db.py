@@ -214,6 +214,13 @@ def load_reviews(engine, jsonl_path: str) -> int:
     with engine.begin() as conn:
         conn.execute(text("TRUNCATE TABLE reviews RESTART IDENTITY"))
 
+        # Drop unique + FK constraints before bulk insert so PostgreSQL doesn't
+        # update the index on every row. Recreated at end of same transaction —
+        # if anything fails the whole transaction rolls back, constraints stay intact.
+        conn.execute(text("ALTER TABLE reviews DROP CONSTRAINT IF EXISTS uq_reviews_user_product"))
+        conn.execute(text("ALTER TABLE reviews DROP CONSTRAINT IF EXISTS reviews_product_id_fkey"))
+        logger.info("Dropped reviews constraints for fast bulk load.")
+
         raw = conn.connection
         cursor = raw.cursor()
         for i, chunk in enumerate(pd.read_json(jsonl_path, lines=True, chunksize=JSONL_STREAM_CHUNKSIZE), start=1):
@@ -232,6 +239,16 @@ def load_reviews(engine, jsonl_path: str) -> int:
             execute_values(cursor, sql, tuples, page_size=25_000)
             total_rows += len(tuples)
             logger.info("Reviews chunk %d inserted: %d rows (running total: %d)", i, len(tuples), total_rows)
+
+        cursor.execute(
+            "ALTER TABLE reviews ADD CONSTRAINT uq_reviews_user_product "
+            "UNIQUE (user_id, product_id)"
+        )
+        cursor.execute(
+            "ALTER TABLE reviews ADD CONSTRAINT reviews_product_id_fkey "
+            "FOREIGN KEY (product_id) REFERENCES products(product_id)"
+        )
+        logger.info("Recreated reviews constraints after bulk load.")
 
     if total_dropped:
         logger.warning("Dropped %d orphaned reviews (product_id not in products table)", total_dropped)

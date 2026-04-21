@@ -19,14 +19,10 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# DuckDB tunables — env-driven so they can be scaled with the worker container's
-# mem_limit (currently 5G in docker-compose.yaml). Preprocessing runs 3 DuckDB
-# tasks in parallel, so 3 × DUCKDB_MEMORY_LIMIT must stay well below the
-# container limit. Defaults preserve the original safe values.
-DUCKDB_MEMORY_LIMIT = os.getenv("DUCKDB_MEMORY_LIMIT", "1000MB")
-DUCKDB_THREADS = int(os.getenv("DUCKDB_THREADS", "2"))
-DUCKDB_TEMP_DIRECTORY = os.getenv("DUCKDB_TEMP_DIRECTORY", "/tmp")
-JSONL_MAX_OBJECT_SIZE = int(os.getenv("JSONL_MAX_OBJECT_SIZE", str(33_554_432)))
+DUCKDB_MEMORY_LIMIT = "1000MB"
+DUCKDB_THREADS = 2
+DUCKDB_TEMP_DIRECTORY = "/tmp"
+JSONL_MAX_OBJECT_SIZE = 33_554_432
 
 
 def _configure_duckdb(con: "duckdb.DuckDBPyConnection") -> None:

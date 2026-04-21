@@ -40,7 +40,6 @@ jobs:
   drift-detection:
     name: Drift Detection
     runs-on: ubuntu-latest
-    if: github.event_name != 'push'
     outputs:
       severity: ${{ steps.drift-severity.outputs.severity }}
 

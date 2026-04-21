@@ -1,18 +1,11 @@
 name: Ops Monitoring & Drift Detection
 
-# Schedule: weekly drift run + on-demand. Push to main only redeploys the
-# monitoring stack when its own config changes — never re-runs detection.
+# Schedule/workflow_dispatch: runs drift detection + deploys monitoring stack.
+# Push to main (monitoring config changes only): redeploys stack, skips drift detection.
 on:
   schedule:
     - cron: "0 8 * * 1"
   workflow_dispatch:
-    inputs:
-      run_monitoring_sync:
-        description: "Also redeploy monitoring stack to GCE VM"
-        required: false
-        default: "false"
-        type: choice
-        options: ["false", "true"]
   push:
     branches: [main]
     paths:
@@ -88,7 +81,7 @@ jobs:
 
       - name: Run drift detector
         env:
-          DB_HOST: ${{ vars.DB_HOST }}
+          DB_HOST: 127.0.0.1
           DB_PORT: ${{ vars.DB_PORT }}
           DB_NAME: ${{ vars.DB_NAME }}
           DB_USER: ${{ vars.DB_USER }}
@@ -154,9 +147,7 @@ jobs:
   deploy-monitoring:
     name: Deploy Monitoring
     runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.run_monitoring_sync == 'true')
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
 
     steps:
       - uses: actions/checkout@v4

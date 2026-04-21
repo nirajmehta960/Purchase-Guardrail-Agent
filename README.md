@@ -8,7 +8,7 @@ SavVio is a comprehensive MLOps project that integrates real-time product data w
 
 - **Financial Health**: User's income, expenses, savings, and debt obligations.
 - **Product Utility**: Analysis of product specifications, quality and real-world usefulness.
-- **Decision Engine**: Generates final recommondation based on user's financial health and the product's utility.
+- **Decision Engine**: Generates final recommendation based on user's financial health and the product's utility.
 
 The system provides Green/Yellow/Red light recommendations before users complete their purchase.
 

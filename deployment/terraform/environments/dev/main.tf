@@ -184,6 +184,11 @@ module "docker_repo" {
 }
 
 # ---- GCE VM (Airflow + ML Training) ----
+resource "google_compute_address" "pipeline_vm_ip" {
+  name   = "${local.prefix}-pipeline-vm-ip"
+  region = var.region
+}
+
 resource "google_compute_instance" "pipeline_vm" {
   name                      = "${local.prefix}-pipeline-vm"
   machine_type              = var.pipeline_vm_machine_type
@@ -201,7 +206,9 @@ resource "google_compute_instance" "pipeline_vm" {
 
   network_interface {
     network = var.vpc_network
-    access_config {} # ephemeral public IP for SSH
+    access_config {
+      nat_ip = google_compute_address.pipeline_vm_ip.address
+    }
   }
 
   service_account {

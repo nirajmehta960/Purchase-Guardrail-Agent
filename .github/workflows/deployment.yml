@@ -12,6 +12,17 @@ on:
       - "deployment/__init__.py"
       - "savviocore/**"
       - ".github/workflows/deployment.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "deployment/api/**"
+      - "deployment/frontend/src/**"
+      - "deployment/frontend/package.json"
+      - "deployment/mlflow/**"
+      - "deployment/requirements.txt"
+      - "deployment/__init__.py"
+      - "savviocore/**"
+      - ".github/workflows/deployment.yml"
   workflow_dispatch:
 
 permissions:
@@ -92,6 +103,7 @@ jobs:
     name: Build & Push API
     runs-on: ubuntu-latest
     needs: test-api
+    if: github.event_name != 'pull_request'
 
     steps:
       - name: Checkout code
@@ -131,6 +143,7 @@ jobs:
     name: Build & Push MLflow
     runs-on: ubuntu-latest
     needs: test-api
+    if: github.event_name != 'pull_request'
 
     steps:
       - name: Checkout code
@@ -170,6 +183,7 @@ jobs:
     name: Build & Push Frontend
     runs-on: ubuntu-latest
     needs: test-frontend
+    if: github.event_name != 'pull_request'
 
     steps:
       - name: Checkout code
@@ -212,6 +226,7 @@ jobs:
     name: Deploy to Cloud Run
     runs-on: ubuntu-latest
     needs: [build-push-api, build-push-frontend, build-push-mlflow]
+    if: github.event_name != 'pull_request'
 
     steps:
       - name: Authenticate to GCP
@@ -271,12 +286,12 @@ jobs:
         if: vars.NOTIFY_EMAILS_ENABLED == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: ${{ secrets.SMTP_HOST }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          username: ${{ secrets.SMTP_USER }}
+          server_address: ${{ vars.SMTP_HOST }}
+          server_port: ${{ vars.SMTP_PORT }}
+          username: ${{ vars.SMTP_USER }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          from: ${{ vars.PROJECT_NAME }} CI <${{ secrets.ALERT_EMAIL_FROM }}>
-          to: ${{ secrets.ALERT_EMAIL_LIST }}
+          from: ${{ vars.PROJECT_NAME }} CI <${{ vars.ALERT_EMAIL_FROM }}>
+          to: ${{ vars.ALERT_EMAIL_LIST }}
           subject: "[${{ vars.PROJECT_NAME }}][FAILED] Deployment CI/CD — ${{ vars.ENVIRONMENT }} — ${{ github.sha }}"
           body: |
             Deployment CI/CD FAILED
@@ -308,8 +323,6 @@ jobs:
       always()
       && !contains(needs.*.result, 'failure')
       && !contains(needs.*.result, 'cancelled')
-      && github.event_name == 'push'
-      && github.ref == 'refs/heads/main'
 
     steps:
       - name: Log success summary
@@ -322,12 +335,12 @@ jobs:
         if: vars.NOTIFY_EMAILS_ENABLED == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: ${{ secrets.SMTP_HOST }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          username: ${{ secrets.SMTP_USER }}
+          server_address: ${{ vars.SMTP_HOST }}
+          server_port: ${{ vars.SMTP_PORT }}
+          username: ${{ vars.SMTP_USER }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          from: ${{ vars.PROJECT_NAME }} CI <${{ secrets.ALERT_EMAIL_FROM }}>
-          to: ${{ secrets.ALERT_EMAIL_LIST }}
+          from: ${{ vars.PROJECT_NAME }} CI <${{ vars.ALERT_EMAIL_FROM }}>
+          to: ${{ vars.ALERT_EMAIL_LIST }}
           subject: "[${{ vars.PROJECT_NAME }}][OK] Deployment CI/CD — ${{ vars.ENVIRONMENT }} — ${{ github.sha }}"
           body: |
             Deployment CI/CD PASSED

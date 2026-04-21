@@ -4,7 +4,7 @@ Tests for Load to Database — upload_to_db.py.
 Covers the module that loads feature-engineered data (CSV/JSONL) into
 PostgreSQL tables: financial_profiles, products, reviews.
 Includes helper functions (_read_csv, _read_jsonl, _select_and_rename,
-_ensure_jsonb, _upsert_df) and the three loaders + load_all orchestrator.
+_ensure_jsonb) and the three loaders + load_all orchestrator.
 """
 import json
 import os
@@ -196,7 +196,7 @@ def test_review_cols_has_required_keys():
 
 
 # =============================================================================
-# 6) _upsert_df tests
+# Helper
 # =============================================================================
 
 def _mock_engine():
@@ -210,50 +210,8 @@ def _mock_engine():
     return engine, conn
 
 
-def test_upsert_df_empty_dataframe():
-    engine, conn = _mock_engine()
-    df = pd.DataFrame(columns=["user_id", "name"])
-    result = M._upsert_df(engine, df, "test_table", ["user_id"], ["name"])
-    assert result == 0
-    engine.begin.assert_not_called()
-
-
-def test_upsert_df_builds_correct_sql():
-    engine, conn = _mock_engine()
-    df = pd.DataFrame([{"user_id": "u1", "name": "Alice"}])
-    with patch("psycopg2.extras.execute_values") as mock_ev:
-        M._upsert_df(engine, df, "test_table", ["user_id"], ["name"])
-    mock_ev.assert_called_once()
-    sql_text = mock_ev.call_args[0][1]
-    assert "INSERT INTO test_table" in sql_text
-    assert "ON CONFLICT (user_id)" in sql_text
-    assert "name = EXCLUDED.name" in sql_text
-    assert "updated_at = CURRENT_TIMESTAMP" in sql_text
-
-
-def test_upsert_df_returns_row_count():
-    engine, conn = _mock_engine()
-    df = pd.DataFrame([
-        {"user_id": "u1", "name": "Alice"},
-        {"user_id": "u2", "name": "Bob"},
-    ])
-    with patch("psycopg2.extras.execute_values"):
-        result = M._upsert_df(engine, df, "test_table", ["user_id"], ["name"])
-    assert result == 2
-
-
-def test_upsert_df_composite_conflict_cols():
-    engine, conn = _mock_engine()
-    df = pd.DataFrame([{"user_id": "u1", "product_id": "p1", "rating": 5}])
-    with patch("psycopg2.extras.execute_values") as mock_ev:
-        M._upsert_df(engine, df, "reviews", ["user_id", "product_id"], ["rating"])
-    sql_text = mock_ev.call_args[0][1]
-    assert "ON CONFLICT (user_id, product_id)" in sql_text
-    assert "rating = EXCLUDED.rating" in sql_text
-
-
 # =============================================================================
-# 7) load_financial tests
+# 6) load_financial tests
 # =============================================================================
 
 def test_load_financial_reads_and_loads(tmp_path):

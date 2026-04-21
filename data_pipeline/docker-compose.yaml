@@ -86,6 +86,16 @@ x-airflow-common:
     # See https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/logging-monitoring/check-health.html#scheduler-health-check-server
     # yamllint enable rule:line-length
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    # Zombie detection: kill tasks with no heartbeat for > 60 min (default 5 min).
+    # Raised because load_reviews inserts ~2.1M rows in a single transaction and
+    # takes 22+ min; preprocess tasks take 5-9 min.
+    AIRFLOW__TASK__TASK_INSTANCE_HEARTBEAT_TIMEOUT: "3600"
+    # Give the task runner more time to call back to the API server on each
+    # heartbeat/state-update. Default 5 s is too short when the API server is
+    # under load during a heavy task, causing heartbeat failures → zombie kill.
+    AIRFLOW__TASK__EXECUTION_API_TIMEOUT: "30"
+    # Allow more heartbeat failures before the task runner gives up entirely.
+    AIRFLOW__TASK__MAX_FAILED_HEARTBEATS: "10"
     _PIP_ADDITIONAL_REQUIREMENTS: ""
     # The following line can be used to set a custom config file, stored in the local config folder
     AIRFLOW_CONFIG: "/opt/airflow/config/airflow.cfg"

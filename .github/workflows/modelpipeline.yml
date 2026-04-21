@@ -91,7 +91,6 @@ jobs:
     name: Run Model Pipeline
     runs-on: ubuntu-latest
     needs: [unit-tests]
-    if: github.event_name != 'pull_request'
 
     steps:
       - name: Checkout code
@@ -154,10 +153,10 @@ jobs:
       - name: Run pipeline
         working-directory: model_pipeline
         env:
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_NAME: ${{ vars.DB_NAME }}
+          DB_USER: ${{ vars.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
           GCP_REGION: ${{ vars.AR_REGION }}
@@ -341,7 +340,6 @@ jobs:
     name: Persist Metrics Baseline
     runs-on: ubuntu-latest
     needs: rollback-check
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
 
     steps:
       - name: Authenticate to GCP
@@ -371,7 +369,6 @@ jobs:
     name: Build & Push Image
     runs-on: ubuntu-latest
     needs: persist-metrics-baseline
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
 
     steps:
       - name: Checkout code
@@ -411,7 +408,6 @@ jobs:
     name: Deploy to Cloud Run
     runs-on: ubuntu-latest
     needs: [build-and-push]
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
 
     steps:
       - name: Authenticate to GCP
@@ -457,12 +453,12 @@ jobs:
         if: vars.NOTIFY_EMAILS_ENABLED == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: ${{ secrets.SMTP_HOST }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          username: ${{ secrets.SMTP_USER }}
+          server_address: ${{ vars.SMTP_HOST }}
+          server_port: ${{ vars.SMTP_PORT }}
+          username: ${{ vars.SMTP_USER }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          from: ${{ vars.PROJECT_NAME }} CI <${{ secrets.ALERT_EMAIL_FROM }}>
-          to: ${{ secrets.ALERT_EMAIL_LIST }}
+          from: ${{ vars.PROJECT_NAME }} CI <${{ vars.ALERT_EMAIL_FROM }}>
+          to: ${{ vars.ALERT_EMAIL_LIST }}
           subject: "[${{ vars.PROJECT_NAME }}][FAILED] Model Pipeline CI/CD — ${{ github.ref_name }} @ ${{ github.sha }}"
           body: |
             Model Pipeline CI/CD FAILED
@@ -495,8 +491,6 @@ jobs:
       always()
       && !contains(needs.*.result, 'failure')
       && !contains(needs.*.result, 'cancelled')
-      && github.event_name == 'push'
-      && github.ref == 'refs/heads/main'
 
     steps:
       - name: Log success summary
@@ -509,12 +503,12 @@ jobs:
         if: vars.NOTIFY_EMAILS_ENABLED == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: ${{ secrets.SMTP_HOST }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          username: ${{ secrets.SMTP_USER }}
+          server_address: ${{ vars.SMTP_HOST }}
+          server_port: ${{ vars.SMTP_PORT }}
+          username: ${{ vars.SMTP_USER }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          from: ${{ vars.PROJECT_NAME }} CI <${{ secrets.ALERT_EMAIL_FROM }}>
-          to: ${{ secrets.ALERT_EMAIL_LIST }}
+          from: ${{ vars.PROJECT_NAME }} CI <${{ vars.ALERT_EMAIL_FROM }}>
+          to: ${{ vars.ALERT_EMAIL_LIST }}
           subject: "[${{ vars.PROJECT_NAME }}][OK] Model Pipeline CI/CD — ${{ github.ref_name }} @ ${{ github.sha }}"
           body: |
             Model Pipeline CI/CD PASSED

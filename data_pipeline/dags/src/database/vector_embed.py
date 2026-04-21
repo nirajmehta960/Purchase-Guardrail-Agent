@@ -34,13 +34,11 @@ for better semantic understanding at the cost of larger storage and slightly slo
 EMBEDDING_DIM must match the chosen model — pgvector enforces a fixed column width.
 '''
 
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
-EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "384"))
-BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "64"))
-# Chunk size for streaming embed-and-store loops (rows per DB write batch).
-EMBED_STORE_CHUNK_SIZE = int(os.getenv("EMBED_STORE_CHUNK_SIZE", "5000"))
-# Per-INSERT batch size for upserting embeddings into pgvector.
-EMBED_INSERT_BATCH_SIZE = int(os.getenv("EMBED_INSERT_BATCH_SIZE", "500"))
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+EMBEDDING_DIM = 384
+BATCH_SIZE = 64
+EMBED_STORE_CHUNK_SIZE = 5_000
+EMBED_INSERT_BATCH_SIZE = 500
 
 
 # ---------------------------------------------------------------------------
@@ -302,8 +300,8 @@ def embed_reviews(engine, reviews_path: str, model):
 # File reader helper
 # ---------------------------------------------------------------------------
 
-_JSONL_READ_CHUNKSIZE = int(os.getenv("JSONL_STREAM_CHUNKSIZE", "100000"))
-_JSONL_LARGE_FILE_MB = float(os.getenv("JSONL_LARGE_FILE_MB", "300"))
+_JSONL_READ_CHUNKSIZE = 100_000
+_JSONL_LARGE_FILE_MB = 300
 
 
 def _read_file(path: str) -> pd.DataFrame:

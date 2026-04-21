@@ -185,7 +185,7 @@ module "docker_repo" {
 
 # ---- GCE VM (Airflow + ML Training) ----
 resource "google_compute_address" "pipeline_vm_ip" {
-  name   = "${local.prefix}-pipeline-vm-ip"
+  name   = "${local.prefix}-pipeline-static-ip"
   region = var.region
 }
 

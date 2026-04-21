@@ -26,10 +26,16 @@ logger = logging.getLogger(__name__)
 def _dev_url() -> str:
     """Local PostgreSQL connection string."""
     user = os.environ.get("DB_USER", "postgres")
-    password = os.environ.get("DB_PASSWORD", "postgres")
+    password = os.environ.get("DB_PASSWORD") or os.environ.get("DB_PASS", "postgres")
     host = os.environ.get("DB_HOST", "localhost")
     port = os.environ.get("DB_PORT", "5432")
     name = os.environ.get("DB_NAME", "savvio")
+    
+    if host.startswith("/"):
+        return (
+            f"postgresql+psycopg2://{user}:{password}@/{name}"
+            f"?host={host}"
+        )
     return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{name}"
 
 

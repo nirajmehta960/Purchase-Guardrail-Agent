@@ -280,7 +280,7 @@ module "api" {
 
   env_vars = {
     ENVIRONMENT                    = var.environment
-    DB_ENV                         = var.environment
+    DB_ENV                         = "prod"
     DB_USER                        = module.database.user_name
     DB_NAME                        = module.database.database_name
     DB_HOST                        = "/cloudsql/${module.database.connection_name}"
@@ -342,7 +342,7 @@ module "mlflow" {
 
   env_vars = {
     ENVIRONMENT              = var.environment
-    DB_ENV                   = var.environment
+    DB_ENV                   = "prod"
     DB_USER                  = module.database.user_name
     DB_NAME                  = google_sql_database.mlflow.name
     DB_HOST                  = "/cloudsql/${module.database.connection_name}"
